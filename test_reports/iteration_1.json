@@ -1,0 +1,46 @@
+{
+  "summary": "Full first-pass test of Ambajogai Grocery MVP. Backend: 36 pytest cases across auth/OTP/products/categories/orders/admin — all passed (100%). Frontend: tested home, search, category nav, products filters/sort, product detail, cart, register/login, unauth checkout redirect, checkout (UPI QR + COD), order detail tracker, my orders, full admin CRUD (products, categories, order status), contact WhatsApp, legal pages. Two significant frontend bugs found: (1) cart is wiped from localStorage on any hard page reload/direct URL load, (2) after placing an order the user lands on /cart instead of /orders/<id>.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/auth/login", "issue": "No rate limiting / brute-force lockout — 6 consecutive wrong passwords all return 401 with no throttling (429 never returned)."},
+      {"endpoint": "/api/orders", "issue": "Prices/stock are trusted from the client payload; server does not re-fetch product price or validate stock availability, so totals can be manipulated by a crafted request."},
+      {"endpoint": "/api/products/{prod_id} (PUT/DELETE), /api/categories/{cat_id} (DELETE)", "issue": "Raw ObjectId(id) conversion without try/except → invalid id string raises 500 instead of 400/404. DELETE also returns success:true for non-existent ids."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "CartContext.jsx", "issue": "CRITICAL: cart is lost on every hard reload / direct URL entry. The persist effect (useEffect(...,[items])) writes the initial empty array to localStorage on mount before the hydration effect's setItems commits, overwriting 'ambajogai_cart' with []. Verified: add item -> localStorage has 1 item -> page.reload() -> localStorage = '[]' and cart page shows empty. Fix: hydrate with a lazy useState initializer (useState(() => JSON.parse(localStorage.getItem(KEY) || '[]'))) or guard the writer with a 'hydrated' ref.", "selector": "[data-testid=\"cart-count\"] / [data-testid=\"cart-item-*\"]", "priority": "CRITICAL"},
+      {"component": "Checkout.jsx", "issue": "HIGH: after a successful order the app navigates to /cart instead of /orders/<id>. clearCart() empties items and the finally-block setSubmitting(false) lets the guard effect (items.length===0 && !submitting -> navigate('/cart')) fire after navigate(`/orders/${id}`). Order IS created correctly (verified in My Orders + API). Fix: set a 'placed' flag / skip the redirect effect once an order has been submitted.", "selector": "[data-testid=\"place-order-btn\"]", "priority": "HIGH"},
+      {"component": "Admin product form modal", "issue": "Form inputs (Name, Slug, Price, MRP, Unit, Image URL, Stock, Category select) have no data-testid — only the modal container and save button do. Same for the category form. Makes automated testing brittle.", "selector": "[data-testid=\"product-form-modal\"] input", "priority": "LOW"},
+      {"component": "Admin Categories", "issue": "Category delete uses native window.confirm() instead of a shadcn AlertDialog; also 'Add category' button has no data-testid.", "selector": "[data-testid=\"categories-admin\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin product list / product form", "issues": ["No image preview or URL validation for the image field; a bad URL silently renders a broken image (observed ERR_NAME_NOT_RESOLVED console errors for some image hosts)."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/backend_test.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "Fix cart localStorage hydration in CartContext.jsx (cart currently lost on every refresh) — CRITICAL",
+    "Fix post-order navigation in Checkout.jsx so the user lands on /orders/<id> instead of /cart",
+    "Recompute order item prices server-side from DB and validate stock in POST /api/orders",
+    "Wrap ObjectId() conversions in try/except (products PUT/DELETE, categories DELETE) to return 400/404 instead of 500",
+    "Add data-testid to admin product/category form fields",
+    "Consider login rate limiting / lockout"
+  ],
+  "critical_code_review_comments": [
+    "CartContext: writer effect runs before hydration state commits — classic localStorage wipe bug; use lazy state init.",
+    "Checkout: navigate() is overridden by the empty-cart guard effect; guard needs an 'orderPlaced' flag.",
+    "server.py is 748 lines — split into routers (auth, products, orders, admin) for maintainability.",
+    "POST /api/orders trusts client-supplied prices — price/stock must be resolved server-side."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (36/36 pytest)", "frontend": "~85% (2 defects: cart persistence, post-order redirect)"},
+  "seed_data_creation": "Registered UI test customer e2e1785170446@example.com / Test@1234 (has 1 order, status set to Confirmed by admin test). pytest creates TEST_-prefixed customers/orders; the QA test product and QA Category created during admin UI testing were deleted afterwards.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "Admin admin@ambajogai.com / Admin@123 (works, redirects to /admin). Customer e2e1785170446@example.com / Test@1234.",
+  "context_for_next_testing_agent": "Backend suite lives at /app/backend/tests/backend_test.py (run: pytest /app/backend/tests -v). All backend endpoints verified incl. delivery fee rules (<499 -> 30, >=499 -> 0), stock decrement, RBAC (403 for customer on admin routes), order ownership (403 cross-user), status transitions and history. Frontend: product cards swap the 'Add' button for an increment/decrement stepper after the first add — use [data-testid=increment-<slug>] for the 2nd+ unit. Products sort select values are featured|price-asc|price-desc|name. Cart survives SPA navigation but NOT a hard reload (bug). Verify both fixes with a reload-based test.",
+  "rca_of_the_issue": "Cart wipe: in CartProvider, useState([]) + useEffect(persist,[items]) runs the persist effect on first commit with the empty default before the hydration effect's setItems is applied, so localStorage is overwritten with '[]' on every full page load. Post-order redirect: Checkout's guard effect `if (items.length === 0 && !submitting) navigate('/cart')` re-fires after clearCart() + setSubmitting(false) in the finally block, superseding navigate('/orders/<id>')."
+}
