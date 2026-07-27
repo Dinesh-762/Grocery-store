@@ -368,7 +368,10 @@ async def create_category(payload: CategoryIn, _: dict = Depends(require_admin))
 
 @api.delete("/categories/{cat_id}")
 async def delete_category(cat_id: str, _: dict = Depends(require_admin)):
-    await db.categories.delete_one({"_id": ObjectId(cat_id)})
+    oid = safe_object_id(cat_id)
+    res = await db.categories.delete_one({"_id": oid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Category not found")
     return {"success": True}
 
 
@@ -420,8 +423,9 @@ async def create_product(payload: ProductIn, _: dict = Depends(require_admin)):
 
 @api.put("/products/{prod_id}", response_model=ProductOut)
 async def update_product(prod_id: str, payload: ProductIn, _: dict = Depends(require_admin)):
-    await db.products.update_one({"_id": ObjectId(prod_id)}, {"$set": payload.model_dump()})
-    doc = await db.products.find_one({"_id": ObjectId(prod_id)})
+    oid = safe_object_id(prod_id)
+    await db.products.update_one({"_id": oid}, {"$set": payload.model_dump()})
+    doc = await db.products.find_one({"_id": oid})
     if not doc:
         raise HTTPException(status_code=404, detail="Product not found")
     return product_to_out(doc)
@@ -429,7 +433,10 @@ async def update_product(prod_id: str, payload: ProductIn, _: dict = Depends(req
 
 @api.delete("/products/{prod_id}")
 async def delete_product(prod_id: str, _: dict = Depends(require_admin)):
-    await db.products.delete_one({"_id": ObjectId(prod_id)})
+    oid = safe_object_id(prod_id)
+    res = await db.products.delete_one({"_id": oid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Product not found")
     return {"success": True}
 
 
@@ -441,11 +448,41 @@ DELIVERY_FEE = 30.0
 FREE_DELIVERY_THRESHOLD = 499.0
 
 
+def safe_object_id(id_str: str) -> ObjectId:
+    try:
+        return ObjectId(id_str)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid id format")
+
+
 @api.post("/orders")
 async def create_order(payload: OrderIn, user: dict = Depends(get_current_user)):
     if not payload.items:
         raise HTTPException(status_code=400, detail="Cart is empty")
-    subtotal = round(sum(i.price * i.quantity for i in payload.items), 2)
+
+    # Recompute prices server-side from DB and validate stock
+    verified_items = []
+    for it in payload.items:
+        try:
+            prod = await db.products.find_one({"_id": ObjectId(it.product_id)})
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"Invalid product id: {it.product_id}")
+        if not prod:
+            raise HTTPException(status_code=400, detail=f"Product not found: {it.name}")
+        if it.quantity <= 0:
+            raise HTTPException(status_code=400, detail="Quantity must be positive")
+        if prod.get("stock", 0) < it.quantity:
+            raise HTTPException(status_code=400, detail=f"Insufficient stock for {prod['name']}")
+        verified_items.append({
+            "product_id": str(prod["_id"]),
+            "name": prod["name"],
+            "price": prod["price"],
+            "quantity": it.quantity,
+            "image": prod["image"],
+            "unit": prod.get("unit", "1 pc"),
+        })
+
+    subtotal = round(sum(i["price"] * i["quantity"] for i in verified_items), 2)
     delivery_fee = 0.0 if subtotal >= FREE_DELIVERY_THRESHOLD else DELIVERY_FEE
     total = round(subtotal + delivery_fee, 2)
     status_history = [{"status": "Pending", "at": iso_now()}]
@@ -453,7 +490,7 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         "user_id": user["id"],
         "user_email": user["email"],
         "user_name": user["name"],
-        "items": [i.model_dump() for i in payload.items],
+        "items": verified_items,
         "address": payload.address.model_dump(),
         "payment_method": payload.payment_method,
         "notes": payload.notes or "",
@@ -468,9 +505,9 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
     doc["_id"] = res.inserted_id
 
     # Reduce stock (best effort)
-    for it in payload.items:
+    for it in verified_items:
         try:
-            await db.products.update_one({"_id": ObjectId(it.product_id)}, {"$inc": {"stock": -it.quantity}})
+            await db.products.update_one({"_id": ObjectId(it["product_id"])}, {"$inc": {"stock": -it["quantity"]}})
         except Exception:
             pass
 
@@ -485,10 +522,8 @@ async def my_orders(user: dict = Depends(get_current_user)):
 
 @api.get("/orders/{order_id}")
 async def get_order(order_id: str, user: dict = Depends(get_current_user)):
-    try:
-        doc = await db.orders.find_one({"_id": ObjectId(order_id)})
-    except Exception:
-        raise HTTPException(status_code=404, detail="Order not found")
+    oid = safe_object_id(order_id)
+    doc = await db.orders.find_one({"_id": oid})
     if not doc:
         raise HTTPException(status_code=404, detail="Order not found")
     if user.get("role") != "admin" and doc.get("user_id") != user["id"]:
@@ -507,13 +542,14 @@ async def admin_list_orders(_: dict = Depends(require_admin), status_filter: Opt
 async def update_order_status(order_id: str, payload: OrderStatusUpdate, _: dict = Depends(require_admin)):
     if payload.status not in ORDER_STATUSES:
         raise HTTPException(status_code=400, detail="Invalid status")
-    doc = await db.orders.find_one({"_id": ObjectId(order_id)})
+    oid = safe_object_id(order_id)
+    doc = await db.orders.find_one({"_id": oid})
     if not doc:
         raise HTTPException(status_code=404, detail="Order not found")
     history = doc.get("status_history", [])
     history.append({"status": payload.status, "at": iso_now()})
     await db.orders.update_one(
-        {"_id": ObjectId(order_id)},
+        {"_id": oid},
         {"$set": {"status": payload.status, "status_history": history}},
     )
     doc["status"] = payload.status

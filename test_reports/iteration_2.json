@@ -1,0 +1,47 @@
+{
+  "summary": "Regression retest of Ambajogai Grocery after 2 frontend + 3 backend fixes. Backend: 49 pytest cases (36 prior + 13 new regression cases) — 100% pass. Frontend: verified cart persistence across hard reload and direct URL entry, COD checkout navigation to /orders/<id> with tracker visible, plus sanity pass over home/search/category/product-detail/login/admin dashboard/admin order status update/admin add+delete product. All 4 requested regressions PASS.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "CORS middleware", "issue": "allow_credentials=True combined with allow_origins=['*'] (CORS_ORIGINS default) is an invalid browser combo; harmless today because auth uses Bearer tokens, but should be an explicit origin list before deploy."},
+      {"endpoint": "/api/auth/login", "issue": "Still no brute-force throttling (6 wrong passwords => 6x401, no 429). Deferred to P2 per request; documented by TestSecurity::test_no_brute_force_lockout."},
+      {"endpoint": "/api/products/{id} (PUT)", "issue": "PUT with an invalid ObjectId and an incomplete body returns 422 (Pydantic) before the id check — acceptable, but with a valid body it correctly returns 400. Also PUT on a valid-but-missing id performs update_one (no-op) then 404; no data risk."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Checkout (COD)", "issue": "A wa.me/api.whatsapp popup window is opened even for Cash-on-Delivery orders. Not a defect per current design, but it fires before navigation and may be blocked by popup blockers on some browsers.", "affected_selectors": ["[data-testid=\"place-order-btn\"]"]}
+    ],
+    "design_issues": [
+      {"screen": "Header (all pages)", "issues": ["Search magnifier icon overlaps the start of the placeholder text in the desktop header search input (reads as '(icon)earch for rice, dal, milk, snacks...') — needs extra left padding on the input."]},
+      {"screen": "Admin dashboard", "issues": ["'REVENUE' KPI shows Rs0 while 15 orders exist because revenue counts only Delivered orders; label should read 'Revenue (delivered)' to avoid looking broken."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/backend_test.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "Optional: pad header search input so the icon does not overlap placeholder text.",
+    "Optional: relabel admin Revenue KPI as 'Revenue (delivered)'.",
+    "Before deploy: set CORS_ORIGINS to explicit origins since allow_credentials=True."
+  ],
+  "critical_code_review_comments": [
+    "POST /api/orders now correctly re-fetches product, price, name, image and unit from DB and validates stock — client-supplied price/name are fully ignored (verified: price=1 payload produced DB-priced order).",
+    "safe_object_id() is applied to DELETE/PUT /products, DELETE /categories, PATCH /admin/orders/{id}/status and GET /orders/{id}; all invalid ids now return 400 and missing ids return 404 (no 500s).",
+    "CartContext now hydrates via lazy useState initializer — persistence verified end-to-end.",
+    "Checkout `placed` flag correctly suppresses the empty-cart redirect; order navigation lands on /orders/<id>.",
+    "seed_data() is idempotent (upserts with $setOnInsert) and refreshes the admin password when ADMIN_PASSWORD changes — verified in code and by admin login.",
+    "Auth stores JWT in localStorage (no httpOnly cookie). Acceptable for this design, but tokens are XSS-exposed; consider httpOnly cookies if hardening is required.",
+    "/app/frontend/src/pages/Admin.jsx is 582 lines with 5 embedded admin sections — consider splitting into per-section components."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py",
+    "/app/frontend/src/pages/Admin.jsx"
+  ],
+  "success_rate": {"backend": "100% (49/49)", "frontend": "100% of tested flows"},
+  "seed_data_creation": "Registered TEST_e2e_* customers via API; created and deleted a temporary admin product (qa-test-product-*); several TEST_ orders remain in DB (harmless).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@ambajogai.com / Admin@123 (works), e2e1785170446@example.com / Test@1234 (works)",
+  "context_for_next_testing_agent": "Backend suite lives in /app/backend/tests/backend_test.py (49 cases, run with `python -m pytest backend/tests/backend_test.py -p no:randomly`). Old TestOrders cases were rewritten to use real DB products because the server now recomputes prices — do not reintroduce fake product_ids. New classes: TestOrderPricingSecurity (regression #3) and TestObjectIdSafety (regression #4). Added data-testids to the admin product form: product-name/slug/description/price/mrp/unit/category/image/stock. Not retested: rate limiting (deferred), UPI QR payment path end-to-end, mobile viewport, categories admin UI.",
+  "rca_of_the_issue": "Both prior frontend bugs are resolved: (1) cart loss was the mount-time persist effect overwriting localStorage before hydration — fixed with a lazy useState initializer, verified localStorage 'ambajogai_cart' retains 3 items and cart-count stays 3 after page.reload() and after direct /cart URL entry; (2) post-order redirect to /cart was the empty-cart guard effect firing after clearCart() — fixed with the `placed` flag, verified URL becomes /orders/6a678cf4d6b92d4e0c1c666e with order-tracker visible."
+}

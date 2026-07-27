@@ -206,6 +206,16 @@ class TestOTP:
 
 
 # --- Orders ---
+def real_item(client, qty=1, min_price=0, max_price=10**9):
+    """Build an order item from a real DB product (server recomputes prices)."""
+    prods = client.get(f"{BASE_URL}/api/products", timeout=30).json()
+    cands = [p for p in prods if p.get("stock", 0) >= qty and min_price <= p["price"] <= max_price]
+    assert cands, "no suitable product found for order test"
+    p = cands[0]
+    return p, [{"product_id": p["id"], "name": p["name"], "price": p["price"],
+                "quantity": qty, "image": p["image"], "unit": p["unit"]}]
+
+
 class TestOrders:
     @staticmethod
     def _items(price, qty=1):
@@ -221,28 +231,37 @@ class TestOrders:
         assert r.status_code == 401
 
     def test_order_delivery_fee_below_threshold(self, client, cust_headers):
+        p, items = real_item(client, qty=1, max_price=400)
         r = client.post(f"{BASE_URL}/api/orders", headers=cust_headers, json={
-            "items": self._items(100, 2), "address": self.ADDRESS, "payment_method": "COD"}, timeout=30)
+            "items": items, "address": self.ADDRESS, "payment_method": "COD"}, timeout=30)
         assert r.status_code == 200, r.text[:300]
         d = r.json()
-        assert d["subtotal"] == 200
+        assert d["subtotal"] == round(p["price"], 2)
         assert d["delivery_fee"] == 30
-        assert d["total"] == 230
+        assert d["total"] == round(p["price"] + 30, 2)
         assert d["status"] == "Pending"
         assert "_id" not in d
         # verify persisted
         g = client.get(f"{BASE_URL}/api/orders/{d['id']}", headers=cust_headers, timeout=30)
         assert g.status_code == 200
-        assert g.json()["total"] == 230
+        assert g.json()["total"] == d["total"]
 
     def test_order_free_delivery(self, client, cust_headers):
+        prods = client.get(f"{BASE_URL}/api/products", timeout=30).json()
+        p = next(x for x in prods if x.get("stock", 0) >= 3)
+        qty = max(3, int(500 // p["price"]) + 1)
+        qty = min(qty, p["stock"])
+        if p["price"] * qty < 499:
+            pytest.skip("no product with enough stock to cross free-delivery threshold")
+        items = [{"product_id": p["id"], "name": p["name"], "price": p["price"],
+                  "quantity": qty, "image": p["image"], "unit": p["unit"]}]
         r = client.post(f"{BASE_URL}/api/orders", headers=cust_headers, json={
-            "items": self._items(250, 2), "address": self.ADDRESS, "payment_method": "UPI"}, timeout=30)
-        assert r.status_code == 200
+            "items": items, "address": self.ADDRESS, "payment_method": "UPI"}, timeout=30)
+        assert r.status_code == 200, r.text[:300]
         d = r.json()
-        assert d["subtotal"] == 500
+        assert d["subtotal"] == round(p["price"] * qty, 2)
         assert d["delivery_fee"] == 0
-        assert d["total"] == 500
+        assert d["total"] == d["subtotal"]
 
     def test_empty_cart_rejected(self, client, cust_headers):
         r = client.post(f"{BASE_URL}/api/orders", headers=cust_headers, json={
@@ -258,8 +277,10 @@ class TestOrders:
 
     def test_order_access_denied_other_user(self, client, cust_headers):
         # create order as customer1
+        _, items = real_item(client, qty=1)
         r = client.post(f"{BASE_URL}/api/orders", headers=cust_headers, json={
-            "items": self._items(50), "address": self.ADDRESS, "payment_method": "COD"}, timeout=30)
+            "items": items, "address": self.ADDRESS, "payment_method": "COD"}, timeout=30)
+        assert r.status_code == 200, r.text[:300]
         oid = r.json()["id"]
         # register second customer
         email = f"TEST_other_{uuid.uuid4().hex[:6]}@example.com"
@@ -271,7 +292,7 @@ class TestOrders:
 
     def test_order_invalid_id(self, client, cust_headers):
         r = client.get(f"{BASE_URL}/api/orders/not-an-objectid", headers=cust_headers, timeout=30)
-        assert r.status_code == 404
+        assert r.status_code == 400, f"got {r.status_code}"
 
     def test_stock_decrement(self, client, cust_headers):
         p = client.get(f"{BASE_URL}/api/products/potato", timeout=30).json()
@@ -305,11 +326,12 @@ class TestAdmin:
         assert any(c["email"] == customer["email"].lower() for c in r.json())
 
     def test_admin_orders_and_status_flow(self, client, admin_headers, cust_headers):
-        items = [{"product_id": "000000000000000000000000", "name": "TEST_ Status Item", "price": 60,
-                  "quantity": 1, "image": "http://x/y.jpg", "unit": "1 kg"}]
+        _, items = real_item(client, qty=1)
         addr = TestOrders.ADDRESS
-        oid = client.post(f"{BASE_URL}/api/orders", headers=cust_headers, json={
-            "items": items, "address": addr, "payment_method": "COD"}, timeout=30).json()["id"]
+        created = client.post(f"{BASE_URL}/api/orders", headers=cust_headers, json={
+            "items": items, "address": addr, "payment_method": "COD"}, timeout=30)
+        assert created.status_code == 200, created.text[:300]
+        oid = created.json()["id"]
 
         lst = client.get(f"{BASE_URL}/api/admin/orders", headers=admin_headers, timeout=30)
         assert lst.status_code == 200
@@ -391,3 +413,115 @@ class TestSecurity:
         # good password must still work if there is no lockout
         ok = client.post(f"{BASE_URL}/api/auth/login", json=creds, timeout=30)
         assert ok.status_code == 200 or locked, f"login broken after failures: {ok.status_code}"
+
+
+# --- REGRESSION #3: server-side price recompute + stock validation on POST /api/orders ---
+class TestOrderPricingSecurity:
+    @pytest.fixture(scope="class")
+    def product(self, client):
+        prods = client.get(f"{BASE_URL}/api/products", timeout=30).json()
+        p = next((x for x in prods if x.get("stock", 0) > 2), prods[0])
+        return p
+
+    def _address(self):
+        return {"full_name": "TEST_ Buyer", "phone": "9876543210", "line1": "1 Test St",
+                "landmark": "", "area": "Test Area", "city": "Ambajogai", "pincode": "431517"}
+
+    def test_manipulated_price_is_ignored(self, client, cust_headers, product):
+        payload = {
+            "items": [{"product_id": product["id"], "name": "HACKED", "price": 1,
+                       "quantity": 2, "image": "x", "unit": "1 pc"}],
+            "address": self._address(), "payment_method": "COD", "notes": "TEST_ price manipulation",
+        }
+        r = client.post(f"{BASE_URL}/api/orders", json=payload, headers=cust_headers, timeout=30)
+        assert r.status_code == 200, r.text[:300]
+        o = r.json()
+        assert o["items"][0]["price"] == product["price"], f"client price accepted: {o['items'][0]['price']}"
+        assert o["items"][0]["name"] == product["name"], "client-supplied name not overridden"
+        expected_sub = round(product["price"] * 2, 2)
+        assert o["subtotal"] == expected_sub, f"subtotal {o['subtotal']} != {expected_sub}"
+        expected_fee = 0.0 if expected_sub >= 499 else 30.0
+        assert o["delivery_fee"] == expected_fee
+        assert o["total"] == round(expected_sub + expected_fee, 2)
+
+        # GET verifies persistence
+        g = client.get(f"{BASE_URL}/api/orders/{o['id']}", headers=cust_headers, timeout=30)
+        assert g.status_code == 200
+        assert g.json()["subtotal"] == expected_sub
+        assert g.json()["items"][0]["price"] == product["price"]
+
+    def test_insufficient_stock_returns_400(self, client, cust_headers, product):
+        payload = {
+            "items": [{"product_id": product["id"], "name": product["name"], "price": product["price"],
+                       "quantity": 999999, "image": "x", "unit": "1 pc"}],
+            "address": self._address(), "payment_method": "COD", "notes": "TEST_ stock",
+        }
+        r = client.post(f"{BASE_URL}/api/orders", json=payload, headers=cust_headers, timeout=30)
+        assert r.status_code == 400, f"expected 400 got {r.status_code}: {r.text[:200]}"
+        assert "stock" in r.text.lower()
+
+    def test_unknown_product_rejected(self, client, cust_headers):
+        payload = {
+            "items": [{"product_id": "507f1f77bcf86cd799439011", "name": "Ghost", "price": 10,
+                       "quantity": 1, "image": "x", "unit": "1 pc"}],
+            "address": self._address(), "payment_method": "COD", "notes": "TEST_ ghost",
+        }
+        r = client.post(f"{BASE_URL}/api/orders", json=payload, headers=cust_headers, timeout=30)
+        assert r.status_code == 400, r.text[:200]
+
+    def test_invalid_product_id_rejected(self, client, cust_headers):
+        payload = {
+            "items": [{"product_id": "not-an-oid", "name": "Ghost", "price": 10,
+                       "quantity": 1, "image": "x", "unit": "1 pc"}],
+            "address": self._address(), "payment_method": "COD", "notes": "TEST_ badoid",
+        }
+        r = client.post(f"{BASE_URL}/api/orders", json=payload, headers=cust_headers, timeout=30)
+        assert r.status_code == 400, r.text[:200]
+
+
+# --- REGRESSION #4: invalid ObjectId must never 500 ---
+class TestObjectIdSafety:
+    BAD = "not-an-objectid"
+    MISSING = "507f1f77bcf86cd799439011"
+
+    def test_delete_product_bad_id(self, client, admin_headers):
+        r = client.delete(f"{BASE_URL}/api/products/{self.BAD}", headers=admin_headers, timeout=30)
+        assert r.status_code in (400, 404), f"got {r.status_code}: {r.text[:200]}"
+
+    def test_delete_product_missing_id(self, client, admin_headers):
+        r = client.delete(f"{BASE_URL}/api/products/{self.MISSING}", headers=admin_headers, timeout=30)
+        assert r.status_code == 404, f"got {r.status_code}: {r.text[:200]}"
+
+    def test_put_product_bad_id(self, client, admin_headers):
+        body = {"name": "TEST_ X", "slug": "test-x", "description": "d", "price": 10.0,
+                "mrp": 12.0, "unit": "1 kg", "category_slug": "staples-grains",
+                "image": "http://x/y.jpg", "stock": 5}
+        r = client.put(f"{BASE_URL}/api/products/{self.BAD}", headers=admin_headers,
+                       json=body, timeout=30)
+        assert r.status_code in (400, 404), f"got {r.status_code}: {r.text[:200]}"
+
+    def test_delete_category_bad_id(self, client, admin_headers):
+        r = client.delete(f"{BASE_URL}/api/categories/{self.BAD}", headers=admin_headers, timeout=30)
+        assert r.status_code in (400, 404), f"got {r.status_code}: {r.text[:200]}"
+
+    def test_delete_category_missing_id(self, client, admin_headers):
+        r = client.delete(f"{BASE_URL}/api/categories/{self.MISSING}", headers=admin_headers, timeout=30)
+        assert r.status_code == 404, f"got {r.status_code}: {r.text[:200]}"
+
+    def test_patch_order_status_bad_id(self, client, admin_headers):
+        r = client.patch(f"{BASE_URL}/api/admin/orders/{self.BAD}/status", headers=admin_headers,
+                         json={"status": "Packed"}, timeout=30)
+        assert r.status_code in (400, 404), f"got {r.status_code}: {r.text[:200]}"
+
+    def test_patch_order_status_missing_id(self, client, admin_headers):
+        r = client.patch(f"{BASE_URL}/api/admin/orders/{self.MISSING}/status", headers=admin_headers,
+                         json={"status": "Packed"}, timeout=30)
+        assert r.status_code == 404, f"got {r.status_code}: {r.text[:200]}"
+
+    def test_get_order_bad_id(self, client, cust_headers):
+        r = client.get(f"{BASE_URL}/api/orders/{self.BAD}", headers=cust_headers, timeout=30)
+        assert r.status_code in (400, 404), f"got {r.status_code}: {r.text[:200]}"
+
+    def test_get_order_missing_id(self, client, cust_headers):
+        r = client.get(f"{BASE_URL}/api/orders/{self.MISSING}", headers=cust_headers, timeout=30)
+        assert r.status_code == 404, f"got {r.status_code}: {r.text[:200]}"

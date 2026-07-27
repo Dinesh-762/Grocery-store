@@ -13,6 +13,7 @@ export default function Checkout() {
   const [store, setStore] = useState({ upi_id: "ambajogai@upi", upi_name: "Ambajogai Grocery", whatsapp: "+919999999999" });
   const [payment, setPayment] = useState("UPI");
   const [submitting, setSubmitting] = useState(false);
+  const [placed, setPlaced] = useState(false);
   const [form, setForm] = useState({
     full_name: user?.name || "",
     phone: user?.phone || "",
@@ -28,8 +29,8 @@ export default function Checkout() {
   }, []);
 
   useEffect(() => {
-    if (items.length === 0 && !submitting) navigate("/cart");
-  }, [items.length, submitting, navigate]);
+    if (items.length === 0 && !submitting && !placed) navigate("/cart");
+  }, [items.length, submitting, placed, navigate]);
 
   const update = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -60,6 +61,7 @@ export default function Checkout() {
         payment_method: payment,
         notes: form.notes,
       });
+      setPlaced(true);
       clearCart();
       toast.success("Order placed successfully!");
 

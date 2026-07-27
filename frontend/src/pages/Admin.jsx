@@ -315,27 +315,27 @@ function ProductForm({ initial, categories, onClose, onSaved }) {
           </button>
         </div>
         <form onSubmit={save} className="grid gap-4 sm:grid-cols-2">
-          <FField label="Name" value={form.name} onChange={(v) => update("name", v)} required />
-          <FField label="Slug" value={form.slug} onChange={(v) => update("slug", v)} placeholder="auto from name" />
+          <FField label="Name" value={form.name} onChange={(v) => update("name", v)} required data-testid="product-name" />
+          <FField label="Slug" value={form.slug} onChange={(v) => update("slug", v)} placeholder="auto from name" data-testid="product-slug" />
           <div className="sm:col-span-2">
             <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Description</label>
-            <textarea value={form.description} onChange={(e) => update("description", e.target.value)} rows={2} className="input-base resize-none" />
+            <textarea value={form.description} onChange={(e) => update("description", e.target.value)} rows={2} className="input-base resize-none" data-testid="product-description" />
           </div>
-          <FField label="Price (₹)" type="number" value={form.price} onChange={(v) => update("price", v)} required />
-          <FField label="MRP (₹)" type="number" value={form.mrp || ""} onChange={(v) => update("mrp", v)} />
-          <FField label="Unit" value={form.unit} onChange={(v) => update("unit", v)} placeholder="1 kg" />
+          <FField label="Price (₹)" type="number" value={form.price} onChange={(v) => update("price", v)} required data-testid="product-price" />
+          <FField label="MRP (₹)" type="number" value={form.mrp || ""} onChange={(v) => update("mrp", v)} data-testid="product-mrp" />
+          <FField label="Unit" value={form.unit} onChange={(v) => update("unit", v)} placeholder="1 kg" data-testid="product-unit" />
           <div>
             <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Category</label>
-            <select value={form.category_slug} onChange={(e) => update("category_slug", e.target.value)} className="input-base">
+            <select value={form.category_slug} onChange={(e) => update("category_slug", e.target.value)} className="input-base" data-testid="product-category">
               {categories.map((c) => (
                 <option key={c.slug} value={c.slug}>{c.name}</option>
               ))}
             </select>
           </div>
           <div className="sm:col-span-2">
-            <FField label="Image URL" value={form.image} onChange={(v) => update("image", v)} required />
+            <FField label="Image URL" value={form.image} onChange={(v) => update("image", v)} required data-testid="product-image" />
           </div>
-          <FField label="Stock" type="number" value={form.stock} onChange={(v) => update("stock", v)} required />
+          <FField label="Stock" type="number" value={form.stock} onChange={(v) => update("stock", v)} required data-testid="product-stock" />
           <div className="flex items-center gap-4 pt-6">
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={form.featured} onChange={(e) => update("featured", e.target.checked)} />
