@@ -83,7 +83,7 @@ function Dashboard() {
   }
 
   const stats = [
-    { label: "Revenue", value: formatINR(data.revenue), icon: TrendingUp, color: "bg-[#1B4332]" },
+    { label: "Revenue (delivered)", value: formatINR(data.revenue), icon: TrendingUp, color: "bg-[#1B4332]" },
     { label: "Orders", value: data.total_orders, icon: ShoppingBag, color: "bg-[#E07A5F]" },
     { label: "Products", value: data.total_products, icon: Package, color: "bg-[#8BA888]" },
     { label: "Customers", value: data.total_users, icon: Users, color: "bg-[#F4A261]" },

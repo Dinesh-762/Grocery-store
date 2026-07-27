@@ -56,7 +56,7 @@ export default function Header() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search for rice, dal, milk, snacks…"
-              className="input-base pl-11"
+              className="input-base pl-12"
               data-testid="header-search-input"
             />
           </div>
