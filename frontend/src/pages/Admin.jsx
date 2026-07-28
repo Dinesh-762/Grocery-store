@@ -219,6 +219,16 @@ function ProductsAdmin() {
     }
   };
 
+  const setApproval = async (id, status) => {
+    try {
+      await api.patch(`/admin/products/${id}/approval`, { status });
+      toast.success(`Product ${status}`);
+      load();
+    } catch (e) {
+      toast.error(formatApiError(e));
+    }
+  };
+
   if (loading) return <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#1B4332]" />;
 
   return (
@@ -437,7 +447,7 @@ function FField({ label, type = "text", value, onChange, ...rest }) {
 }
 
 /* ================= ORDERS ADMIN ================= */
-const ALL_STATUSES = ["Pending", "Confirmed", "Packed", "Out For Delivery", "Delivered", "Cancelled"];
+const ALL_STATUSES = ["Pending", "Accepted", "Preparing", "Packed", "Ready", "Out For Delivery", "Delivered", "Cancelled"];
 
 function OrdersAdmin() {
   const [orders, setOrders] = useState([]);

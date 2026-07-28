@@ -430,6 +430,8 @@ async def get_product(slug: str):
     doc = await db.products.find_one({"slug": slug})
     if not doc:
         raise HTTPException(status_code=404, detail="Product not found")
+    if doc.get("approval_status", "approved") != "approved":
+        raise HTTPException(status_code=404, detail="Product not found")
     return product_to_out(doc)
 
 

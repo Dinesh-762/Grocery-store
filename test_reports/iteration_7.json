@@ -1,0 +1,46 @@
+{
+  "summary": "Laser-focused retest of the two HIGH frontend bugs from iteration_6 plus the new PDP-404 backend change. BOTH FIXES NOW VERIFIED IN THE REAL UI. FIX #1: Admin.jsx:450 ALL_STATUSES read directly from the DOM — per-order select[data-testid^='status-select-'] options = ['Pending','Accepted','Preparing','Packed','Ready','Out For Delivery','Delivered','Cancelled'] and the top filter select = ['All', + same 8]; selecting 'Accepted' on order 6a68d14181f39653bc4e5aa3 fired PATCH /api/admin/orders/<id>/status (200), toast 'Marked Accepted', select value persisted as 'Accepted' after reload. FIX #2: setApproval now defined (Admin.jsx:222); no ESLint no-undef remains. Flipped test-vendor-ui-tomato to approval_status='pending' via API, then clicking [data-testid='approve-product-test-vendor-ui-tomato'] fired PATCH /api/admin/products/6a68cddb2d6830a591905de8/approval, showed 'Product approved' toast, and the reloaded row (sourced from GET /api/admin/products) shows badge 'approved'; Reject click flipped it to 'rejected' and Approve flipped it back to 'approved' — full round trip confirmed against the DB-backed list. MINOR BACKEND fix verified: GET /api/products/<slug> now returns 404 for pending and rejected, 200 (no _id) for approved. Sanity: full backend suite 103/103 pass (49+36+8+10 new); OrderDetail for order #4E5AA3 still reconciles Subtotal Rs.65 + Delivery Rs.30 - Coupon (WELCOME10) Rs.6.50 = Rs.88.50 with the 8-step tracker and 'Accepted' active.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PATCH /api/admin/products/{id}/approval, PATCH /api/vendor/orders/{id}/line-status", "issue": "Still raw dict payloads instead of Pydantic models (carried over from iteration_5/6)."},
+      {"endpoint": "POST /api/auth/login", "issue": "Still no brute-force lockout / rate limiting on repeated failed logins (playbook item 4). App uses JWT in localStorage (not httpOnly cookies), so the cookie/CORS-credential playbook items do not apply."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin > Products table", "issues": ["Carried over: the 'Reject' pill still renders on every already-approved row (22/22), making the destructive action the most prominent control; consider showing it only for pending rows or behind a menu."]},
+      {"screen": "OrderDetail status tracker", "issues": ["When an order's status is moved backwards (e.g. Delivered -> Accepted), the later steps still display their stale historical timestamps while their circles are unfilled, which reads as contradictory. Low priority."]},
+      {"screen": "Admin > Orders", "issues": ["Console warning: a stale order-item image with src 'http://x/y.jpg' triggers Mixed Content + ERR_NAME_NOT_RESOLVED. Comes from old TEST_ order seed data, not product data (all product images are https). Cosmetic."]},
+      {"screen": "Admin > Vendors docs modal / Admin > Coupons form", "issues": ["Carried over: modal not closable via Escape/backdrop; coupon expiry still uses native <input type='date'> instead of shadcn Calendar."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration7_fixes.py",
+    "/app/backend/tests/test_iteration6_fixes.py",
+    "/app/backend/tests/test_vendor_phase1.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "No blocking action items. Both HIGH bugs are fixed and verified end-to-end.",
+    "Optional cleanup: Admin.jsx:718 has 2 ESLint react/no-unescaped-entities errors (unescaped double quotes in JSX text) — only remaining lint errors in the file.",
+    "Optional (carried over): extract the order-status list into one shared exported constant imported by Admin.jsx / OrderDetail.jsx / VendorDashboard.jsx to stop the recurring drift; add Pydantic models to the two dict-payload PATCH endpoints; split Admin.jsx (~870 lines) and server.py (~1271 lines) which exceed the 700-line guideline; hide 'Reject' on already-approved rows."
+  ],
+  "critical_code_review_comments": [
+    "ALL_STATUSES is still duplicated in Admin.jsx, OrderDetail.jsx and VendorDashboard.jsx — this exact duplication caused the iteration_6 HIGH bug. Extract to src/lib/constants.js.",
+    "Admin.jsx:718 still fails ESLint (react/no-unescaped-entities x2); keep lint in the definition of done since the previous no-undef bug was lint-detectable."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration7_fixes.py (new, 10 cases: PDP 404 for pending/rejected + 200 for approved, and all 6 new admin order statuses persisted + 'Confirmed' rejected with 400)"
+  ],
+  "success_rate": {"backend": "100% (103/103 pytest)", "frontend": "100% of the 2 retested HIGH fixes verified + sanity pack green"},
+  "seed_data_creation": "No new seed data. Reused admin, vendor test_vendor_ui_1785253172@example.com / Vendor@123, customer test_cust_ui_1785253507@example.com / Test@123, product test-vendor-ui-tomato (id 6a68cddb2d6830a591905de8, LEFT in approval_status='approved') and order 6a68d14181f39653bc4e5aa3 (LEFT in status 'Accepted').",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Admin admin@ambajogai.com / Admin@123; Vendor test_vendor_ui_1785253172@example.com / Vendor@123; Customer test_cust_ui_1785253507@example.com / Test@123",
+  "context_for_next_testing_agent": "Backend baseline is now 103 pytest cases across 4 files in /app/backend/tests (backend_test.py 49, test_vendor_phase1.py 36, test_iteration6_fixes.py 8, test_iteration7_fixes.py 10). pytest.ini runs xdist loadscope, so do not pass -n/-p flags. Note: /api/admin/products and /api/admin/orders return plain JSON lists (not {items:[]}) — use the as_list() helper in test_iteration7_fixes.py. Routes are /products/:slug and /orders/:id; customer orders API is GET /api/orders/my. To retest admin product approval, flip a product to pending with PATCH /api/admin/products/<id>/approval {status:'pending'} then click [data-testid='approve-product-<slug>'] — this now works. Both iteration_6 HIGH bugs are closed; only cosmetic/design carryovers remain.",
+  "rca_of_the_issue": "Both iteration_6 defects were file-persistence/omission issues in Admin.jsx and are now genuinely fixed: ALL_STATUSES (line 450) contains the 8 backend ORDER_STATUSES, and the previously missing setApproval handler (line 222) is implemented and issues PATCH /admin/products/<id>/approval followed by load(). Verified not by grep alone but by reading the rendered <option> lists and by capturing the actual outbound PATCH requests plus the reloaded DB-backed row state."
+}
