@@ -1,7 +1,14 @@
 import { Link } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { api } from "@/lib/api";
 import { Leaf, MapPin, Phone, Mail, Instagram, Facebook } from "lucide-react";
 
 export default function Footer() {
+  const [store, setStore] = useState({ whatsapp: "+918237214975", email: "ambajogaigrocerystores@gmail.com" });
+  useEffect(() => {
+    api.get("/store/info").then(({ data }) => setStore(data)).catch(() => {});
+  }, []);
+
   return (
     <footer className="mt-24 bg-[#1B4332] text-white" data-testid="site-footer">
       <div className="container-app py-16">
@@ -50,11 +57,11 @@ export default function Footer() {
               </li>
               <li className="flex items-center gap-2 text-white/80">
                 <Phone className="h-4 w-4" />
-                <span>+91 99999 99999</span>
+                <a href={`tel:${store.phone || store.whatsapp}`} className="hover:text-white">{store.phone || store.whatsapp}</a>
               </li>
               <li className="flex items-center gap-2 text-white/80">
                 <Mail className="h-4 w-4" />
-                <span>contact@ambajogai.com</span>
+                <a href={`mailto:${store.email}`} className="break-all hover:text-white">{store.email}</a>
               </li>
             </ul>
             <div className="mt-4 flex gap-3">

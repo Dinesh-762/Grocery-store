@@ -9,7 +9,7 @@ export default function OrderDetail() {
   const { id } = useParams();
   const [order, setOrder] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [store, setStore] = useState({ whatsapp: "+919999999999" });
+  const [store, setStore] = useState({ whatsapp: "+918237214975" });
 
   useEffect(() => {
     api.get("/store/info").then(({ data }) => setStore(data)).catch(() => {});

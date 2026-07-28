@@ -4,7 +4,7 @@ import { MapPin, Phone, Mail, Clock, MessageCircle } from "lucide-react";
 import { toast } from "sonner";
 
 export default function Contact() {
-  const [store, setStore] = useState({ whatsapp: "+919999999999", email: "contact@ambajogai.com" });
+  const [store, setStore] = useState({ whatsapp: "+918237214975", email: "ambajogaigrocerystores@gmail.com" });
   const [form, setForm] = useState({ name: "", email: "", message: "" });
 
   useEffect(() => {

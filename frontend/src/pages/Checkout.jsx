@@ -10,7 +10,7 @@ export default function Checkout() {
   const { items, subtotal, deliveryFee, total: cartTotal, clearCart } = useCart();
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [store, setStore] = useState({ upi_id: "ambajogai@upi", upi_name: "Ambajogai Grocery", whatsapp: "+919999999999" });
+  const [store, setStore] = useState({ upi_id: "ambajogai@upi", upi_name: "Ambajogai Grocery Store", whatsapp: "+918237214975", upi_qr: "/assets/upi-qr.jpeg" });
   const [payment, setPayment] = useState("UPI");
   const [submitting, setSubmitting] = useState(false);
   const [placed, setPlaced] = useState(false);
@@ -172,9 +172,15 @@ export default function Checkout() {
 
             {payment === "UPI" && (
               <div className="mt-6 flex flex-col items-center gap-3 rounded-xl border border-dashed border-[#8BA888] bg-[#FDFBF7] p-6 text-center">
-                <div className="text-sm font-semibold">Scan to pay {formatINR(total)}</div>
-                <img src={qrSrc} alt="UPI QR" className="h-52 w-52 rounded-lg" data-testid="upi-qr" />
-                <div className="text-xs text-[#4A4A4A]">UPI ID: <span className="font-mono">{store.upi_id}</span></div>
+                <div className="text-sm font-semibold">Scan & pay {formatINR(total)}</div>
+                <img
+                  src={store.upi_qr || "/assets/upi-qr.jpeg"}
+                  alt="UPI QR"
+                  className="h-56 w-56 rounded-lg border border-[#E5E5E5] bg-white object-contain p-2"
+                  data-testid="upi-qr"
+                />
+                <div className="text-xs font-semibold text-[#1B4332]">PhonePe · Google Pay · Paytm · any UPI app</div>
+                <div className="text-xs text-[#4A4A4A]">Enter the amount <span className="font-mono font-semibold">{formatINR(total)}</span> in your UPI app after scanning.</div>
                 <div className="text-xs text-[#4A4A4A]">After payment, place the order — we&apos;ll confirm on WhatsApp.</div>
               </div>
             )}
