@@ -94,7 +94,7 @@ function Dashboard() {
   const stats = [
     { label: "Revenue (delivered)", value: formatINR(data.revenue), icon: TrendingUp, color: "bg-[#1B4332]" },
     { label: "Orders", value: data.total_orders, icon: ShoppingBag, color: "bg-[#E07A5F]" },
-    { label: "Vendors", value: data.total_vendors ?? 0, icon: Store, color: "bg-[#F4A261]" },
+    { label: "Approved vendors", value: data.total_vendors ?? 0, icon: Store, color: "bg-[#F4A261]" },
     { label: "Customers", value: data.total_users, icon: Users, color: "bg-[#8BA888]" },
   ];
 
@@ -198,7 +198,7 @@ function ProductsAdmin() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [p, c] = await Promise.all([api.get("/products?limit=500"), api.get("/categories")]);
+    const [p, c] = await Promise.all([api.get("/admin/products"), api.get("/categories")]);
     setProducts(p.data);
     setCategories(c.data);
     setLoading(false);
@@ -243,9 +243,10 @@ function ProductsAdmin() {
             <thead className="bg-gray-50 text-left text-xs uppercase tracking-wider text-[#4A4A4A]">
               <tr>
                 <th className="px-4 py-3">Product</th>
-                <th className="px-4 py-3">Category</th>
+                <th className="px-4 py-3">Vendor</th>
                 <th className="px-4 py-3">Price</th>
                 <th className="px-4 py-3">Stock</th>
+                <th className="px-4 py-3">Approval</th>
                 <th className="px-4 py-3 text-right">Actions</th>
               </tr>
             </thead>
@@ -257,18 +258,46 @@ function ProductsAdmin() {
                       <img src={p.image} alt="" className="h-10 w-10 rounded-lg object-cover" />
                       <div>
                         <div className="font-semibold">{p.name}</div>
-                        <div className="text-xs text-[#4A4A4A]">{p.unit}</div>
+                        <div className="text-xs text-[#4A4A4A]">{p.unit} · {p.category_slug}</div>
                       </div>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-[#4A4A4A]">{p.category_slug}</td>
+                  <td className="px-4 py-3 text-[#4A4A4A]">
+                    {p.vendor_name || <span className="italic text-gray-400">Store</span>}
+                  </td>
                   <td className="px-4 py-3 font-semibold">{formatINR(p.price)}</td>
                   <td className="px-4 py-3">
                     <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${p.stock <= 5 ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"}`}>
                       {p.stock}
                     </span>
                   </td>
+                  <td className="px-4 py-3">
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                      p.approval_status === "approved" ? "bg-green-100 text-green-700" :
+                      p.approval_status === "rejected" ? "bg-red-100 text-red-700" : "bg-yellow-100 text-yellow-700"
+                    }`}>
+                      {p.approval_status || "approved"}
+                    </span>
+                  </td>
                   <td className="px-4 py-3 text-right">
+                    {(p.approval_status || "approved") !== "approved" && (
+                      <button
+                        onClick={() => setApproval(p.id, "approved")}
+                        className="mr-1 inline-flex items-center gap-1 rounded-full bg-green-600 px-2 py-1 text-xs font-semibold text-white hover:bg-green-700"
+                        data-testid={`approve-product-${p.slug}`}
+                      >
+                        <Check className="h-3 w-3" /> Approve
+                      </button>
+                    )}
+                    {(p.approval_status || "approved") !== "rejected" && (
+                      <button
+                        onClick={() => setApproval(p.id, "rejected")}
+                        className="mr-1 inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-200"
+                        data-testid={`reject-product-${p.slug}`}
+                      >
+                        <Ban className="h-3 w-3" /> Reject
+                      </button>
+                    )}
                     <button onClick={() => { setEditing(p); setShowForm(true); }} className="inline-grid h-8 w-8 place-items-center rounded-full text-[#1B4332] hover:bg-gray-100" data-testid={`edit-${p.slug}`}>
                       <Pencil className="h-4 w-4" />
                     </button>

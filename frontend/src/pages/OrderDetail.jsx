@@ -140,6 +140,12 @@ export default function OrderDetail() {
             <div className="mt-4 space-y-2 border-t border-dashed pt-4 text-sm">
               <Row label="Subtotal" value={formatINR(order.subtotal)} />
               <Row label="Delivery" value={order.delivery_fee === 0 ? "FREE" : formatINR(order.delivery_fee)} />
+              {order.discount > 0 && (
+                <Row
+                  label={`Coupon${order.coupon?.code ? ` (${order.coupon.code})` : ""}`}
+                  value={`- ${formatINR(order.discount)}`}
+                />
+              )}
               <div className="mt-2 flex items-center justify-between border-t border-dashed pt-2">
                 <span className="font-semibold">Total</span>
                 <span className="font-heading text-xl font-bold text-[#1B4332]">{formatINR(order.total)}</span>

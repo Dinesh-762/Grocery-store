@@ -1,0 +1,54 @@
+{
+  "summary": "Iteration 6 regression retest of the 3 fixes claimed after iteration_5. Backend: 93/93 pytest pass (49 backend_test.py + 36 test_vendor_phase1.py + 8 NEW test_iteration6_fixes.py) — PATCH /api/admin/orders/<id>/status accepts Accepted/Preparing/Ready (200, persisted) and still rejects 'Confirmed' (400); GET /api/admin/products returns approval_status + vendor_name with no _id leakage and supports ?status=pending; PATCH /api/admin/products/<id>/approval round-trips pending->hidden from public list, approved->visible, and rejects an invalid status; POST /api/products (admin) now returns approval_status='approved'. Frontend: FIX #3 VERIFIED (OrderDetail shows 'Coupon (WELCOME10) - Rs.6.50' and 65+30-6.50=88.50 reconciles, on both the old iteration-5 order and a brand-new COD order). FIX #2 PARTIALLY fixed — the Vendor/Approval columns and the Approve/Reject buttons now render with correct pending/approved badges, BUT clicking Approve does nothing because the handler `setApproval` is NOT DEFINED anywhere in Admin.jsx (ESLint no-undef confirms; product stayed approval_status='pending' after the UI click). FIX #1 NOT APPLIED AT ALL — Admin.jsx:440 ALL_STATUSES is still the old 6-item list ['Pending','Confirmed','Packed','Out For Delivery','Delivered','Cancelled'] in both the filter and the per-order status select. Sanity pack all green: customer login, PDP add-to-cart, cart, checkout coupon apply (Rs.95 -> Rs.88.50), COD order placement -> /orders/<id>, admin dashboard ('Approved vendors' label + pending callouts confirmed), vendor login/dashboard/products, vendor line-status Accepted propagating to the customer tracker with timestamps.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/products/{slug}", "issue": "No approval_status filter — a pending/rejected product is still fetchable (200) by direct slug URL, so /products/<slug> renders an unapproved vendor product publicly. Ordering it is correctly blocked at checkout, but the PDP should 404. Verified while test-vendor-ui-tomato was pending."},
+      {"endpoint": "PATCH /api/admin/products/{id}/approval, PATCH /api/vendor/orders/{id}/line-status", "issue": "Still raw dict payloads instead of Pydantic models (carried over from iteration_5)."},
+      {"endpoint": "POST /api/auth/login", "issue": "Still no brute-force lockout / rate limiting on failed logins (playbook item 4). App uses JWT in localStorage, not httpOnly cookies, so cookie/CORS-credential playbook items do not apply; bcrypt $2b$ verified indirectly via login + seed_admin refresh."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Admin > OrdersAdmin (Admin.jsx:440 ALL_STATUSES)", "issue": "FIX #1 NOT APPLIED. Verified in UI: status select options = ['Pending','Confirmed','Packed','Out For Delivery','Delivered','Cancelled'] and filter options = ['All', same 6]. Admin cannot set Accepted/Preparing/Ready; picking 'Confirmed' returns backend 400 'Invalid status'; an order in Accepted/Preparing/Ready has no matching option so the select visually falls back to 'Pending'. VendorDashboard.jsx already renders the correct 8-status list, so this is pure drift in Admin.jsx.", "selector": "select[data-testid^='status-select-']", "priority": "HIGH"},
+      {"component": "Admin > ProductsAdmin (Admin.jsx:285,294)", "issue": "FIX #2 only half done: `setApproval` is referenced by the Approve/Reject onClick handlers but is NEVER DEFINED in the file (ESLint: \"'setApproval' is not defined [no-undef]\" x2). Clicking Approve on the pending product test-vendor-ui-tomato produced no request/toast, the row stayed 'pending' and GET /api/admin/products still reported approval_status='pending'. So there is STILL no working UI path to approve/reject a vendor product. Columns/badges themselves render correctly.", "selector": "[data-testid='approve-product-test-vendor-ui-tomato']", "priority": "HIGH"}
+    ],
+    "integration_issues": [
+      {"flow": "Admin product approval", "issue": "PATCH /api/admin/products/<id>/approval is never called from the UI (undefined handler), so the dashboard 'N product(s) awaiting approval' callout remains non-actionable.", "affected_selectors": ["[data-testid^='approve-product-']", "[data-testid^='reject-product-']", "[data-testid='pending-products-card']"]}
+    ],
+    "design_issues": [
+      {"screen": "Admin > Vendors > docs modal", "issues": ["Still not closable via Escape or backdrop click (carried over from iteration_5)."]},
+      {"screen": "Admin > Coupons form", "issues": ["Expiry still uses the native <input type='date'> instead of the shadcn Calendar/Popover (carried over)."]},
+      {"screen": "Admin > Products table", "issues": ["Approve/Reject buttons are icon+text pills placed in the same cell as edit/delete icons; the 'Reject' pill is shown on every already-approved row, making the destructive action the most prominent control on 22/22 rows. Consider showing Reject only on pending rows or moving it behind a menu."]},
+      {"screen": "OrderDetail / Checkout summary", "issues": ["No issues — Subtotal / Delivery / Coupon / Total now reconcile on both screens."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration6_fixes.py",
+    "/app/backend/tests/test_vendor_phase1.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Admin.jsx:440 — actually replace ALL_STATUSES with ['Pending','Accepted','Preparing','Packed','Ready','Out For Delivery','Delivered','Cancelled'] (ideally a shared constant imported by Admin.jsx, OrderDetail.jsx and VendorDashboard.jsx).",
+    "Admin.jsx ProductsAdmin — define the missing setApproval handler: `const setApproval = async (id, status) => { try { await api.patch(`/admin/products/${id}/approval`, { status }); toast.success(...); load(); } catch (e) { toast.error(formatApiError(e)); } }`. Currently both Approve and Reject buttons are dead.",
+    "Run `eslint` on the frontend before handoff — this exact bug is reported as no-undef and would have been caught pre-commit.",
+    "Optional: 404 GET /api/products/{slug} when approval_status != 'approved' so unapproved vendor products are not viewable by direct URL.",
+    "Optional (carried over): use a distinct status (not 'pending') when hiding a suspended/rejected vendor's products; add Pydantic models to the two dict-payload PATCH endpoints; split Admin.jsx (868 lines) and server.py (1271 lines)."
+  ],
+  "critical_code_review_comments": [
+    "Admin.jsx has two hard ESLint errors (setApproval undefined) shipped to the preview — dead Approve/Reject buttons. Add lint to the definition of done.",
+    "Order status labels are STILL duplicated in 4 places and Admin.jsx is still the drifted copy; extract one exported constant to stop this recurring.",
+    "Admin.jsx 868 lines / server.py 1271 lines exceed the 700-line guideline."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration6_fixes.py (new, 8 cases covering the 3 fixes' backend surface)"
+  ],
+  "success_rate": {"backend": "100% (93/93)", "frontend": "33% of the 3 claimed fixes fully verified (FIX #3 pass, FIX #2 partial/broken handler, FIX #1 not applied); sanity regression pack 100%"},
+  "seed_data_creation": "Reused vendor test_vendor_ui_1785253172@example.com / Vendor@123 (Approved, product slug test-vendor-ui-tomato — left in approval_status='approved') and customer test_cust_ui_1785253507@example.com / Test@123. NEW order 6a68d14181f39653bc4e5aa3 (COD, WELCOME10, subtotal 65 + delivery 30 - discount 6.50 = 88.50, status Accepted via vendor line-status). Old order 6a68ce972d6830a591905dea still present. Backend pytest creates/deletes its own TEST_ prefixed data.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "Admin admin@ambajogai.com / Admin@123; Vendor test_vendor_ui_1785253172@example.com / Vendor@123; Customer test_cust_ui_1785253507@example.com / Test@123",
+  "context_for_next_testing_agent": "Backend baseline is now 93 pytest cases: backend_test.py (49) + test_vendor_phase1.py (36) + test_iteration6_fixes.py (8, new — admin product listing/approval round-trip, admin-created product approval_status, new order statuses). Note the app routes are /products/:slug (NOT /product/:slug) and customer orders API is GET /api/orders/my (GET /api/orders is 405). Checkout requires Address line + Area + Pincode filled before 'Place order' works. To retest FIX #2 you must first flip a product to pending: PATCH /api/admin/products/<id>/approval {status:'pending'} (test-vendor-ui-tomato id 6a68cddb2d6830a591905de8), then click [data-testid='approve-product-test-vendor-ui-tomato'] and re-read GET /api/admin/products to confirm it actually changed — the UI currently silently no-ops. FIX #1 verify by reading the option list of select[data-testid^='status-select-'].",
+  "rca_of_the_issue": "Two of the three claimed frontend fixes are incomplete. FIX #1: the ALL_STATUSES constant at Admin.jsx:440 was never edited — the file still ships the pre-Phase-1 6-status list, so the backend's new ORDER_STATUSES are unreachable from /admin/orders and 'Confirmed' still yields 400. FIX #2: the JSX for the Vendor/Approval columns and the Approve/Reject buttons was added (and GET /admin/products is now used correctly), but the click handler function `setApproval` was never implemented — React resolves it to an undefined identifier, so the onClick throws/no-ops and PATCH /api/admin/products/<id>/approval is never issued. ESLint flags both button lines as no-undef, i.e. a lint run before handoff would have caught it. The backend for all three fixes is correct and fully covered by the 8 new pytest cases. FIX #3 (OrderDetail coupon row) is correctly implemented and verified end-to-end."
+}

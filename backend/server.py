@@ -440,6 +440,7 @@ async def create_product(payload: ProductIn, _: dict = Depends(require_admin)):
         raise HTTPException(status_code=400, detail="Slug already used")
     doc = payload.model_dump()
     doc["created_at"] = iso_now()
+    doc["approval_status"] = "approved"  # admin-created products are pre-approved
     res = await db.products.insert_one(doc)
     doc["_id"] = res.inserted_id
     return product_to_out(doc)
