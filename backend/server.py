@@ -816,6 +816,27 @@ async def list_public_vendors():
     ]
 
 
+@api.get("/vendors/{vendor_id}")
+async def get_public_vendor(vendor_id: str):
+    oid = safe_object_id(vendor_id)
+    v = await db.vendors.find_one({"_id": oid, "status": "Approved"})
+    if not v:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    products = await db.products.find({
+        "vendor_id": str(oid),
+        "approval_status": "approved",
+    }).sort("created_at", -1).to_list(500)
+    return {
+        "id": str(v["_id"]),
+        "business_name": v["business_name"],
+        "business_description": v.get("business_description", ""),
+        "business_address": v.get("business_address", ""),
+        "business_pincode": v.get("business_pincode", ""),
+        "created_at": v.get("created_at"),
+        "products": [product_to_out(p) for p in products],
+    }
+
+
 # Admin: all vendors
 @api.get("/admin/vendors")
 async def admin_list_vendors(_: dict = Depends(require_admin), status_filter: Optional[str] = None):

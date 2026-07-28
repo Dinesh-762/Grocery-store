@@ -67,7 +67,18 @@ export default function ProductDetail() {
         </div>
 
         <div>
+        <div>
           <div className="text-sm text-[#4A4A4A]">{product.unit}</div>
+          {product.vendor_id && product.vendor_name && (
+            <Link
+              to={`/vendors/${product.vendor_id}`}
+              className="mt-1 inline-flex items-center gap-1 rounded-full bg-[#8BA888]/15 px-2.5 py-0.5 text-xs font-semibold text-[#1B4332] hover:bg-[#8BA888]/30"
+              data-testid="pdp-vendor-link"
+            >
+              by {product.vendor_name}
+            </Link>
+          )}
+        </div>
           <h1 className="mt-2 font-heading text-3xl font-bold sm:text-4xl" data-testid="product-name">
             {product.name}
           </h1>

@@ -22,6 +22,7 @@ import Legal from "@/pages/Legal";
 import Admin from "@/pages/Admin";
 import BecomeVendor from "@/pages/BecomeVendor";
 import VendorDashboard from "@/pages/VendorDashboard";
+import VendorStorefront from "@/pages/VendorStorefront";
 
 import "@/App.css";
 
@@ -69,6 +70,7 @@ export default function App() {
                   }
                 />
                 <Route path="/become-vendor" element={<BecomeVendor />} />
+                <Route path="/vendors/:id" element={<VendorStorefront />} />
                 <Route
                   path="/vendor/*"
                   element={

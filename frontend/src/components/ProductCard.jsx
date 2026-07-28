@@ -35,7 +35,19 @@ export default function ProductCard({ product }) {
       </Link>
 
       <div className="flex flex-1 flex-col gap-2 p-4">
-        <div className="text-xs text-gray-500">{product.unit}</div>
+        <div className="flex items-center justify-between gap-2 text-xs text-gray-500">
+          <span>{product.unit}</span>
+          {product.vendor_id && product.vendor_name && (
+            <Link
+              to={`/vendors/${product.vendor_id}`}
+              onClick={(e) => e.stopPropagation()}
+              className="max-w-[55%] truncate rounded-full bg-[#8BA888]/15 px-2 py-0.5 text-[10px] font-semibold text-[#1B4332] hover:bg-[#8BA888]/30"
+              data-testid={`vendor-badge-${product.slug}`}
+            >
+              by {product.vendor_name}
+            </Link>
+          )}
+        </div>
         <Link to={`/products/${product.slug}`} className="line-clamp-2 text-sm font-semibold text-[#1A1A1A] hover:text-[#1B4332]">
           {product.name}
         </Link>

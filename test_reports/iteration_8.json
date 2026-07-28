@@ -1,0 +1,40 @@
+{
+  "summary": "Tested the new public vendor storefront feature (Phase 1 enhancement). Backend: created /app/backend/tests/test_iteration8_storefront.py — 9/9 passed covering GET /api/vendors/{id} happy path + 3 negative cases (malformed -> 400 'Invalid id format', non-existent -> 404, non-approved vendor -> 404), pending-product-leak filter (flipped test-vendor-ui-tomato to pending via admin PATCH, verified it disappears from products[], then restored to approved), plus smoke on /api/products, /api/vendors, /api/products/{slug} (exposes vendor_id/vendor_name), /api/categories. No _id leakage. Frontend: /vendors/6a68cd452d6830a591905de5 renders hero (Verified vendor badge, business name, description, address+pincode, '1 product'), 'Available now' grid with ProductCard; add-to-cart on storefront card works (switches to qty stepper, cart badge updates); 404/malformed ids show vendor-storefront-missing fallback; ProductCard vendor pill (vendor-badge-test-vendor-ui-tomato) navigates to /vendors/<id> without triggering the parent product link; PDP pdp-vendor-link present and navigates to storefront; admin products (fresh-tomato/onion/banana) correctly show no pill on card or PDP. Regression smoke: home + /products load, admin login + /admin dashboard loads (Revenue/Orders/Vendors widgets), fresh customer registration + COD checkout from storefront-added item landed on /orders/6a68d64b4dd684848e835af6 with correct totals (65 + 30 delivery = 95).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "/vendors/:id (VendorStorefront)",
+        "issues": [
+          "Malformed vendor id (backend 400) renders generic 'Unable to load vendor.' instead of 'Vendor not found.' — consider treating 400 like 404 for a cleaner message.",
+          "Vendor pill on ProductCard truncates long business names ('by TEST UI Kirana 178525…'); acceptable by design but a title/tooltip attribute would help."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration8_storefront.py",
+    "/app/test_reports/pytest/iteration8.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "VendorStorefront.jsx useEffect does not reset `error` to null when `id` changes; a stale error state would persist on client-side navigation between two /vendors/:id routes (component is not remounted). Add setError(null) at the start of the effect.",
+    "Optional: map HTTP 400 (invalid id format) to the same 'Vendor not found' fallback copy in VendorStorefront.jsx."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration8_storefront.py",
+    "/app/test_reports/iteration_8.json"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "seed_data_creation": "Registered throwaway customer test_cust_1785255490@example.com / Test@123 and placed one COD order (6a68d64b4dd684848e835af6) for checkout regression. Vendor product test-vendor-ui-tomato was temporarily set to pending and restored to approved (verified approved at end of run).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Admin: admin@ambajogai.com / Admin@123. Approved vendor id 6a68cd452d6830a591905de5, product slug test-vendor-ui-tomato (approved).",
+  "context_for_next_testing_agent": "Iteration 8 storefront feature fully verified (backend 9/9, all UI flows). Reusable regression file: /app/backend/tests/test_iteration8_storefront.py (self-restores product approval state). Only outstanding items are cosmetic: stale error state reset in VendorStorefront.jsx and 400 vs 404 copy.",
+  "rca_of_the_issue": "N/A — no functional defects found in this iteration."
+}
