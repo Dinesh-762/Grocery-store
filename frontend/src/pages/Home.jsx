@@ -52,7 +52,7 @@ export default function Home() {
         <div className="container-app relative py-20 sm:py-28 lg:py-32">
           <div className="max-w-2xl">
             <span className="inline-flex items-center gap-2 rounded-full border border-white/30 bg-white/10 px-3 py-1 text-xs font-medium text-white backdrop-blur-sm">
-              <Sparkles className="h-3.5 w-3.5" /> Local & Fresh, Delivered in 90 minutes
+              <Sparkles className="h-3.5 w-3.5" /> Local & Fresh, Delivered in 30–45 minutes
             </span>
             <h1 className="mt-6 font-heading text-4xl font-bold text-white sm:text-5xl lg:text-6xl">
               Ambajogai&apos;s freshest
@@ -85,7 +85,7 @@ export default function Home() {
             <div className="mt-8 flex flex-wrap gap-6">
               {[
                 { icon: Truck, text: "Free delivery over ₹499" },
-                { icon: Clock, text: "Delivered in 90 min" },
+                { icon: Clock, text: "Delivered in 30–45 min" },
                 { icon: ShieldCheck, text: "100% quality assured" },
               ].map(({ icon: Icon, text }) => (
                 <div key={text} className="flex items-center gap-2 text-sm text-white/85">
@@ -168,7 +168,7 @@ export default function Home() {
           <div className="mt-10 grid gap-6 md:grid-cols-3">
             {[
               { icon: "🌾", title: "Farm-fresh daily", body: "We source directly from local farmers to bring you the freshest produce every single day." },
-              { icon: "⚡", title: "Lightning fast delivery", body: "Order before 5 PM and get delivered the same day, right at your doorstep across Ambajogai." },
+              { icon: "⚡", title: "Lightning fast delivery", body: "Order any time and get your groceries delivered in 30–45 minutes, right at your doorstep across Ambajogai." },
               { icon: "💚", title: "Fair prices, no hidden fees", body: "Transparent pricing on every item. What you see is what you pay — plus free delivery over ₹499." },
             ].map((w) => (
               <div key={w.title} className="rounded-2xl border border-[#E5E5E5] p-6">

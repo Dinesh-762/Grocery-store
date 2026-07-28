@@ -144,7 +144,7 @@ export default function ProductDetail() {
               <Truck className="h-5 w-5 text-[#1B4332]" />
               <div>
                 <div className="text-sm font-semibold">Fast delivery</div>
-                <div className="text-xs text-[#4A4A4A]">Within 90 minutes in Ambajogai</div>
+                <div className="text-xs text-[#4A4A4A]">Within 30–45 minutes in Ambajogai</div>
               </div>
             </div>
             <div className="flex items-start gap-3">

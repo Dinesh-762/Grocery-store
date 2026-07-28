@@ -18,7 +18,7 @@ export default function About() {
             smile at every doorstep.
           </p>
           <p className="mt-4 text-base leading-relaxed text-[#4A4A4A]">
-            Today, we deliver to hundreds of homes across Ambajogai in under 90 minutes. From the farmer&apos;s field
+            Today, we deliver to hundreds of homes across Ambajogai in 30–45 minutes. From the farmer&apos;s field
             to your kitchen, every item passes through our own hands.
           </p>
           <Link to="/products" className="btn-primary mt-8 inline-flex">Explore the shelves</Link>
