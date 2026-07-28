@@ -12,10 +12,14 @@ export default function VendorStorefront() {
 
   useEffect(() => {
     setLoading(true);
+    setError(null);
     api
       .get(`/vendors/${id}`)
       .then(({ data }) => setVendor(data))
-      .catch((e) => setError(e?.response?.status === 404 ? "Vendor not found." : "Unable to load vendor."))
+      .catch((e) => {
+        const status = e?.response?.status;
+        setError(status === 404 || status === 400 ? "Vendor not found." : "Unable to load vendor.");
+      })
       .finally(() => setLoading(false));
   }, [id]);
 
