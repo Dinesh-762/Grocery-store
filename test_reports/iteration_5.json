@@ -1,0 +1,54 @@
+{
+  "summary": "Phase 1 Multi-Vendor Marketplace full test: 85/85 backend pytest cases pass (49 legacy regression + 36 new vendor/coupon/reorder cases in new file test_vendor_phase1.py). Frontend E2E covered customer regression (home, search, category filter, PDP add-to-cart, cart persistence on reload), become-vendor signup + confirmation card, pending-vendor login block (403 + friendly toast), admin vendor list/docs modal/reject-with-reason/approve/suspend, admin coupon creation, vendor login->/vendor, vendor dashboard + product CRUD (pending status, hidden from public listing), checkout coupon apply (WELCOME10 => total 95 -> 88.50), COD order placement landing on /orders/<id>, new 8-step order tracker, vendor line-status Preparing propagating to overall order status and to the customer's order detail, and re-order adding items back to cart. Two real defects found: (1) Admin order-status dropdown still uses the OLD status list ('Confirmed') which the backend now rejects with 400; (2) Admin Products page fetches the PUBLIC /products endpoint, so pending vendor products are invisible and there is NO admin UI to approve/reject a vendor product (had to approve via API to continue the flow).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/products (admin)", "issue": "Admin-created products are inserted without an approval_status field (relies on the $exists:false fallback in list_products and product_to_out). Inconsistent with vendor products; any future query on approval_status=='approved' will miss them."},
+      {"endpoint": "PATCH /api/admin/vendors/{id}/status", "issue": "Rejecting/Suspending a vendor sets all its products to approval_status='pending', so they silently reappear in the admin pending-approval queue and are indistinguishable from genuinely new submissions (suggest a distinct 'hidden'/'suspended' value)."},
+      {"endpoint": "PUT /api/vendor/products/{id}", "issue": "Editing an already-approved vendor product keeps approval_status='approved' (price/name/image can be changed post-approval with no re-review). Confirm this is intended."},
+      {"endpoint": "POST /api/auth/login", "issue": "No brute-force lockout / rate limiting on failed logins (playbook item 4). App uses JWT in localStorage, not httpOnly cookies, so cookie/CORS-credential playbook items do not apply. bcrypt hashes verified as $2b$ format via successful login + seed_admin password refresh path."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Admin > OrdersAdmin (Admin.jsx:411 ALL_STATUSES)", "issue": "Status list is still the OLD one ['Pending','Confirmed','Packed','Out For Delivery','Delivered','Cancelled']. Verified in UI: dropdown options = that stale list. Picking 'Confirmed' => backend 400 'Invalid status'; admin cannot set Accepted/Preparing/Ready; and when an order is in a vendor-set status (Accepted/Preparing/Ready) the select has no matching option so it visually falls back to 'Pending' (misleading). Also used for the status filter dropdown.", "selector": "select[data-testid^='status-select-']", "priority": "HIGH"},
+      {"component": "Admin > ProductsAdmin (Admin.jsx:200)", "issue": "Loads api.get('/products?limit=500') (public, approved-only) instead of '/admin/products'. Result: pending vendor products never show in /admin/products, there is no approval_status column and no approve/reject control anywhere in the admin UI, so the vendor product approval flow is impossible from the UI. The dashboard 'N product(s) pending approval' callout links here and shows nothing actionable.", "selector": "[data-testid='products-admin']", "priority": "HIGH"},
+      {"component": "OrderDetail payment summary (OrderDetail.jsx:141-146)", "issue": "No coupon/discount row. Coupon order renders Subtotal Rs.65 + Delivery Rs.30 but Total Rs.88.50 - the numbers do not add up for the customer.", "selector": "[data-testid='order-detail-page']", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin > Vendors > docs modal", "issues": ["Modal cannot be closed with Escape or backdrop click - only the X button works (data-testid='vendor-docs-modal')."]},
+      {"screen": "Admin > Coupons form", "issues": ["Expiry uses the native browser date picker (<input type='date'>, data-testid='coupon-expiry') instead of the shadcn Calendar/Popover used elsewhere."]},
+      {"screen": "Admin dashboard", "issues": ["'VENDORS' stat shows 0 while the Vendors tab lists 9 vendors (stat counts Approved only) - label should read 'Approved vendors' to avoid confusion.", "No 'pending products' callout can ever be actioned because the products tab lacks approval controls (see ui_bugs)."]},
+      {"screen": "All pages (sonner toasts)", "issues": ["Top-right toasts overlay the header user menu / Sign up button while visible, briefly blocking those controls."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_vendor_phase1.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Admin.jsx: replace ALL_STATUSES with ['Pending','Accepted','Preparing','Packed','Ready','Out For Delivery','Delivered','Cancelled'] (shared constant with OrderDetail/VendorDashboard to stop drift).",
+    "Admin.jsx ProductsAdmin: fetch '/admin/products', add an approval_status column and Approve/Reject buttons calling PATCH /api/admin/products/<id>/approval (with data-testids e.g. approve-product-<slug>).",
+    "OrderDetail.jsx: render the coupon/discount row when order.discount > 0 so Subtotal + Delivery - Discount = Total.",
+    "Optional: set approval_status='approved' explicitly on admin-created products; use a distinct status (not 'pending') when hiding a suspended/rejected vendor's products."
+  ],
+  "critical_code_review_comments": [
+    "Order status labels are duplicated in 4 places (server.py ORDER_STATUSES, OrderDetail.jsx, VendorDashboard.jsx, Admin.jsx) and Admin.jsx already drifted - extract one frontend constant.",
+    "Admin.jsx is 868 lines; consider splitting VendorsAdmin/CouponsAdmin/ProductsAdmin into separate files (>700-line guideline).",
+    "server.py is 1271 lines; vendor/coupon/order modules should be split into routers.",
+    "PATCH /api/admin/products/{id}/approval and PATCH /api/vendor/orders/{id}/line-status take raw dict payloads instead of Pydantic models - add request models for validation consistency."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_vendor_phase1.py (new, 36 cases)",
+    "/app/backend/tests/backend_test.py (updated stale 'Confirmed' status expectations to the new 8-status list)"
+  ],
+  "success_rate": {"backend": "100% (85/85)", "frontend": "~88% (all flows pass except admin status dropdown + missing admin product-approval UI)"},
+  "seed_data_creation": "Vendor test_vendor_ui_1785253172@example.com / Vendor@123 (Approved, business 'TEST UI Kirana 1785253172') with product slug test-vendor-ui-tomato (approved via API). Customer test_cust_ui_1785253507@example.com / Test@123 with order 6a68ce972d6830a591905dea (status Preparing, WELCOME10 discount). Coupon WELCOME10 (10%, min 0) created via admin UI. Backend pytest also creates/cleans TEST_ prefixed vendors, products and coupons each run.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "Admin admin@ambajogai.com / Admin@123; Vendor test_vendor_ui_1785253172@example.com / Vendor@123 (Approved); Customer test_cust_ui_1785253507@example.com / Test@123",
+  "context_for_next_testing_agent": "Backend regression baseline is now 85 pytest cases: /app/backend/tests/backend_test.py (49) + /app/backend/tests/test_vendor_phase1.py (36, ordered flow using module-scoped 'state' fixture; it registers a fresh vendor each run and ends by suspending it). Flakiness note: two isolated runs showed transient failures (7 setup ERRORs once, TestOrders::test_my_orders once) that disappeared on re-run - caused by xdist -n2 sharing the same preview backend/seed data; re-run before believing a single failure. After the main agent fixes Admin.jsx ALL_STATUSES and the ProductsAdmin approval UI, retest: (a) admin sets Accepted/Preparing/Ready from /admin/orders, (b) a vendor product appears as pending on /admin/products and can be approved from the UI, (c) OrderDetail shows the discount row. Seed data above can be reused.",
+  "rca_of_the_issue": "Phase 1 changed ORDER_STATUSES on the backend and added an /admin/products approval endpoint, but Admin.jsx was only partially updated: its local ALL_STATUSES constant kept the pre-Phase-1 labels (so PATCH /api/admin/orders/<id>/status returns 400 for 'Confirmed' and the new statuses are unreachable), and ProductsAdmin still calls the public GET /api/products which now filters approval_status=='approved', hiding every pending vendor product and leaving no UI path to the new PATCH /api/admin/products/<id>/approval endpoint. Both are frontend-only fixes; the backend behaves correctly (verified by 36 new API tests)."
+}

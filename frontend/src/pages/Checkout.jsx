@@ -4,17 +4,20 @@ import { toast } from "sonner";
 import { useCart } from "@/context/CartContext";
 import { useAuth } from "@/context/AuthContext";
 import { api, formatINR, formatApiError } from "@/lib/api";
-import { CreditCard, Truck, MapPin, Loader2, MessageCircle } from "lucide-react";
+import { CreditCard, Truck, MapPin, Loader2, MessageCircle, Tag, X } from "lucide-react";
 
 export default function Checkout() {
-  const { items, subtotal, deliveryFee, total, clearCart } = useCart();
+  const { items, subtotal, deliveryFee, total: cartTotal, clearCart } = useCart();
   const { user } = useAuth();
   const navigate = useNavigate();
   const [store, setStore] = useState({ upi_id: "ambajogai@upi", upi_name: "Ambajogai Grocery", whatsapp: "+919999999999" });
   const [payment, setPayment] = useState("UPI");
   const [submitting, setSubmitting] = useState(false);
   const [placed, setPlaced] = useState(false);
-  const [form, setForm] = useState({
+  const [couponInput, setCouponInput] = useState("");
+  const [coupon, setCoupon] = useState(null); // {code, discount_pct, discount}
+  const [couponBusy, setCouponBusy] = useState(false);
+  const [f, setForm] = useState({
     full_name: user?.name || "",
     phone: user?.phone || "",
     line1: "",
@@ -23,6 +26,8 @@ export default function Checkout() {
     pincode: "",
     notes: "",
   });
+  // Legacy alias so all existing `form.foo` references keep working (this was a rename mid-refactor)
+  const form = f;
 
   useEffect(() => {
     api.get("/store/info").then(({ data }) => setStore(data)).catch(() => {});
@@ -60,6 +65,7 @@ export default function Checkout() {
         },
         payment_method: payment,
         notes: form.notes,
+        coupon_code: coupon?.code || null,
       });
       setPlaced(true);
       clearCart();
@@ -79,6 +85,27 @@ export default function Checkout() {
       setSubmitting(false);
     }
   };
+
+  const applyCoupon = async () => {
+    const code = couponInput.trim().toUpperCase();
+    if (!code) return;
+    setCouponBusy(true);
+    try {
+      const { data } = await api.get(`/coupons/${encodeURIComponent(code)}/validate?subtotal=${subtotal}`);
+      setCoupon(data);
+      toast.success(`Coupon ${data.code} applied — saved ${formatINR(data.discount)}`);
+    } catch (e) {
+      setCoupon(null);
+      toast.error(formatApiError(e));
+    } finally {
+      setCouponBusy(false);
+    }
+  };
+
+  const removeCoupon = () => { setCoupon(null); setCouponInput(""); };
+
+  const discount = coupon?.discount || 0;
+  const total = Math.max(0, Math.round((cartTotal - discount) * 100) / 100);
 
   // UPI QR — use upi:// deep link encoded as QR via qrserver (no key needed)
   const upiUrl = `upi://pay?pa=${encodeURIComponent(store.upi_id)}&pn=${encodeURIComponent(store.upi_name)}&am=${total}&cu=INR&tn=${encodeURIComponent("Ambajogai Grocery Order")}`;
@@ -178,7 +205,45 @@ export default function Checkout() {
           <div className="mt-4 space-y-2 border-t border-dashed pt-4 text-sm">
             <Row label="Subtotal" value={formatINR(subtotal)} />
             <Row label="Delivery" value={deliveryFee === 0 ? "FREE" : formatINR(deliveryFee)} />
+            {discount > 0 && (
+              <Row label={`Coupon (${coupon.code})`} value={`- ${formatINR(discount)}`} />
+            )}
           </div>
+
+          {/* Coupon */}
+          <div className="mt-4 border-t border-dashed pt-4">
+            {coupon ? (
+              <div className="flex items-center justify-between rounded-xl bg-green-50 px-3 py-2">
+                <span className="flex items-center gap-2 text-sm text-green-700">
+                  <Tag className="h-4 w-4" />
+                  <span className="font-semibold">{coupon.code}</span>
+                  <span className="text-xs">-{coupon.discount_pct}%</span>
+                </span>
+                <button onClick={removeCoupon} className="text-green-700 hover:text-green-900" data-testid="coupon-remove">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                <input
+                  value={couponInput}
+                  onChange={(e) => setCouponInput(e.target.value.toUpperCase())}
+                  placeholder="Coupon code"
+                  className="input-base"
+                  data-testid="coupon-input"
+                />
+                <button
+                  onClick={applyCoupon}
+                  disabled={couponBusy || !couponInput.trim()}
+                  className="btn-secondary shrink-0 px-4 py-2 text-sm"
+                  data-testid="coupon-apply"
+                >
+                  {couponBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Apply"}
+                </button>
+              </div>
+            )}
+          </div>
+
           <div className="mt-3 flex items-center justify-between border-t border-dashed pt-3">
             <span className="text-sm font-semibold">Total</span>
             <span className="font-heading text-2xl font-bold text-[#1B4332]" data-testid="checkout-total">{formatINR(total)}</span>

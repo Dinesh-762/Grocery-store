@@ -20,6 +20,8 @@ import About from "@/pages/About";
 import Contact from "@/pages/Contact";
 import Legal from "@/pages/Legal";
 import Admin from "@/pages/Admin";
+import BecomeVendor from "@/pages/BecomeVendor";
+import VendorDashboard from "@/pages/VendorDashboard";
 
 import "@/App.css";
 
@@ -63,6 +65,15 @@ export default function App() {
                   element={
                     <ProtectedRoute>
                       <OrderDetail />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route path="/become-vendor" element={<BecomeVendor />} />
+                <Route
+                  path="/vendor/*"
+                  element={
+                    <ProtectedRoute vendorOnly>
+                      <VendorDashboard />
                     </ProtectedRoute>
                   }
                 />

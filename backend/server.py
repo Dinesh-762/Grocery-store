@@ -178,6 +178,9 @@ class ProductIn(BaseModel):
 class ProductOut(ProductIn):
     id: str
     created_at: str
+    vendor_id: Optional[str] = None
+    vendor_name: Optional[str] = None
+    approval_status: str = "approved"  # approved | pending | rejected
 
 
 class AddressIn(BaseModel):
@@ -204,9 +207,10 @@ class OrderIn(BaseModel):
     address: AddressIn
     payment_method: str  # "UPI" or "COD"
     notes: Optional[str] = ""
+    coupon_code: Optional[str] = None
 
 
-ORDER_STATUSES = ["Pending", "Confirmed", "Packed", "Out For Delivery", "Delivered", "Cancelled"]
+ORDER_STATUSES = ["Pending", "Accepted", "Preparing", "Packed", "Ready", "Out For Delivery", "Delivered", "Cancelled"]
 
 
 class OrderStatusUpdate(BaseModel):
@@ -250,6 +254,9 @@ def product_to_out(p: dict) -> dict:
         "featured": p.get("featured", False),
         "popular": p.get("popular", False),
         "created_at": p.get("created_at", iso_now()),
+        "vendor_id": p.get("vendor_id"),
+        "vendor_name": p.get("vendor_name"),
+        "approval_status": p.get("approval_status", "approved"),
     }
 
 
@@ -275,6 +282,8 @@ def order_to_out(o: dict) -> dict:
         "notes": o.get("notes", ""),
         "subtotal": o["subtotal"],
         "delivery_fee": o["delivery_fee"],
+        "discount": o.get("discount", 0),
+        "coupon": o.get("coupon"),
         "total": o["total"],
         "status": o["status"],
         "status_history": o.get("status_history", []),
@@ -312,6 +321,16 @@ async def login(payload: LoginIn):
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(payload.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    # Vendors must be approved (and not suspended/rejected) to log in
+    if user.get("role") == "vendor":
+        vendor = await db.vendors.find_one({"owner_id": str(user["_id"])})
+        vstatus = vendor.get("status", "Pending") if vendor else "Pending"
+        if vstatus == "Pending":
+            raise HTTPException(status_code=403, detail="Your vendor application is pending admin approval.")
+        if vstatus == "Rejected":
+            raise HTTPException(status_code=403, detail="Your vendor application was rejected. Please contact support.")
+        if vstatus == "Suspended":
+            raise HTTPException(status_code=403, detail="Your vendor account is suspended. Please contact support.")
     token = create_token(str(user["_id"]), email, user.get("role", "customer"))
     return {"token": token, "user": user_to_out(user)}
 
@@ -385,18 +404,23 @@ async def list_products(
     q: Optional[str] = None,
     featured: Optional[bool] = None,
     popular: Optional[bool] = None,
+    vendor_id: Optional[str] = None,
     limit: int = 100,
 ):
-    query: dict = {}
+    # Public listing: only approved (legacy docs without the field are treated as approved)
+    query: dict = {"$or": [{"approval_status": "approved"}, {"approval_status": {"$exists": False}}]}
     if category:
         query["category_slug"] = category
     if featured is not None:
         query["featured"] = featured
     if popular is not None:
         query["popular"] = popular
+    if vendor_id:
+        query["vendor_id"] = vendor_id
     if q:
         regex = re.compile(re.escape(q), re.IGNORECASE)
-        query["$or"] = [{"name": regex}, {"description": regex}]
+        # combine text-search with the approval $or via $and
+        query = {"$and": [query, {"$or": [{"name": regex}, {"description": regex}]}]}
     docs = await db.products.find(query).limit(limit).to_list(limit)
     return [product_to_out(d) for d in docs]
 
@@ -480,11 +504,30 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
             "quantity": it.quantity,
             "image": prod["image"],
             "unit": prod.get("unit", "1 pc"),
+            "vendor_id": prod.get("vendor_id"),
+            "vendor_name": prod.get("vendor_name"),
+            "line_status": "Pending",
         })
 
     subtotal = round(sum(i["price"] * i["quantity"] for i in verified_items), 2)
     delivery_fee = 0.0 if subtotal >= FREE_DELIVERY_THRESHOLD else DELIVERY_FEE
-    total = round(subtotal + delivery_fee, 2)
+
+    # Apply coupon if provided
+    discount = 0.0
+    coupon_applied = None
+    if payload.coupon_code:
+        code = payload.coupon_code.strip().upper()
+        coupon = await db.coupons.find_one({"code": code, "active": True})
+        if not coupon:
+            raise HTTPException(status_code=400, detail="Invalid coupon code")
+        if coupon.get("expires_at") and datetime.fromisoformat(coupon["expires_at"]) < now_utc():
+            raise HTTPException(status_code=400, detail="Coupon expired")
+        if subtotal < coupon.get("min_amount", 0):
+            raise HTTPException(status_code=400, detail=f"Order must be at least ₹{coupon.get('min_amount', 0)} to use this coupon")
+        discount = round(subtotal * (coupon["discount_pct"] / 100.0), 2)
+        coupon_applied = {"code": coupon["code"], "discount_pct": coupon["discount_pct"], "discount": discount}
+
+    total = round(max(0, subtotal + delivery_fee - discount), 2)
     status_history = [{"status": "Pending", "at": iso_now()}]
     doc = {
         "user_id": user["id"],
@@ -496,6 +539,8 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         "notes": payload.notes or "",
         "subtotal": subtotal,
         "delivery_fee": delivery_fee,
+        "discount": discount,
+        "coupon": coupon_applied,
         "total": total,
         "status": "Pending",
         "status_history": status_history,
@@ -597,8 +642,12 @@ async def admin_dashboard(_: dict = Depends(require_admin)):
     total_products = await db.products.count_documents({})
     total_orders = await db.orders.count_documents({})
     total_users = await db.users.count_documents({"role": "customer"})
+    total_vendors = await db.vendors.count_documents({"status": "Approved"})
+    pending_vendors = await db.vendors.count_documents({"status": "Pending"})
+    pending_products = await db.products.count_documents({"approval_status": "pending"})
     pending_orders = await db.orders.count_documents({"status": "Pending"})
     delivered_orders = await db.orders.count_documents({"status": "Delivered"})
+    cancelled_orders = await db.orders.count_documents({"status": "Cancelled"})
 
     # Revenue (delivered orders only)
     revenue_pipeline = [
@@ -618,8 +667,12 @@ async def admin_dashboard(_: dict = Depends(require_admin)):
         "total_products": total_products,
         "total_orders": total_orders,
         "total_users": total_users,
+        "total_vendors": total_vendors,
+        "pending_vendors": pending_vendors,
+        "pending_products": pending_products,
         "pending_orders": pending_orders,
         "delivered_orders": delivered_orders,
+        "cancelled_orders": cancelled_orders,
         "revenue": round(revenue, 2),
         "low_stock": [product_to_out(p) for p in low_stock],
         "recent_orders": [order_to_out(o) for o in recent],
@@ -639,6 +692,435 @@ async def admin_customers(_: dict = Depends(require_admin)):
         }
         for d in docs
     ]
+
+
+# ---------------------------------------------------------------------------
+# Vendors: signup, admin approval, vendor-only endpoints
+# ---------------------------------------------------------------------------
+
+VENDOR_STATUSES = ["Pending", "Approved", "Rejected", "Suspended"]
+
+
+class VendorDocs(BaseModel):
+    aadhar_url: Optional[str] = ""
+    gst_url: Optional[str] = ""
+    shop_license_url: Optional[str] = ""
+
+
+class VendorRegisterIn(BaseModel):
+    # user
+    name: str = Field(min_length=2, max_length=80)
+    email: EmailStr
+    password: str = Field(min_length=6, max_length=128)
+    phone: str
+    # vendor profile
+    business_name: str
+    business_description: str = ""
+    business_address: str
+    business_pincode: str
+    docs: VendorDocs = VendorDocs()
+
+
+class VendorStatusUpdate(BaseModel):
+    status: str
+    reason: Optional[str] = ""
+
+
+def vendor_to_out(v: dict) -> dict:
+    return {
+        "id": str(v["_id"]),
+        "owner_id": v.get("owner_id"),
+        "owner_email": v.get("owner_email"),
+        "owner_name": v.get("owner_name"),
+        "phone": v.get("phone"),
+        "business_name": v["business_name"],
+        "business_description": v.get("business_description", ""),
+        "business_address": v.get("business_address", ""),
+        "business_pincode": v.get("business_pincode", ""),
+        "docs": v.get("docs", {}),
+        "status": v.get("status", "Pending"),
+        "rejection_reason": v.get("rejection_reason", ""),
+        "created_at": v.get("created_at"),
+        "approved_at": v.get("approved_at"),
+    }
+
+
+async def get_vendor_for_user(user: dict) -> dict:
+    if user.get("role") != "vendor":
+        raise HTTPException(status_code=403, detail="Vendor access required")
+    vendor = await db.vendors.find_one({"owner_id": user["id"]})
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor profile not found")
+    if vendor.get("status") != "Approved":
+        raise HTTPException(status_code=403, detail=f"Vendor is {vendor.get('status', 'Pending')}")
+    return vendor
+
+
+@api.post("/vendors/register")
+async def vendor_register(payload: VendorRegisterIn):
+    email = payload.email.lower().strip()
+    existing = await db.users.find_one({"email": email})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    user_doc = {
+        "name": payload.name.strip(),
+        "email": email,
+        "phone": payload.phone,
+        "password_hash": hash_password(payload.password),
+        "role": "vendor",
+        "created_at": iso_now(),
+    }
+    ures = await db.users.insert_one(user_doc)
+    vendor_doc = {
+        "owner_id": str(ures.inserted_id),
+        "owner_email": email,
+        "owner_name": payload.name.strip(),
+        "phone": payload.phone,
+        "business_name": payload.business_name.strip(),
+        "business_description": payload.business_description.strip(),
+        "business_address": payload.business_address.strip(),
+        "business_pincode": payload.business_pincode.strip(),
+        "docs": payload.docs.model_dump(),
+        "status": "Pending",
+        "created_at": iso_now(),
+    }
+    vres = await db.vendors.insert_one(vendor_doc)
+    vendor_doc["_id"] = vres.inserted_id
+    return {
+        "success": True,
+        "message": "Vendor application submitted. You will be notified once the admin approves your account.",
+        "vendor": vendor_to_out(vendor_doc),
+    }
+
+
+@api.get("/vendors/me")
+async def vendor_me(user: dict = Depends(get_current_user)):
+    if user.get("role") != "vendor":
+        raise HTTPException(status_code=403, detail="Vendor access required")
+    vendor = await db.vendors.find_one({"owner_id": user["id"]})
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor profile not found")
+    return vendor_to_out(vendor)
+
+
+# Public listing (approved vendors only)
+@api.get("/vendors")
+async def list_public_vendors():
+    docs = await db.vendors.find({"status": "Approved"}).to_list(500)
+    return [
+        {"id": str(v["_id"]), "business_name": v["business_name"], "description": v.get("business_description", "")}
+        for v in docs
+    ]
+
+
+# Admin: all vendors
+@api.get("/admin/vendors")
+async def admin_list_vendors(_: dict = Depends(require_admin), status_filter: Optional[str] = None):
+    q = {"status": status_filter} if status_filter else {}
+    docs = await db.vendors.find(q).sort("created_at", -1).to_list(1000)
+    return [vendor_to_out(v) for v in docs]
+
+
+@api.patch("/admin/vendors/{vendor_id}/status")
+async def admin_update_vendor_status(vendor_id: str, payload: VendorStatusUpdate, _: dict = Depends(require_admin)):
+    if payload.status not in VENDOR_STATUSES:
+        raise HTTPException(status_code=400, detail="Invalid vendor status")
+    oid = safe_object_id(vendor_id)
+    update_doc = {"status": payload.status}
+    if payload.status == "Approved":
+        update_doc["approved_at"] = iso_now()
+        update_doc["rejection_reason"] = ""
+    elif payload.status == "Rejected":
+        update_doc["rejection_reason"] = payload.reason or ""
+    res = await db.vendors.update_one({"_id": oid}, {"$set": update_doc})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    vendor = await db.vendors.find_one({"_id": oid})
+    # Also flag the products of a suspended/rejected vendor as hidden
+    if payload.status in ("Rejected", "Suspended"):
+        await db.products.update_many({"vendor_id": str(oid)}, {"$set": {"approval_status": "pending"}})
+    return vendor_to_out(vendor)
+
+
+# Vendor: my products
+@api.get("/vendor/products")
+async def vendor_my_products(user: dict = Depends(get_current_user)):
+    vendor = await get_vendor_for_user(user)
+    docs = await db.products.find({"vendor_id": str(vendor["_id"])}).sort("created_at", -1).to_list(1000)
+    return [product_to_out(p) for p in docs]
+
+
+@api.post("/vendor/products", response_model=ProductOut)
+async def vendor_create_product(payload: ProductIn, user: dict = Depends(get_current_user)):
+    vendor = await get_vendor_for_user(user)
+    exists = await db.products.find_one({"slug": payload.slug})
+    if exists:
+        raise HTTPException(status_code=400, detail="Slug already used")
+    doc = payload.model_dump()
+    doc["created_at"] = iso_now()
+    doc["vendor_id"] = str(vendor["_id"])
+    doc["vendor_name"] = vendor["business_name"]
+    doc["approval_status"] = "pending"  # new vendor products require admin approval
+    res = await db.products.insert_one(doc)
+    doc["_id"] = res.inserted_id
+    return product_to_out(doc)
+
+
+@api.put("/vendor/products/{prod_id}", response_model=ProductOut)
+async def vendor_update_product(prod_id: str, payload: ProductIn, user: dict = Depends(get_current_user)):
+    vendor = await get_vendor_for_user(user)
+    oid = safe_object_id(prod_id)
+    existing = await db.products.find_one({"_id": oid})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Product not found")
+    if existing.get("vendor_id") != str(vendor["_id"]):
+        raise HTTPException(status_code=403, detail="Not your product")
+    await db.products.update_one({"_id": oid}, {"$set": payload.model_dump()})
+    doc = await db.products.find_one({"_id": oid})
+    return product_to_out(doc)
+
+
+@api.delete("/vendor/products/{prod_id}")
+async def vendor_delete_product(prod_id: str, user: dict = Depends(get_current_user)):
+    vendor = await get_vendor_for_user(user)
+    oid = safe_object_id(prod_id)
+    existing = await db.products.find_one({"_id": oid})
+    if not existing or existing.get("vendor_id") != str(vendor["_id"]):
+        raise HTTPException(status_code=403, detail="Not your product")
+    await db.products.delete_one({"_id": oid})
+    return {"success": True}
+
+
+# Admin: product approval
+@api.get("/admin/products")
+async def admin_list_products(_: dict = Depends(require_admin), status: Optional[str] = None):
+    q: dict = {}
+    if status:
+        q["approval_status"] = status
+    docs = await db.products.find(q).sort("created_at", -1).to_list(1000)
+    return [product_to_out(p) for p in docs]
+
+
+@api.patch("/admin/products/{prod_id}/approval")
+async def admin_set_product_approval(prod_id: str, payload: dict, _: dict = Depends(require_admin)):
+    status = payload.get("status")
+    if status not in ("approved", "pending", "rejected"):
+        raise HTTPException(status_code=400, detail="Invalid approval status")
+    oid = safe_object_id(prod_id)
+    res = await db.products.update_one({"_id": oid}, {"$set": {"approval_status": status}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Product not found")
+    doc = await db.products.find_one({"_id": oid})
+    return product_to_out(doc)
+
+
+# Vendor: my orders (filtered to line items owned by this vendor)
+@api.get("/vendor/orders")
+async def vendor_my_orders(user: dict = Depends(get_current_user)):
+    vendor = await get_vendor_for_user(user)
+    vid = str(vendor["_id"])
+    docs = await db.orders.find({"items.vendor_id": vid}).sort("created_at", -1).to_list(1000)
+    result = []
+    for o in docs:
+        my_items = [i for i in o["items"] if i.get("vendor_id") == vid]
+        my_subtotal = round(sum(i["price"] * i["quantity"] for i in my_items), 2)
+        line_statuses = list({i.get("line_status", "Pending") for i in my_items})
+        my_status = line_statuses[0] if len(line_statuses) == 1 else "Mixed"
+        result.append({
+            "id": str(o["_id"]),
+            "created_at": o.get("created_at"),
+            "customer_name": o.get("user_name"),
+            "customer_phone": o["address"]["phone"],
+            "address": o["address"],
+            "payment_method": o["payment_method"],
+            "items": my_items,
+            "my_subtotal": my_subtotal,
+            "overall_status": o["status"],
+            "my_status": my_status,
+        })
+    return result
+
+
+@api.patch("/vendor/orders/{order_id}/line-status")
+async def vendor_update_line_status(order_id: str, payload: dict, user: dict = Depends(get_current_user)):
+    vendor = await get_vendor_for_user(user)
+    vid = str(vendor["_id"])
+    new_status = payload.get("status")
+    if new_status not in ORDER_STATUSES:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    oid = safe_object_id(order_id)
+    order = await db.orders.find_one({"_id": oid})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    updated_items = []
+    touched = False
+    for i in order["items"]:
+        if i.get("vendor_id") == vid:
+            i["line_status"] = new_status
+            touched = True
+        updated_items.append(i)
+    if not touched:
+        raise HTTPException(status_code=403, detail="No line items belong to your vendor account")
+
+    # Derive overall status: lowest progress across all items (min-index in ORDER_STATUSES)
+    order_index = {s: i for i, s in enumerate(ORDER_STATUSES)}
+    line_statuses = [i.get("line_status", "Pending") for i in updated_items]
+    if all(s == "Cancelled" for s in line_statuses):
+        overall = "Cancelled"
+    else:
+        non_cancelled = [s for s in line_statuses if s != "Cancelled"]
+        overall = min(non_cancelled, key=lambda s: order_index.get(s, 0)) if non_cancelled else "Pending"
+
+    history = order.get("status_history", [])
+    if overall != order["status"]:
+        history.append({"status": overall, "at": iso_now(), "by": f"vendor:{vendor['business_name']}"})
+
+    await db.orders.update_one(
+        {"_id": oid},
+        {"$set": {"items": updated_items, "status": overall, "status_history": history}},
+    )
+    order["items"] = updated_items
+    order["status"] = overall
+    order["status_history"] = history
+    return order_to_out(order)
+
+
+# Vendor dashboard stats
+@api.get("/vendor/dashboard")
+async def vendor_dashboard(user: dict = Depends(get_current_user)):
+    vendor = await get_vendor_for_user(user)
+    vid = str(vendor["_id"])
+
+    total_products = await db.products.count_documents({"vendor_id": vid})
+    approved_products = await db.products.count_documents({"vendor_id": vid, "approval_status": "approved"})
+    pending_products = await db.products.count_documents({"vendor_id": vid, "approval_status": "pending"})
+    low_stock = await db.products.find({"vendor_id": vid, "stock": {"$lt": 5}}).limit(10).to_list(10)
+
+    order_docs = await db.orders.find({"items.vendor_id": vid}).to_list(5000)
+    total_orders = len(order_docs)
+    revenue = 0.0
+    pending_count = 0
+    delivered_count = 0
+    for o in order_docs:
+        for i in o["items"]:
+            if i.get("vendor_id") == vid:
+                ls = i.get("line_status", "Pending")
+                if ls == "Delivered":
+                    revenue += i["price"] * i["quantity"]
+                    delivered_count += 1
+                elif ls == "Pending":
+                    pending_count += 1
+
+    return {
+        "vendor": vendor_to_out(vendor),
+        "total_products": total_products,
+        "approved_products": approved_products,
+        "pending_products": pending_products,
+        "total_orders": total_orders,
+        "pending_orders": pending_count,
+        "delivered_orders": delivered_count,
+        "revenue": round(revenue, 2),
+        "low_stock": [product_to_out(p) for p in low_stock],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Coupons
+# ---------------------------------------------------------------------------
+
+class CouponIn(BaseModel):
+    code: str
+    discount_pct: float = Field(ge=1, le=90)
+    min_amount: float = 0
+    active: bool = True
+    expires_at: Optional[str] = None  # ISO date string
+
+
+def coupon_to_out(c: dict) -> dict:
+    return {
+        "id": str(c["_id"]),
+        "code": c["code"],
+        "discount_pct": c["discount_pct"],
+        "min_amount": c.get("min_amount", 0),
+        "active": c.get("active", True),
+        "expires_at": c.get("expires_at"),
+        "created_at": c.get("created_at"),
+    }
+
+
+@api.get("/admin/coupons")
+async def list_coupons(_: dict = Depends(require_admin)):
+    docs = await db.coupons.find().sort("created_at", -1).to_list(500)
+    return [coupon_to_out(c) for c in docs]
+
+
+@api.post("/admin/coupons")
+async def create_coupon(payload: CouponIn, _: dict = Depends(require_admin)):
+    code = payload.code.strip().upper()
+    if await db.coupons.find_one({"code": code}):
+        raise HTTPException(status_code=400, detail="Coupon code already exists")
+    doc = payload.model_dump()
+    doc["code"] = code
+    doc["created_at"] = iso_now()
+    res = await db.coupons.insert_one(doc)
+    doc["_id"] = res.inserted_id
+    return coupon_to_out(doc)
+
+
+@api.delete("/admin/coupons/{coupon_id}")
+async def delete_coupon(coupon_id: str, _: dict = Depends(require_admin)):
+    oid = safe_object_id(coupon_id)
+    res = await db.coupons.delete_one({"_id": oid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Coupon not found")
+    return {"success": True}
+
+
+@api.get("/coupons/{code}/validate")
+async def validate_coupon(code: str, subtotal: float = 0):
+    code = code.strip().upper()
+    coupon = await db.coupons.find_one({"code": code, "active": True})
+    if not coupon:
+        raise HTTPException(status_code=404, detail="Invalid or inactive coupon")
+    if coupon.get("expires_at") and datetime.fromisoformat(coupon["expires_at"]) < now_utc():
+        raise HTTPException(status_code=400, detail="Coupon expired")
+    if subtotal < coupon.get("min_amount", 0):
+        raise HTTPException(status_code=400, detail=f"Order must be at least ₹{coupon.get('min_amount', 0)} to use this coupon")
+    discount = round(subtotal * (coupon["discount_pct"] / 100.0), 2)
+    return {"code": coupon["code"], "discount_pct": coupon["discount_pct"], "discount": discount, "min_amount": coupon.get("min_amount", 0)}
+
+
+# ---------------------------------------------------------------------------
+# Reorder helper
+# ---------------------------------------------------------------------------
+
+@api.get("/orders/{order_id}/reorder")
+async def reorder_items(order_id: str, user: dict = Depends(get_current_user)):
+    oid = safe_object_id(order_id)
+    o = await db.orders.find_one({"_id": oid})
+    if not o or o.get("user_id") != user["id"]:
+        raise HTTPException(status_code=404, detail="Order not found")
+    items = []
+    for i in o["items"]:
+        try:
+            prod = await db.products.find_one({"_id": ObjectId(i["product_id"])})
+        except Exception:
+            prod = None
+        if not prod:
+            continue
+        if prod.get("approval_status", "approved") != "approved":
+            continue
+        items.append({
+            "product_id": str(prod["_id"]),
+            "name": prod["name"],
+            "price": prod["price"],
+            "image": prod["image"],
+            "unit": prod.get("unit", "1 pc"),
+            "quantity": i["quantity"],
+            "in_stock": prod.get("stock", 0) >= i["quantity"],
+        })
+    return {"items": items}
 
 
 # ---------------------------------------------------------------------------
@@ -716,6 +1198,11 @@ async def seed_data():
     await db.users.create_index("email", unique=True)
     await db.products.create_index("slug", unique=True)
     await db.categories.create_index("slug", unique=True)
+    await db.vendors.create_index("owner_id")
+    await db.coupons.create_index("code", unique=True)
+
+    # Migration: ensure existing products have approval_status set (defaults to approved for legacy store products)
+    await db.products.update_many({"approval_status": {"$exists": False}}, {"$set": {"approval_status": "approved"}})
 
     # Admin
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@ambajogai.com").lower()

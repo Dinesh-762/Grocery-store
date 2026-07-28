@@ -273,7 +273,8 @@ class TestOrders:
         assert r.status_code == 200
         orders = r.json()
         assert len(orders) >= 2
-        assert all(o["status"] in ["Pending", "Confirmed", "Packed", "Out For Delivery", "Delivered", "Cancelled"] for o in orders)
+        assert all(o["status"] in ["Pending", "Accepted", "Preparing", "Packed", "Ready",
+                                   "Out For Delivery", "Delivered", "Cancelled"] for o in orders)
 
     def test_order_access_denied_other_user(self, client, cust_headers):
         # create order as customer1
@@ -338,19 +339,19 @@ class TestAdmin:
         assert any(o["id"] == oid for o in lst.json())
 
         upd = client.patch(f"{BASE_URL}/api/admin/orders/{oid}/status",
-                           headers=admin_headers, json={"status": "Confirmed"}, timeout=30)
+                           headers=admin_headers, json={"status": "Accepted"}, timeout=30)
         assert upd.status_code == 200
-        assert upd.json()["status"] == "Confirmed"
+        assert upd.json()["status"] == "Accepted"
 
         # customer sees updated status
         g = client.get(f"{BASE_URL}/api/orders/{oid}", headers=cust_headers, timeout=30)
-        assert g.json()["status"] == "Confirmed"
+        assert g.json()["status"] == "Accepted"
         assert len(g.json()["status_history"]) == 2
 
         # filter
-        f = client.get(f"{BASE_URL}/api/admin/orders?status_filter=Confirmed", headers=admin_headers, timeout=30)
+        f = client.get(f"{BASE_URL}/api/admin/orders?status_filter=Accepted", headers=admin_headers, timeout=30)
         assert f.status_code == 200
-        assert all(o["status"] == "Confirmed" for o in f.json())
+        assert all(o["status"] == "Accepted" for o in f.json())
 
         bad = client.patch(f"{BASE_URL}/api/admin/orders/{oid}/status",
                            headers=admin_headers, json={"status": "Bogus"}, timeout=30)

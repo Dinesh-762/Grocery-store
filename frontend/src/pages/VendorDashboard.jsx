@@ -1,0 +1,396 @@
+import { useEffect, useState, useCallback } from "react";
+import { NavLink, Routes, Route, Navigate } from "react-router-dom";
+import { api, formatINR, formatApiError } from "@/lib/api";
+import { toast } from "sonner";
+import {
+  LayoutDashboard,
+  Package,
+  ShoppingBag,
+  Loader2,
+  Plus,
+  Pencil,
+  Trash2,
+  X,
+  AlertTriangle,
+  Clock,
+  CheckCircle2,
+} from "lucide-react";
+
+const ORDER_STATUSES = ["Pending", "Accepted", "Preparing", "Packed", "Ready", "Out For Delivery", "Delivered", "Cancelled"];
+
+const vendorLinks = [
+  { to: "/vendor", label: "Dashboard", icon: LayoutDashboard, end: true },
+  { to: "/vendor/products", label: "Products", icon: Package },
+  { to: "/vendor/orders", label: "Orders", icon: ShoppingBag },
+];
+
+export default function VendorDashboard() {
+  return (
+    <div className="container-app py-8" data-testid="vendor-page">
+      <h1 className="font-heading text-3xl font-bold sm:text-4xl">Vendor panel</h1>
+      <p className="mt-2 text-sm text-[#4A4A4A]">Manage your catalogue, inventory, and orders</p>
+
+      <div className="mt-8 grid gap-8 lg:grid-cols-[220px_1fr]">
+        <aside className="space-y-1">
+          {vendorLinks.map((l) => (
+            <NavLink
+              key={l.to}
+              to={l.to}
+              end={l.end}
+              className={({ isActive }) =>
+                `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
+                  isActive ? "bg-[#1B4332] text-white" : "text-[#4A4A4A] hover:bg-gray-50"
+                }`
+              }
+              data-testid={`vendor-nav-${l.label.toLowerCase()}`}
+            >
+              <l.icon className="h-4 w-4" />
+              {l.label}
+            </NavLink>
+          ))}
+        </aside>
+
+        <div>
+          <Routes>
+            <Route index element={<VDashboard />} />
+            <Route path="products" element={<VProducts />} />
+            <Route path="orders" element={<VOrders />} />
+            <Route path="*" element={<Navigate to="/vendor" replace />} />
+          </Routes>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VDashboard() {
+  const [data, setData] = useState(null);
+  useEffect(() => {
+    api.get("/vendor/dashboard").then(({ data }) => setData(data)).catch(() => {});
+  }, []);
+  if (!data) return <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#1B4332]" />;
+
+  const stats = [
+    { label: "Revenue", value: formatINR(data.revenue), color: "bg-[#1B4332]" },
+    { label: "Total orders", value: data.total_orders, color: "bg-[#E07A5F]" },
+    { label: "Pending items", value: data.pending_orders, color: "bg-[#F4A261]" },
+    { label: "Products live", value: data.approved_products, color: "bg-[#8BA888]" },
+  ];
+
+  return (
+    <div className="space-y-8" data-testid="vendor-dashboard">
+      <div className="card-base p-5">
+        <div className="text-xs uppercase tracking-wider text-[#4A4A4A]">Signed in as</div>
+        <div className="mt-1 font-heading text-2xl font-bold">{data.vendor.business_name}</div>
+        <div className="text-sm text-[#4A4A4A]">{data.vendor.owner_email} · {data.vendor.phone}</div>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {stats.map((s) => (
+          <div key={s.label} className="card-base p-5">
+            <div className={`h-1.5 w-10 rounded-full ${s.color}`} />
+            <div className="mt-4 text-xs uppercase tracking-wider text-[#4A4A4A]">{s.label}</div>
+            <div className="mt-1 font-heading text-2xl font-bold">{s.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {data.pending_products > 0 && (
+        <div className="flex items-start gap-3 rounded-2xl border border-dashed border-[#F4A261] bg-[#F4A261]/10 p-4">
+          <Clock className="mt-0.5 h-5 w-5 text-[#F4A261]" />
+          <div className="text-sm text-[#1A1A1A]">
+            <span className="font-semibold">{data.pending_products} product(s)</span> are pending admin approval.
+            They&apos;ll go live automatically once approved.
+          </div>
+        </div>
+      )}
+
+      {data.low_stock.length > 0 && (
+        <div className="card-base p-6">
+          <div className="mb-4 flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 text-[#E07A5F]" />
+            <h3 className="font-heading text-lg font-semibold">Low stock</h3>
+          </div>
+          <div className="space-y-3">
+            {data.low_stock.map((p) => (
+              <div key={p.id} className="flex items-center gap-3">
+                <img src={p.image} alt="" className="h-10 w-10 rounded-lg object-cover" />
+                <div className="flex-1">
+                  <div className="text-sm font-semibold">{p.name}</div>
+                  <div className="text-xs text-[#4A4A4A]">{p.unit}</div>
+                </div>
+                <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${p.stock === 0 ? "bg-red-100 text-red-700" : "bg-yellow-100 text-yellow-700"}`}>
+                  {p.stock} left
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function slugify(s) {
+  return s.toLowerCase().trim().replace(/[^\w\s-]/g, "").replace(/\s+/g, "-");
+}
+
+function VProducts() {
+  const [products, setProducts] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const [p, c] = await Promise.all([api.get("/vendor/products"), api.get("/categories")]);
+    setProducts(p.data);
+    setCategories(c.data);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const del = async (id) => {
+    if (!window.confirm("Delete this product?")) return;
+    try {
+      await api.delete(`/vendor/products/${id}`);
+      toast.success("Deleted");
+      load();
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  if (loading) return <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#1B4332]" />;
+
+  return (
+    <div data-testid="vendor-products">
+      <div className="mb-6 flex items-center justify-between">
+        <h2 className="font-heading text-2xl font-semibold">Products ({products.length})</h2>
+        <button onClick={() => { setEditing(null); setShowForm(true); }} className="btn-primary" data-testid="vendor-add-product">
+          <Plus className="h-4 w-4" /> Add product
+        </button>
+      </div>
+
+      {products.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-[#E5E5E5] p-10 text-center text-[#4A4A4A]">
+          No products yet. Add your first product — it goes live after admin approval.
+        </div>
+      ) : (
+        <div className="card-base overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-left text-xs uppercase tracking-wider text-[#4A4A4A]">
+                <tr>
+                  <th className="px-4 py-3">Product</th>
+                  <th className="px-4 py-3">Price</th>
+                  <th className="px-4 py-3">Stock</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {products.map((p) => (
+                  <tr key={p.id} className="border-t border-[#E5E5E5]">
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <img src={p.image} alt="" className="h-10 w-10 rounded-lg object-cover" />
+                        <div>
+                          <div className="font-semibold">{p.name}</div>
+                          <div className="text-xs text-[#4A4A4A]">{p.unit} · {p.category_slug}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 font-semibold">{formatINR(p.price)}</td>
+                    <td className="px-4 py-3">
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${p.stock <= 5 ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"}`}>
+                        {p.stock}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                        p.approval_status === "approved" ? "bg-green-100 text-green-700" :
+                        p.approval_status === "rejected" ? "bg-red-100 text-red-700" : "bg-yellow-100 text-yellow-700"
+                      }`}>
+                        {p.approval_status}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <button onClick={() => { setEditing(p); setShowForm(true); }} className="inline-grid h-8 w-8 place-items-center rounded-full text-[#1B4332] hover:bg-gray-100" data-testid={`v-edit-${p.slug}`}>
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                      <button onClick={() => del(p.id)} className="inline-grid h-8 w-8 place-items-center rounded-full text-red-600 hover:bg-red-50" data-testid={`v-delete-${p.slug}`}>
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {showForm && (
+        <VProductForm
+          initial={editing}
+          categories={categories}
+          onClose={() => setShowForm(false)}
+          onSaved={() => { setShowForm(false); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function VProductForm({ initial, categories, onClose, onSaved }) {
+  const [form, setForm] = useState(
+    initial || {
+      name: "", slug: "", description: "", price: 0, mrp: 0, unit: "1 kg",
+      category_slug: categories[0]?.slug || "", image: "", stock: 0, featured: false, popular: false,
+    }
+  );
+  const [saving, setSaving] = useState(false);
+
+  const update = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  const save = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const payload = {
+        ...form,
+        slug: form.slug || slugify(form.name),
+        price: Number(form.price),
+        mrp: form.mrp ? Number(form.mrp) : null,
+        stock: Number(form.stock),
+      };
+      if (initial) await api.put(`/vendor/products/${initial.id}`, payload);
+      else await api.post("/vendor/products", payload);
+      toast.success(initial ? "Updated" : "Submitted for approval");
+      onSaved();
+    } catch (e) { toast.error(formatApiError(e)); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" data-testid="v-product-form">
+      <div className="card-base max-h-[90vh] w-full max-w-2xl overflow-auto p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="font-heading text-xl font-semibold">{initial ? "Edit product" : "New product"}</h3>
+          <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-full hover:bg-gray-100"><X className="h-4 w-4" /></button>
+        </div>
+        <form onSubmit={save} className="grid gap-4 sm:grid-cols-2">
+          <FF label="Name" value={form.name} onChange={(v) => update("name", v)} required />
+          <FF label="Slug" value={form.slug} onChange={(v) => update("slug", v)} placeholder="auto from name" />
+          <div className="sm:col-span-2">
+            <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Description</label>
+            <textarea value={form.description} onChange={(e) => update("description", e.target.value)} rows={2} className="input-base resize-none" />
+          </div>
+          <FF label="Price (₹)" type="number" value={form.price} onChange={(v) => update("price", v)} required />
+          <FF label="MRP (₹)" type="number" value={form.mrp || ""} onChange={(v) => update("mrp", v)} />
+          <FF label="Unit (250g/500g/1kg)" value={form.unit} onChange={(v) => update("unit", v)} placeholder="1 kg" />
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Category</label>
+            <select value={form.category_slug} onChange={(e) => update("category_slug", e.target.value)} className="input-base">
+              {categories.map((c) => <option key={c.slug} value={c.slug}>{c.name}</option>)}
+            </select>
+          </div>
+          <div className="sm:col-span-2">
+            <FF label="Image URL" value={form.image} onChange={(v) => update("image", v)} required />
+          </div>
+          <FF label="Stock" type="number" value={form.stock} onChange={(v) => update("stock", v)} required />
+          <div className="sm:col-span-2 flex justify-end gap-3 pt-2">
+            <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
+            <button type="submit" disabled={saving} className="btn-primary" data-testid="v-save-product">
+              {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+              Save
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function FF({ label, type = "text", value, onChange, ...rest }) {
+  return (
+    <div>
+      <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">{label}</label>
+      <input type={type} value={value} onChange={(e) => onChange(e.target.value)} className="input-base" {...rest} />
+    </div>
+  );
+}
+
+function VOrders() {
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data } = await api.get("/vendor/orders");
+    setOrders(data);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const setStatus = async (id, status) => {
+    try {
+      await api.patch(`/vendor/orders/${id}/line-status`, { status });
+      toast.success(`Marked ${status}`);
+      load();
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  if (loading) return <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#1B4332]" />;
+  if (orders.length === 0) return <div className="rounded-2xl border border-dashed border-[#E5E5E5] p-10 text-center text-[#4A4A4A]">No orders yet.</div>;
+
+  return (
+    <div className="space-y-4" data-testid="vendor-orders">
+      {orders.map((o) => (
+        <div key={o.id} className="card-base p-5" data-testid={`vendor-order-${o.id}`}>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="text-xs text-[#4A4A4A]">Order #{o.id.slice(-6).toUpperCase()}</div>
+              <div className="mt-1 font-semibold">{o.customer_name} · {o.customer_phone}</div>
+              <div className="text-xs text-[#4A4A4A]">
+                {o.address.line1}, {o.address.area}, {o.address.city} - {o.address.pincode}
+              </div>
+              <div className="mt-2 text-xs text-[#4A4A4A]">
+                {o.items.length} item(s) · {o.payment_method} · {new Date(o.created_at).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "short" })}
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="font-heading text-xl font-bold text-[#1B4332]">{formatINR(o.my_subtotal)}</div>
+              <div className="mt-2">
+                <select
+                  value={o.my_status === "Mixed" ? "Pending" : o.my_status}
+                  onChange={(e) => setStatus(o.id, e.target.value)}
+                  className="input-base w-44 text-sm"
+                  data-testid={`v-status-${o.id}`}
+                >
+                  {ORDER_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+              <div className="mt-1 text-xs text-[#4A4A4A]">Overall: {o.overall_status}</div>
+            </div>
+          </div>
+          <div className="mt-3 space-y-2 text-sm">
+            {o.items.map((it, idx) => (
+              <div key={idx} className="flex items-center gap-3">
+                <img src={it.image} alt="" className="h-8 w-8 rounded object-cover" />
+                <span className="flex-1">{it.name} <span className="text-xs text-[#4A4A4A]">({it.unit})</span></span>
+                <span className="text-[#4A4A4A]">×{it.quantity}</span>
+                <span className="font-semibold">{formatINR(it.price * it.quantity)}</span>
+                {it.line_status && it.line_status !== o.my_status && (
+                  <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-[#4A4A4A]">{it.line_status}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}

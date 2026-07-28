@@ -1,12 +1,16 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, formatINR } from "@/lib/api";
-import { Loader2, Package, ArrowRight } from "lucide-react";
+import { api, formatINR, formatApiError } from "@/lib/api";
+import { useCart } from "@/context/CartContext";
+import { toast } from "sonner";
+import { Loader2, Package, ArrowRight, RotateCcw } from "lucide-react";
 
 const STATUS_COLORS = {
   Pending: "bg-yellow-100 text-yellow-800",
-  Confirmed: "bg-blue-100 text-blue-800",
+  Accepted: "bg-blue-100 text-blue-800",
+  Preparing: "bg-blue-100 text-blue-800",
   Packed: "bg-indigo-100 text-indigo-800",
+  Ready: "bg-indigo-100 text-indigo-800",
   "Out For Delivery": "bg-orange-100 text-orange-800",
   Delivered: "bg-green-100 text-green-800",
   Cancelled: "bg-red-100 text-red-800",
@@ -15,6 +19,7 @@ const STATUS_COLORS = {
 export default function Orders() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const { addItem } = useCart();
 
   useEffect(() => {
     api
@@ -54,13 +59,12 @@ export default function Orders() {
 
       <div className="mt-8 space-y-4">
         {orders.map((o) => (
-          <Link
+          <div
             key={o.id}
-            to={`/orders/${o.id}`}
             className="card-base flex flex-col gap-4 p-5 hover:border-[#8BA888] md:flex-row md:items-center md:justify-between"
             data-testid={`order-${o.id}`}
           >
-            <div className="flex items-center gap-4">
+            <Link to={`/orders/${o.id}`} className="flex flex-1 items-center gap-4">
               <div className="flex -space-x-3">
                 {o.items.slice(0, 3).map((i, idx) => (
                   <img key={idx} src={i.image} alt="" className="h-12 w-12 rounded-full border-2 border-white object-cover" />
@@ -80,14 +84,36 @@ export default function Orders() {
                   {new Date(o.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}
                 </div>
               </div>
-            </div>
+            </Link>
             <div className="flex items-center gap-3">
               <span className={`rounded-full px-3 py-1 text-xs font-semibold ${STATUS_COLORS[o.status] || "bg-gray-100"}`}>
                 {o.status}
               </span>
-              <ArrowRight className="h-4 w-4 text-[#1B4332]" />
+              <button
+                onClick={async () => {
+                  try {
+                    const { data } = await api.get(`/orders/${o.id}/reorder`);
+                    let added = 0;
+                    data.items.forEach((it) => {
+                      if (it.in_stock) {
+                        addItem({ id: it.product_id, name: it.name, price: it.price, image: it.image, unit: it.unit, stock: 999 }, it.quantity);
+                        added += 1;
+                      }
+                    });
+                    if (added === 0) toast.error("None of these items are currently available");
+                    else toast.success(`Added ${added} item(s) to cart`);
+                  } catch (e) { toast.error(formatApiError(e)); }
+                }}
+                className="inline-flex items-center gap-1.5 rounded-full border border-[#1B4332] px-3 py-1 text-xs font-semibold text-[#1B4332] hover:bg-[#1B4332]/10"
+                data-testid={`reorder-${o.id}`}
+              >
+                <RotateCcw className="h-3.5 w-3.5" /> Re-order
+              </button>
+              <Link to={`/orders/${o.id}`} className="grid h-8 w-8 place-items-center rounded-full text-[#1B4332] hover:bg-[#1B4332]/10">
+                <ArrowRight className="h-4 w-4" />
+              </Link>
             </div>
-          </Link>
+          </div>
         ))}
       </div>
     </div>

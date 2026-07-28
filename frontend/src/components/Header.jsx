@@ -1,6 +1,6 @@
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useState } from "react";
-import { ShoppingCart, User, Search, Menu, X, LogOut, LayoutDashboard, Package, Leaf } from "lucide-react";
+import { ShoppingCart, User, Search, Menu, X, LogOut, LayoutDashboard, Package, Leaf, Store } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useCart } from "@/context/CartContext";
 import {
@@ -124,6 +124,13 @@ export default function Header() {
                   <DropdownMenuItem asChild>
                     <Link to="/admin" data-testid="menu-admin" className="cursor-pointer">
                       <LayoutDashboard className="mr-2 h-4 w-4" /> Admin Panel
+                    </Link>
+                  </DropdownMenuItem>
+                )}
+                {user.role === "vendor" && (
+                  <DropdownMenuItem asChild>
+                    <Link to="/vendor" data-testid="menu-vendor" className="cursor-pointer">
+                      <Store className="mr-2 h-4 w-4" /> Vendor Panel
                     </Link>
                   </DropdownMenuItem>
                 )}

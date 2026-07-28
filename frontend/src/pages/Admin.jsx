@@ -15,12 +15,19 @@ import {
   Pencil,
   Trash2,
   X,
+  Store,
+  Ticket,
+  Check,
+  Ban,
+  ExternalLink,
 } from "lucide-react";
 
 const adminLinks = [
   { to: "/admin", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/admin/products", label: "Products", icon: Package },
   { to: "/admin/orders", label: "Orders", icon: ShoppingBag },
+  { to: "/admin/vendors", label: "Vendors", icon: Store },
+  { to: "/admin/coupons", label: "Coupons", icon: Ticket },
   { to: "/admin/customers", label: "Customers", icon: Users },
   { to: "/admin/categories", label: "Categories", icon: Tag },
 ];
@@ -56,6 +63,8 @@ export default function Admin() {
             <Route index element={<Dashboard />} />
             <Route path="products" element={<ProductsAdmin />} />
             <Route path="orders" element={<OrdersAdmin />} />
+            <Route path="vendors" element={<VendorsAdmin />} />
+            <Route path="coupons" element={<CouponsAdmin />} />
             <Route path="customers" element={<Customers />} />
             <Route path="categories" element={<Categories />} />
             <Route path="*" element={<Navigate to="/admin" replace />} />
@@ -85,8 +94,8 @@ function Dashboard() {
   const stats = [
     { label: "Revenue (delivered)", value: formatINR(data.revenue), icon: TrendingUp, color: "bg-[#1B4332]" },
     { label: "Orders", value: data.total_orders, icon: ShoppingBag, color: "bg-[#E07A5F]" },
-    { label: "Products", value: data.total_products, icon: Package, color: "bg-[#8BA888]" },
-    { label: "Customers", value: data.total_users, icon: Users, color: "bg-[#F4A261]" },
+    { label: "Vendors", value: data.total_vendors ?? 0, icon: Store, color: "bg-[#F4A261]" },
+    { label: "Customers", value: data.total_users, icon: Users, color: "bg-[#8BA888]" },
   ];
 
   return (
@@ -102,6 +111,36 @@ function Dashboard() {
           </div>
         ))}
       </div>
+
+      {/* Action-required callouts */}
+      {(data.pending_vendors > 0 || data.pending_products > 0) && (
+        <div className="grid gap-4 sm:grid-cols-2">
+          {data.pending_vendors > 0 && (
+            <NavLink to="/admin/vendors" className="card-base flex items-center gap-3 p-5 hover:border-[#F4A261]" data-testid="pending-vendors-card">
+              <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#F4A261] text-white">
+                <Store className="h-5 w-5" />
+              </div>
+              <div className="flex-1">
+                <div className="font-semibold">{data.pending_vendors} vendor(s) awaiting approval</div>
+                <div className="text-xs text-[#4A4A4A]">Review documents and approve or reject</div>
+              </div>
+              <ExternalLink className="h-4 w-4 text-[#4A4A4A]" />
+            </NavLink>
+          )}
+          {data.pending_products > 0 && (
+            <NavLink to="/admin/products" className="card-base flex items-center gap-3 p-5 hover:border-[#E07A5F]" data-testid="pending-products-card">
+              <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#E07A5F] text-white">
+                <Package className="h-5 w-5" />
+              </div>
+              <div className="flex-1">
+                <div className="font-semibold">{data.pending_products} product(s) awaiting approval</div>
+                <div className="text-xs text-[#4A4A4A]">Approve to make them live for customers</div>
+              </div>
+              <ExternalLink className="h-4 w-4 text-[#4A4A4A]" />
+            </NavLink>
+          )}
+        </div>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-2">
         <div className="card-base p-6" data-testid="low-stock">
@@ -576,6 +615,254 @@ function Categories() {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+
+/* ================= VENDORS ADMIN ================= */
+function VendorsAdmin() {
+  const [vendors, setVendors] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState("");
+  const [selected, setSelected] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data } = await api.get(`/admin/vendors${filter ? `?status_filter=${filter}` : ""}`);
+    setVendors(data);
+    setLoading(false);
+  }, [filter]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const setStatus = async (id, status, reason = "") => {
+    try {
+      await api.patch(`/admin/vendors/${id}/status`, { status, reason });
+      toast.success(`Vendor ${status.toLowerCase()}`);
+      setSelected(null);
+      load();
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  if (loading) return <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#1B4332]" />;
+
+  return (
+    <div data-testid="vendors-admin">
+      <div className="mb-6 flex items-center justify-between">
+        <h2 className="font-heading text-2xl font-semibold">Vendors ({vendors.length})</h2>
+        <select value={filter} onChange={(e) => setFilter(e.target.value)} className="input-base w-48">
+          <option value="">All statuses</option>
+          {["Pending", "Approved", "Rejected", "Suspended"].map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+      </div>
+
+      {vendors.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-[#E5E5E5] p-10 text-center text-[#4A4A4A]">No vendors match.</div>
+      ) : (
+        <div className="space-y-4">
+          {vendors.map((v) => (
+            <div key={v.id} className="card-base p-5" data-testid={`admin-vendor-${v.id}`}>
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <div className="font-heading text-lg font-semibold">{v.business_name}</div>
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                      v.status === "Approved" ? "bg-green-100 text-green-700" :
+                      v.status === "Rejected" ? "bg-red-100 text-red-700" :
+                      v.status === "Suspended" ? "bg-gray-200 text-gray-700" :
+                      "bg-yellow-100 text-yellow-700"
+                    }`}>{v.status}</span>
+                  </div>
+                  <div className="mt-1 text-sm text-[#4A4A4A]">{v.owner_name} · {v.owner_email} · {v.phone}</div>
+                  <div className="text-xs text-[#4A4A4A]">{v.business_address} - {v.business_pincode}</div>
+                  {v.business_description && <div className="mt-1 text-xs italic text-[#4A4A4A]">"{v.business_description}"</div>}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => setSelected(v)}
+                    className="inline-flex items-center gap-1 rounded-full border border-[#1B4332] px-3 py-1.5 text-xs font-semibold text-[#1B4332] hover:bg-[#1B4332]/10"
+                    data-testid={`view-docs-${v.id}`}
+                  >
+                    View docs
+                  </button>
+                  {v.status !== "Approved" && (
+                    <button onClick={() => setStatus(v.id, "Approved")} className="inline-flex items-center gap-1 rounded-full bg-green-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-700" data-testid={`approve-${v.id}`}>
+                      <Check className="h-3.5 w-3.5" /> Approve
+                    </button>
+                  )}
+                  {v.status === "Approved" && (
+                    <button onClick={() => setStatus(v.id, "Suspended")} className="inline-flex items-center gap-1 rounded-full bg-gray-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-gray-700" data-testid={`suspend-${v.id}`}>
+                      <Ban className="h-3.5 w-3.5" /> Suspend
+                    </button>
+                  )}
+                  {v.status !== "Rejected" && v.status !== "Approved" && (
+                    <button
+                      onClick={() => {
+                        const reason = window.prompt("Reason for rejection?");
+                        if (reason !== null) setStatus(v.id, "Rejected", reason);
+                      }}
+                      className="inline-flex items-center gap-1 rounded-full bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700"
+                      data-testid={`reject-${v.id}`}
+                    >
+                      <Ban className="h-3.5 w-3.5" /> Reject
+                    </button>
+                  )}
+                </div>
+              </div>
+              {v.status === "Rejected" && v.rejection_reason && (
+                <div className="mt-3 rounded-lg bg-red-50 p-2 text-xs text-red-800">
+                  Rejection reason: {v.rejection_reason}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {selected && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" data-testid="vendor-docs-modal">
+          <div className="card-base max-h-[90vh] w-full max-w-2xl overflow-auto p-6">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="font-heading text-xl font-semibold">Documents · {selected.business_name}</h3>
+              <button onClick={() => setSelected(null)} className="grid h-8 w-8 place-items-center rounded-full hover:bg-gray-100"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="space-y-3 text-sm">
+              {["aadhar_url", "gst_url", "shop_license_url"].map((k) => (
+                <div key={k}>
+                  <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-[#4A4A4A]">{k.replace(/_url$/, "").replace(/_/g, " ")}</div>
+                  {selected.docs?.[k] ? (
+                    <a href={selected.docs[k]} target="_blank" rel="noopener noreferrer" className="break-all text-[#1B4332] underline">
+                      {selected.docs[k]}
+                    </a>
+                  ) : (
+                    <div className="text-gray-400">Not provided</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================= COUPONS ADMIN ================= */
+function CouponsAdmin() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [f, setF] = useState({ code: "", discount_pct: 10, min_amount: 0, active: true, expires_at: "" });
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data } = await api.get("/admin/coupons");
+    setItems(data);
+    setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const save = async (e) => {
+    e.preventDefault();
+    try {
+      await api.post("/admin/coupons", {
+        code: f.code.trim(),
+        discount_pct: Number(f.discount_pct),
+        min_amount: Number(f.min_amount),
+        active: !!f.active,
+        expires_at: f.expires_at ? new Date(f.expires_at).toISOString() : null,
+      });
+      toast.success("Coupon created");
+      setShowForm(false);
+      setF({ code: "", discount_pct: 10, min_amount: 0, active: true, expires_at: "" });
+      load();
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  const del = async (id) => {
+    if (!window.confirm("Delete this coupon?")) return;
+    await api.delete(`/admin/coupons/${id}`);
+    load();
+  };
+
+  if (loading) return <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#1B4332]" />;
+
+  return (
+    <div data-testid="coupons-admin">
+      <div className="mb-6 flex items-center justify-between">
+        <h2 className="font-heading text-2xl font-semibold">Coupons ({items.length})</h2>
+        <button onClick={() => setShowForm((v) => !v)} className="btn-primary" data-testid="new-coupon">
+          <Plus className="h-4 w-4" /> New coupon
+        </button>
+      </div>
+
+      {showForm && (
+        <form onSubmit={save} className="card-base mb-6 grid gap-4 p-6 sm:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Code</label>
+            <input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value.toUpperCase() })} required className="input-base" data-testid="coupon-code" placeholder="WELCOME10" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Discount %</label>
+            <input type="number" min="1" max="90" value={f.discount_pct} onChange={(e) => setF({ ...f, discount_pct: e.target.value })} required className="input-base" data-testid="coupon-pct" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Min order amount (₹)</label>
+            <input type="number" min="0" value={f.min_amount} onChange={(e) => setF({ ...f, min_amount: e.target.value })} className="input-base" data-testid="coupon-min" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Expires on (optional)</label>
+            <input type="date" value={f.expires_at} onChange={(e) => setF({ ...f, expires_at: e.target.value })} className="input-base" data-testid="coupon-expiry" />
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} />
+            Active
+          </label>
+          <div className="sm:col-span-2 flex justify-end">
+            <button className="btn-primary" data-testid="save-coupon">Save</button>
+          </div>
+        </form>
+      )}
+
+      {items.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-[#E5E5E5] p-10 text-center text-[#4A4A4A]">No coupons yet.</div>
+      ) : (
+        <div className="card-base overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-left text-xs uppercase tracking-wider text-[#4A4A4A]">
+              <tr>
+                <th className="px-4 py-3">Code</th>
+                <th className="px-4 py-3">Discount</th>
+                <th className="px-4 py-3">Min order</th>
+                <th className="px-4 py-3">Expires</th>
+                <th className="px-4 py-3">Active</th>
+                <th className="px-4 py-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((c) => (
+                <tr key={c.id} className="border-t border-[#E5E5E5]" data-testid={`coupon-row-${c.code}`}>
+                  <td className="px-4 py-3 font-mono font-semibold">{c.code}</td>
+                  <td className="px-4 py-3">{c.discount_pct}%</td>
+                  <td className="px-4 py-3">{formatINR(c.min_amount || 0)}</td>
+                  <td className="px-4 py-3 text-[#4A4A4A]">
+                    {c.expires_at ? new Date(c.expires_at).toLocaleDateString("en-IN") : "—"}
+                  </td>
+                  <td className="px-4 py-3">
+                    {c.active ? <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700">Yes</span> : <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs">No</span>}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <button onClick={() => del(c.id)} className="text-red-600 hover:text-red-800">
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import { api, formatINR } from "@/lib/api";
 import { Loader2, CheckCircle2, Circle, MapPin, Phone, MessageCircle, Package } from "lucide-react";
 
-const STATUSES = ["Pending", "Confirmed", "Packed", "Out For Delivery", "Delivered"];
+const STATUSES = ["Pending", "Accepted", "Preparing", "Packed", "Ready", "Out For Delivery", "Delivered"];
 
 export default function OrderDetail() {
   const { id } = useParams();

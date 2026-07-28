@@ -19,7 +19,8 @@ export default function Login() {
     setLoading(false);
     if (res.ok) {
       toast.success(`Welcome back, ${res.user.name.split(" ")[0]}!`);
-      const from = location.state?.from || (res.user.role === "admin" ? "/admin" : "/");
+      const roleHome = res.user.role === "admin" ? "/admin" : res.user.role === "vendor" ? "/vendor" : "/";
+      const from = location.state?.from || roleHome;
       navigate(from, { replace: true });
     } else {
       toast.error(res.error);
