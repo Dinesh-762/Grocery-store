@@ -1034,16 +1034,21 @@ function Analytics() {
 
       <div className="card-base p-6" data-testid="trend-chart">
         <h3 className="font-heading text-lg font-semibold">Revenue trend</h3>
-        <div className="mt-6 flex h-40 items-end gap-1">
+        <div className="mt-6 flex h-48 items-stretch gap-1">
           {data.daily_trend.map((d) => {
             const h = maxRev > 0 ? (d.revenue / maxRev) * 100 : 0;
             return (
-              <div key={d.date} className="group relative flex flex-1 flex-col items-center gap-1">
-                <div className="w-full rounded-t bg-[#1B4332]/70 transition-all group-hover:bg-[#1B4332]" style={{ height: `${Math.max(2, h)}%` }} />
-                <div className="text-[10px] text-[#4A4A4A]">{d.date.slice(5)}</div>
-                <div className="absolute -top-8 hidden rounded-md bg-black/80 px-1.5 py-0.5 text-[10px] text-white group-hover:block">
-                  {formatINR(d.revenue)} · {d.orders} orders
+              <div key={d.date} className="group flex h-full flex-1 flex-col items-center justify-end gap-1">
+                <div className="relative w-full flex-1">
+                  <div
+                    className="absolute bottom-0 left-0 right-0 rounded-t bg-[#1B4332]/70 transition-all group-hover:bg-[#1B4332]"
+                    style={{ height: `${Math.max(2, h)}%` }}
+                  />
+                  <div className="pointer-events-none absolute -top-8 left-1/2 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-black/80 px-1.5 py-0.5 text-[10px] text-white group-hover:block">
+                    {formatINR(d.revenue)} · {d.orders} orders
+                  </div>
                 </div>
+                <div className="text-[10px] text-[#4A4A4A]">{d.date.slice(5)}</div>
               </div>
             );
           })}
