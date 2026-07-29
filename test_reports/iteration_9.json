@@ -1,0 +1,48 @@
+{
+  "summary": "Iteration 9 (Vendor Business Center + Analytics) fully verified. Backend: new focused suite /app/backend/tests/test_iteration9_business_center.py — 22/22 passed covering (a) RBAC on GET /api/vendor/settings + /api/vendor/analytics (401 no token, 401 garbage token, 403 customer token, 403 admin token, 200 approved vendor, no _id leakage), (b) PATCH /api/vendor/settings persisting all 13 new fields (shop_phone, shop_whatsapp, shop_logo, banner_image, business_hours 7-day dict incl. 'Closed', open_now, vacation_mode, vacation_message, delivery_radius_km, min_order_amount, estimated_delivery_min) verified via follow-up GET, (c) 400 on negative min_order_amount/-delivery_radius_km/-estimated_delivery_min, empty PATCH = no-op 200, (d) GET /api/vendors/{id} exposes all new fields + verified=true, with sane defaults for other approved vendors, (e) order enforcement: vacation_mode -> 400 'is temporarily closed' (vendor named) and order succeeds again after turning it off; open_now=false -> 400 'not accepting orders right now'; min_order_amount=500 -> 400 'Minimum order for ...' and order succeeds when subtotal exceeds it, (f) analytics shape + a delivered order increments total_revenue/total_items_sold/month_revenue exactly and appears in best_sellers (all 6 keys) and as recent_orders[0] with correct my_subtotal, (g) regression: /vendor/dashboard, /products, /categories, /vendors, /store/info, /admin/orders + status PATCH. Frontend: vendor login -> /vendor shows 5 sidebar links, 'Open now' pill; /vendor/analytics renders 4 KPIs (today 3, week 6, month ₹130, total ₹130), best-seller row (best-seller-<id>) and 6 recent orders; /vendor/settings renders status toggles, profile fields, operations, 7 hour rows — saving vacation_mode + message + wed hours shows 'Shop settings saved' toast and values persist after reload; dashboard then shows vacation-badge; /vendors/<id> shows banner, logo, Verified vendor, temporarily-closed-badge, vacation-notice, tel: link, ETA/radius/min-order chips and business-hours details panel with all 7 days. Customer checkout enforcement verified in UI: min-order and vacation errors surface as red toasts and block the order; after restoring settings the COD order succeeded (/orders/6a69794ab401a8718eeb721b). Vendor state restored: vacation_mode=false, open_now=true, min_order_amount=100, radius=5, ETA=45, logo/banner cleared, all 7 business hours restored.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PATCH /api/vendor/settings", "issue": "business_hours is written with $set on the whole sub-document, so a partial payload (e.g. {business_hours:{mon:'09:00-21:00'}}) silently wipes the other 6 days. Reproduced: after patching only 'mon', GET returned only {mon:...}. UI is unaffected (always sends all 7) but the API contract is lossy — merge per-day keys instead."},
+      {"endpoint": "PATCH /api/vendor/settings", "issue": "No format validation on business_hours values: {'mon':'not-a-time-range'} is accepted with 200 and is then rendered verbatim on the public storefront."},
+      {"endpoint": "POST /api/orders", "issue": "Min-order error message formats the amount from a float: 'Minimum order for X is ₹100.0' — should be ₹100 (use int/2-dp formatting like the subtotal)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Add to cart from a closed/vacation vendor storefront", "issue": "Product cards remain fully enabled while the vendor is in vacation_mode / open_now=false; the customer only discovers the block at checkout ('remove their items'). Cart also has no per-item 'vendor closed' marker, so the user must guess which item to remove.", "affected_selectors": ["[data-testid='temporarily-closed-badge']", "[data-testid='place-order-btn']"]}
+    ],
+    "design_issues": [
+      {"screen": "/vendors/:id (VendorStorefront)", "issues": ["shop_logo / banner_image <img> have no onError fallback — with a dead URL the broken-image icon plus the alt text (business name) renders inside the 20x20 logo tile and the banner strip stays empty. Fall back to the Store icon / hide the banner on error."]},
+      {"screen": "/vendor/analytics", "issues": ["'Low stock' card is conditionally hidden and was not renderable for the test vendor (no stock<5 products) — could not visually verify; backend returns the array correctly."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration9_business_center.py",
+    "/app/test_reports/pytest/iteration9.xml"
+  ],
+  "action_items": [
+    "Merge business_hours per-day keys in PATCH /api/vendor/settings instead of replacing the whole dict (data loss on partial payloads).",
+    "Format the min-order amount in the POST /api/orders error message (₹100 not ₹100.0).",
+    "Optional UX: disable add-to-cart / show a closed marker for vacation-mode vendors on the storefront and in the cart, instead of failing only at checkout.",
+    "Optional: add onError fallbacks for shop_logo and banner_image images."
+  ],
+  "critical_code_review_comments": [
+    "VSettings.save() sends delivery_radius_km:null and estimated_delivery_min:null when the field is cleared; backend uses model_dump(exclude_none=True), so those values can never be reset — a vendor cannot clear a previously-set radius/ETA. Send 0 instead (min_order_amount already does this).",
+    "POST /api/orders re-queries db.vendors twice per vendor (once inside the item loop, once in the min-order loop) — cache the vendor docs in a dict to avoid N+1 lookups per checkout.",
+    "vendor_to_out defaults are duplicated in two places (lines ~800 and ~905 of server.py); extract a single helper so the storefront and settings payloads cannot drift.",
+    "server.py is 1477 lines — consider splitting vendor/admin/order routers into modules (guideline: <700 lines/file)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration9_business_center.py",
+    "/app/test_reports/iteration_9.json"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "seed_data_creation": "Throwaway customers TEST_it9_<ts>@example.com and TEST_it9ui_1785297210@example.com (password Test@123) with a few COD orders on vendor product test-vendor-ui-tomato; one order was marked Delivered by the vendor to validate analytics revenue. Vendor 6a68cd452d6830a591905de5 settings restored to vacation_mode=false, open_now=true, min_order_amount=100, delivery_radius_km=5, ETA=45, empty logo/banner, full 7-day business hours.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Admin admin@ambajogai.com / Admin@123; vendor test_vendor_ui_1785253172@example.com / Vendor@123 (vendor id 6a68cd452d6830a591905de5, product test-vendor-ui-tomato ₹65)",
+  "context_for_next_testing_agent": "Reusable regression file /app/backend/tests/test_iteration9_business_center.py is self-restoring (module-scoped autouse fixture resets vacation/open/min/radius/ETA) — run it with `pytest tests/test_iteration9_business_center.py -n 0` (pytest.ini forces -n 2 --dist loadscope; use -n 0 for serial, never -p no:xdist). Order payloads need AddressIn fields full_name/phone/line1/area/pincode. All new endpoints and enforcement paths pass; remaining items are the 3 minor backend polish items and the closed-vendor add-to-cart UX.",
+  "rca_of_the_issue": "business_hours loss: PATCH /api/vendor/settings does `$set: {business_hours: <payload dict>}`, which replaces the entire embedded document rather than merging day keys. Repro: PATCH {business_hours:{mon:'09:00-21:00'}} then GET /api/vendor/settings -> only 'mon' remains. Mitigation: build dotted keys ($set business_hours.mon etc.) or merge with the existing dict before $set."
+}

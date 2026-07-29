@@ -489,6 +489,7 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
 
     # Recompute prices server-side from DB and validate stock
     verified_items = []
+    vendor_min_totals: dict = {}  # vendor_id -> subtotal
     for it in payload.items:
         try:
             prod = await db.products.find_one({"_id": ObjectId(it.product_id)})
@@ -500,6 +501,18 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
             raise HTTPException(status_code=400, detail="Quantity must be positive")
         if prod.get("stock", 0) < it.quantity:
             raise HTTPException(status_code=400, detail=f"Insufficient stock for {prod['name']}")
+        # Vacation-mode / open-now check per vendor
+        vid = prod.get("vendor_id")
+        if vid:
+            try:
+                vend = await db.vendors.find_one({"_id": ObjectId(vid)})
+            except Exception:
+                vend = None
+            if vend and vend.get("vacation_mode"):
+                raise HTTPException(status_code=400, detail=f"{vend.get('business_name', 'This vendor')} is temporarily closed. Please remove their items and try again.")
+            if vend and vend.get("open_now") is False:
+                raise HTTPException(status_code=400, detail=f"{vend.get('business_name', 'This vendor')} is not accepting orders right now.")
+            vendor_min_totals[vid] = vendor_min_totals.get(vid, 0.0) + prod["price"] * it.quantity
         verified_items.append({
             "product_id": str(prod["_id"]),
             "name": prod["name"],
@@ -511,6 +524,17 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
             "vendor_name": prod.get("vendor_name"),
             "line_status": "Pending",
         })
+
+    # Enforce per-vendor min_order_amount
+    for vid, sub in vendor_min_totals.items():
+        try:
+            vend = await db.vendors.find_one({"_id": ObjectId(vid)})
+        except Exception:
+            vend = None
+        if vend:
+            min_amt = vend.get("min_order_amount") or 0
+            if min_amt and sub < min_amt:
+                raise HTTPException(status_code=400, detail=f"Minimum order for {vend.get('business_name', 'this vendor')} is ₹{min_amt}. Current subtotal for their items is ₹{sub:.2f}.")
 
     subtotal = round(sum(i["price"] * i["quantity"] for i in verified_items), 2)
     delivery_fee = 0.0 if subtotal >= FREE_DELIVERY_THRESHOLD else DELIVERY_FEE
@@ -729,6 +753,34 @@ class VendorStatusUpdate(BaseModel):
     reason: Optional[str] = ""
 
 
+class BusinessHoursIn(BaseModel):
+    mon: Optional[str] = None
+    tue: Optional[str] = None
+    wed: Optional[str] = None
+    thu: Optional[str] = None
+    fri: Optional[str] = None
+    sat: Optional[str] = None
+    sun: Optional[str] = None
+
+
+class VendorSettingsIn(BaseModel):
+    business_name: Optional[str] = None
+    business_description: Optional[str] = None
+    business_address: Optional[str] = None
+    business_pincode: Optional[str] = None
+    shop_phone: Optional[str] = None
+    shop_whatsapp: Optional[str] = None
+    shop_logo: Optional[str] = None
+    banner_image: Optional[str] = None
+    business_hours: Optional[BusinessHoursIn] = None
+    open_now: Optional[bool] = None
+    vacation_mode: Optional[bool] = None
+    vacation_message: Optional[str] = None
+    delivery_radius_km: Optional[float] = None
+    min_order_amount: Optional[float] = None
+    estimated_delivery_min: Optional[int] = None
+
+
 def vendor_to_out(v: dict) -> dict:
     return {
         "id": str(v["_id"]),
@@ -745,6 +797,19 @@ def vendor_to_out(v: dict) -> dict:
         "rejection_reason": v.get("rejection_reason", ""),
         "created_at": v.get("created_at"),
         "approved_at": v.get("approved_at"),
+        # Business Center fields
+        "shop_phone": v.get("shop_phone", v.get("phone", "")),
+        "shop_whatsapp": v.get("shop_whatsapp", v.get("phone", "")),
+        "shop_logo": v.get("shop_logo", ""),
+        "banner_image": v.get("banner_image", ""),
+        "business_hours": v.get("business_hours", {}),
+        "open_now": v.get("open_now", True),
+        "vacation_mode": v.get("vacation_mode", False),
+        "vacation_message": v.get("vacation_message", ""),
+        "delivery_radius_km": v.get("delivery_radius_km"),
+        "min_order_amount": v.get("min_order_amount", 0),
+        "estimated_delivery_min": v.get("estimated_delivery_min"),
+        "verified": v.get("status") == "Approved",
     }
 
 
@@ -832,6 +897,18 @@ async def get_public_vendor(vendor_id: str):
         "business_description": v.get("business_description", ""),
         "business_address": v.get("business_address", ""),
         "business_pincode": v.get("business_pincode", ""),
+        "shop_phone": v.get("shop_phone", v.get("phone", "")),
+        "shop_whatsapp": v.get("shop_whatsapp", v.get("phone", "")),
+        "shop_logo": v.get("shop_logo", ""),
+        "banner_image": v.get("banner_image", ""),
+        "business_hours": v.get("business_hours", {}),
+        "open_now": v.get("open_now", True),
+        "vacation_mode": v.get("vacation_mode", False),
+        "vacation_message": v.get("vacation_message", ""),
+        "delivery_radius_km": v.get("delivery_radius_km"),
+        "min_order_amount": v.get("min_order_amount", 0),
+        "estimated_delivery_min": v.get("estimated_delivery_min"),
+        "verified": True,
         "created_at": v.get("created_at"),
         "products": [product_to_out(p) for p in products],
     }
@@ -1045,6 +1122,108 @@ async def vendor_dashboard(user: dict = Depends(get_current_user)):
         "pending_orders": pending_count,
         "delivered_orders": delivered_count,
         "revenue": round(revenue, 2),
+        "low_stock": [product_to_out(p) for p in low_stock],
+    }
+
+
+# Vendor: shop settings (Business Center)
+@api.get("/vendor/settings")
+async def vendor_get_settings(user: dict = Depends(get_current_user)):
+    vendor = await get_vendor_for_user(user)
+    return vendor_to_out(vendor)
+
+
+@api.patch("/vendor/settings")
+async def vendor_update_settings(payload: VendorSettingsIn, user: dict = Depends(get_current_user)):
+    vendor = await get_vendor_for_user(user)
+    update = payload.model_dump(exclude_none=True)
+    if "business_hours" in update and isinstance(update["business_hours"], dict):
+        # Persist as plain dict of day -> "HH:MM-HH:MM" or "Closed"
+        update["business_hours"] = {k: v for k, v in update["business_hours"].items() if v is not None}
+    if "min_order_amount" in update and update["min_order_amount"] < 0:
+        raise HTTPException(status_code=400, detail="Min order must be >= 0")
+    if "delivery_radius_km" in update and update["delivery_radius_km"] < 0:
+        raise HTTPException(status_code=400, detail="Delivery radius must be >= 0")
+    if "estimated_delivery_min" in update and update["estimated_delivery_min"] < 0:
+        raise HTTPException(status_code=400, detail="ETA must be >= 0")
+    if not update:
+        return vendor_to_out(vendor)
+    await db.vendors.update_one({"_id": vendor["_id"]}, {"$set": update})
+    updated = await db.vendors.find_one({"_id": vendor["_id"]})
+    return vendor_to_out(updated)
+
+
+# Vendor: analytics
+@api.get("/vendor/analytics")
+async def vendor_analytics(user: dict = Depends(get_current_user)):
+    vendor = await get_vendor_for_user(user)
+    vid = str(vendor["_id"])
+    now = now_utc()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=6)
+    month_start = today_start - timedelta(days=29)
+
+    all_orders = await db.orders.find({"items.vendor_id": vid}).sort("created_at", -1).to_list(5000)
+
+    today_orders = 0
+    week_orders = 0
+    month_revenue = 0.0
+    total_revenue = 0.0
+    total_items_sold = 0
+    product_stats: dict = {}
+
+    for o in all_orders:
+        try:
+            created = datetime.fromisoformat(o["created_at"])
+        except Exception:
+            continue
+        if created >= today_start:
+            today_orders += 1
+        if created >= week_start:
+            week_orders += 1
+        for i in o["items"]:
+            if i.get("vendor_id") != vid:
+                continue
+            line_total = i["price"] * i["quantity"]
+            ls = i.get("line_status", "Pending")
+            if ls == "Delivered":
+                total_revenue += line_total
+                total_items_sold += i["quantity"]
+                if created >= month_start:
+                    month_revenue += line_total
+                pid = i.get("product_id")
+                if pid:
+                    s = product_stats.setdefault(pid, {"product_id": pid, "name": i["name"], "image": i["image"], "unit": i.get("unit", ""), "qty": 0, "revenue": 0.0})
+                    s["qty"] += i["quantity"]
+                    s["revenue"] += line_total
+
+    best_sellers = sorted(product_stats.values(), key=lambda s: s["revenue"], reverse=True)[:5]
+    for s in best_sellers:
+        s["revenue"] = round(s["revenue"], 2)
+
+    recent = []
+    for o in all_orders[:10]:
+        my_items = [i for i in o["items"] if i.get("vendor_id") == vid]
+        my_subtotal = round(sum(i["price"] * i["quantity"] for i in my_items), 2)
+        recent.append({
+            "id": str(o["_id"]),
+            "created_at": o.get("created_at"),
+            "customer_name": o.get("user_name"),
+            "my_subtotal": my_subtotal,
+            "overall_status": o["status"],
+            "items_count": len(my_items),
+        })
+
+    low_stock = await db.products.find({"vendor_id": vid, "stock": {"$lt": 5}}).limit(10).to_list(10)
+
+    return {
+        "today_orders": today_orders,
+        "week_orders": week_orders,
+        "month_revenue": round(month_revenue, 2),
+        "total_revenue": round(total_revenue, 2),
+        "total_items_sold": total_items_sold,
+        "best_sellers": best_sellers,
+        "recent_orders": recent,
         "low_stock": [product_to_out(p) for p in low_stock],
     }
 

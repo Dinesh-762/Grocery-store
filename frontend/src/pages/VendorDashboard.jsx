@@ -14,6 +14,10 @@ import {
   AlertTriangle,
   Clock,
   CheckCircle2,
+  BarChart3,
+  Settings,
+  Store,
+  Palmtree,
 } from "lucide-react";
 
 const ORDER_STATUSES = ["Pending", "Accepted", "Preparing", "Packed", "Ready", "Out For Delivery", "Delivered", "Cancelled"];
@@ -22,6 +26,8 @@ const vendorLinks = [
   { to: "/vendor", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/vendor/products", label: "Products", icon: Package },
   { to: "/vendor/orders", label: "Orders", icon: ShoppingBag },
+  { to: "/vendor/analytics", label: "Analytics", icon: BarChart3 },
+  { to: "/vendor/settings", label: "Shop Settings", icon: Settings },
 ];
 
 export default function VendorDashboard() {
@@ -55,6 +61,8 @@ export default function VendorDashboard() {
             <Route index element={<VDashboard />} />
             <Route path="products" element={<VProducts />} />
             <Route path="orders" element={<VOrders />} />
+            <Route path="analytics" element={<VAnalytics />} />
+            <Route path="settings" element={<VSettings />} />
             <Route path="*" element={<Navigate to="/vendor" replace />} />
           </Routes>
         </div>
@@ -80,9 +88,26 @@ function VDashboard() {
   return (
     <div className="space-y-8" data-testid="vendor-dashboard">
       <div className="card-base p-5">
-        <div className="text-xs uppercase tracking-wider text-[#4A4A4A]">Signed in as</div>
-        <div className="mt-1 font-heading text-2xl font-bold">{data.vendor.business_name}</div>
-        <div className="text-sm text-[#4A4A4A]">{data.vendor.owner_email} · {data.vendor.phone}</div>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-xs uppercase tracking-wider text-[#4A4A4A]">Signed in as</div>
+            <div className="mt-1 font-heading text-2xl font-bold">{data.vendor.business_name}</div>
+            <div className="text-sm text-[#4A4A4A]">{data.vendor.owner_email} · {data.vendor.phone}</div>
+          </div>
+          {data.vendor.vacation_mode ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-700" data-testid="vacation-badge">
+              <Palmtree className="h-3.5 w-3.5" /> Temporarily Closed
+            </span>
+          ) : data.vendor.open_now === false ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-yellow-100 px-3 py-1 text-xs font-semibold text-yellow-700">
+              <Clock className="h-3.5 w-3.5" /> Closed
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
+              <CheckCircle2 className="h-3.5 w-3.5" /> Open now
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -394,3 +419,269 @@ function VOrders() {
     </div>
   );
 }
+
+/* ================= ANALYTICS ================= */
+function VAnalytics() {
+  const [data, setData] = useState(null);
+  useEffect(() => {
+    api.get("/vendor/analytics").then(({ data }) => setData(data)).catch(() => {});
+  }, []);
+
+  if (!data) return <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#1B4332]" />;
+
+  const kpis = [
+    { label: "Today's orders", value: data.today_orders },
+    { label: "This week", value: data.week_orders },
+    { label: "This month (₹)", value: `₹${data.month_revenue}` },
+    { label: "Total revenue (₹)", value: `₹${data.total_revenue}` },
+  ];
+
+  return (
+    <div className="space-y-8" data-testid="vendor-analytics">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {kpis.map((k) => (
+          <div key={k.label} className="card-base p-5">
+            <div className="text-xs uppercase tracking-wider text-[#4A4A4A]">{k.label}</div>
+            <div className="mt-1 font-heading text-2xl font-bold">{k.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="card-base p-6">
+          <h3 className="font-heading text-lg font-semibold">Best-selling products</h3>
+          {data.best_sellers.length === 0 ? (
+            <p className="mt-3 text-sm text-[#4A4A4A]">No delivered orders yet. Sales will appear here once you fulfil orders.</p>
+          ) : (
+            <div className="mt-4 space-y-3">
+              {data.best_sellers.map((s) => (
+                <div key={s.product_id} className="flex items-center gap-3" data-testid={`best-seller-${s.product_id}`}>
+                  <img src={s.image} alt="" className="h-10 w-10 rounded-lg object-cover" />
+                  <div className="flex-1">
+                    <div className="text-sm font-semibold">{s.name}</div>
+                    <div className="text-xs text-[#4A4A4A]">{s.unit} · sold {s.qty}</div>
+                  </div>
+                  <div className="text-sm font-semibold text-[#1B4332]">₹{s.revenue}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="card-base p-6">
+          <h3 className="font-heading text-lg font-semibold">Recent orders</h3>
+          {data.recent_orders.length === 0 ? (
+            <p className="mt-3 text-sm text-[#4A4A4A]">No orders yet.</p>
+          ) : (
+            <div className="mt-4 space-y-3">
+              {data.recent_orders.map((o) => (
+                <div key={o.id} className="flex items-center justify-between border-b border-dashed pb-2 last:border-0 last:pb-0">
+                  <div>
+                    <div className="text-sm font-semibold">#{o.id.slice(-6).toUpperCase()}</div>
+                    <div className="text-xs text-[#4A4A4A]">{o.customer_name} · {o.items_count} item(s)</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-sm font-semibold text-[#1B4332]">₹{o.my_subtotal}</div>
+                    <div className="text-xs text-[#4A4A4A]">{o.overall_status}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {data.low_stock.length > 0 && (
+        <div className="card-base p-6">
+          <div className="mb-4 flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 text-[#E07A5F]" />
+            <h3 className="font-heading text-lg font-semibold">Low stock</h3>
+          </div>
+          <div className="space-y-3">
+            {data.low_stock.map((p) => (
+              <div key={p.id} className="flex items-center gap-3">
+                <img src={p.image} alt="" className="h-10 w-10 rounded-lg object-cover" />
+                <div className="flex-1">
+                  <div className="text-sm font-semibold">{p.name}</div>
+                  <div className="text-xs text-[#4A4A4A]">{p.unit}</div>
+                </div>
+                <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${p.stock === 0 ? "bg-red-100 text-red-700" : "bg-yellow-100 text-yellow-700"}`}>
+                  {p.stock} left
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================= SHOP SETTINGS ================= */
+const DAYS = [
+  { key: "mon", label: "Mon" },
+  { key: "tue", label: "Tue" },
+  { key: "wed", label: "Wed" },
+  { key: "thu", label: "Thu" },
+  { key: "fri", label: "Fri" },
+  { key: "sat", label: "Sat" },
+  { key: "sun", label: "Sun" },
+];
+
+function VSettings() {
+  const [v, setV] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api.get("/vendor/settings").then(({ data }) => setV(data)).catch(() => {});
+  }, []);
+
+  if (!v) return <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#1B4332]" />;
+
+  const up = (k, val) => setV((prev) => ({ ...prev, [k]: val }));
+  const upHour = (day, val) => setV((prev) => ({ ...prev, business_hours: { ...(prev.business_hours || {}), [day]: val } }));
+
+  const save = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const { data } = await api.patch("/vendor/settings", {
+        business_name: v.business_name,
+        business_description: v.business_description,
+        business_address: v.business_address,
+        business_pincode: v.business_pincode,
+        shop_phone: v.shop_phone,
+        shop_whatsapp: v.shop_whatsapp,
+        shop_logo: v.shop_logo,
+        banner_image: v.banner_image,
+        business_hours: v.business_hours || {},
+        open_now: !!v.open_now,
+        vacation_mode: !!v.vacation_mode,
+        vacation_message: v.vacation_message || "",
+        delivery_radius_km: v.delivery_radius_km ? Number(v.delivery_radius_km) : null,
+        min_order_amount: v.min_order_amount ? Number(v.min_order_amount) : 0,
+        estimated_delivery_min: v.estimated_delivery_min ? Number(v.estimated_delivery_min) : null,
+      });
+      setV(data);
+      toast.success("Shop settings saved");
+    } catch (e) { toast.error(formatApiError(e)); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <form onSubmit={save} className="space-y-8" data-testid="vendor-settings">
+      {/* Status */}
+      <section className="card-base p-6">
+        <div className="mb-4 flex items-center gap-2">
+          <Store className="h-5 w-5 text-[#1B4332]" />
+          <h2 className="font-heading text-lg font-semibold">Shop status</h2>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-[#E5E5E5] p-4 hover:border-[#8BA888]">
+            <input
+              type="checkbox"
+              checked={!!v.open_now}
+              onChange={(e) => up("open_now", e.target.checked)}
+              className="mt-1"
+              data-testid="toggle-open"
+            />
+            <div>
+              <div className="font-semibold">Open now</div>
+              <div className="text-xs text-[#4A4A4A]">Turn off temporarily during rush / short break.</div>
+            </div>
+          </label>
+          <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-[#E5E5E5] p-4 hover:border-[#8BA888]">
+            <input
+              type="checkbox"
+              checked={!!v.vacation_mode}
+              onChange={(e) => up("vacation_mode", e.target.checked)}
+              className="mt-1"
+              data-testid="toggle-vacation"
+            />
+            <div>
+              <div className="font-semibold">Vacation mode</div>
+              <div className="text-xs text-[#4A4A4A]">Products stay visible with a &ldquo;Temporarily closed&rdquo; badge. Customers cannot place new orders.</div>
+            </div>
+          </label>
+          <div className="sm:col-span-2">
+            <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Vacation message (optional)</label>
+            <input value={v.vacation_message || ""} onChange={(e) => up("vacation_message", e.target.value)} placeholder="Closed for Diwali until Nov 5" className="input-base" data-testid="vacation-message" />
+          </div>
+        </div>
+      </section>
+
+      {/* Profile */}
+      <section className="card-base p-6">
+        <h2 className="font-heading text-lg font-semibold">Business profile</h2>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <FF label="Business name" value={v.business_name} onChange={(x) => up("business_name", x)} required />
+          <FF label="Pincode" value={v.business_pincode || ""} onChange={(x) => up("business_pincode", x)} />
+          <div className="sm:col-span-2">
+            <FF label="Address" value={v.business_address || ""} onChange={(x) => up("business_address", x)} />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">About your business</label>
+            <textarea value={v.business_description || ""} onChange={(e) => up("business_description", e.target.value)} rows={3} className="input-base resize-none" />
+          </div>
+          <FF label="Shop phone" value={v.shop_phone || ""} onChange={(x) => up("shop_phone", x)} placeholder="+91..." />
+          <FF label="Shop WhatsApp" value={v.shop_whatsapp || ""} onChange={(x) => up("shop_whatsapp", x)} placeholder="+91..." />
+          <FF label="Shop logo URL" value={v.shop_logo || ""} onChange={(x) => up("shop_logo", x)} />
+          <FF label="Banner image URL" value={v.banner_image || ""} onChange={(x) => up("banner_image", x)} />
+        </div>
+      </section>
+
+      {/* Operations */}
+      <section className="card-base p-6">
+        <h2 className="font-heading text-lg font-semibold">Operations</h2>
+        <div className="mt-4 grid gap-4 sm:grid-cols-3">
+          <FF label="Delivery radius (km)" type="number" value={v.delivery_radius_km || ""} onChange={(x) => up("delivery_radius_km", x)} />
+          <FF label="Min order amount (₹)" type="number" value={v.min_order_amount || ""} onChange={(x) => up("min_order_amount", x)} />
+          <FF label="Estimated delivery (min)" type="number" value={v.estimated_delivery_min || ""} onChange={(x) => up("estimated_delivery_min", x)} />
+        </div>
+      </section>
+
+      {/* Hours */}
+      <section className="card-base p-6">
+        <h2 className="font-heading text-lg font-semibold">Business hours</h2>
+        <p className="mt-1 text-xs text-[#4A4A4A]">Use format like &ldquo;08:00-21:00&rdquo; or type &ldquo;Closed&rdquo;.</p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          {DAYS.map((d) => (
+            <div key={d.key} className="flex items-center gap-3">
+              <div className="w-14 text-sm font-semibold">{d.label}</div>
+              <input
+                value={v.business_hours?.[d.key] || ""}
+                onChange={(e) => upHour(d.key, e.target.value)}
+                placeholder="08:00-21:00"
+                className="input-base"
+                data-testid={`hours-${d.key}`}
+              />
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Verification (read-only summary) */}
+      <section className="card-base p-6">
+        <h2 className="font-heading text-lg font-semibold">Verification</h2>
+        <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
+          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
+            v.status === "Approved" ? "bg-green-100 text-green-700" :
+            v.status === "Rejected" ? "bg-red-100 text-red-700" :
+            v.status === "Suspended" ? "bg-gray-200 text-gray-700" :
+            "bg-yellow-100 text-yellow-700"
+          }`}>{v.status}</span>
+          {v.verified && <span className="rounded-full bg-[#8BA888]/20 px-3 py-1 text-xs font-semibold text-[#1B4332]">Verified badge active</span>}
+          <span className="text-xs text-[#4A4A4A]">Documents were submitted at registration and reviewed by admin.</span>
+        </div>
+      </section>
+
+      <div className="flex justify-end">
+        <button type="submit" disabled={saving} className="btn-primary" data-testid="save-settings">
+          {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+          Save settings
+        </button>
+      </div>
+    </form>
+  );
+}
+
