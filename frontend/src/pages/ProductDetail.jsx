@@ -13,6 +13,8 @@ export default function ProductDetail() {
   const [related, setRelated] = useState([]);
   const [loading, setLoading] = useState(true);
   const [qty, setQty] = useState(1);
+  const [selectedVariant, setSelectedVariant] = useState(null);
+  const [customNote, setCustomNote] = useState("");
 
   useEffect(() => {
     setLoading(true);
@@ -109,6 +111,41 @@ export default function ProductDetail() {
 
           <p className="mt-6 leading-relaxed text-[#4A4A4A]">{product.description || "Fresh, quality-checked and delivered fast."}</p>
 
+          {/* Variants */}
+          {product.variants && product.variants.length > 0 && (
+            <div className="mt-6" data-testid="variant-picker">
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#4A4A4A]">Choose size / pack</div>
+              <div className="flex flex-wrap gap-2">
+                {product.variants.map((v) => {
+                  const active = selectedVariant?.label === v.label;
+                  return (
+                    <button
+                      key={v.label}
+                      onClick={() => setSelectedVariant(active ? null : v)}
+                      className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${active ? "border-[#1B4332] bg-[#1B4332] text-white" : "border-[#E5E5E5] text-[#1A1A1A] hover:border-[#1B4332]"}`}
+                      data-testid={`variant-${v.label}`}
+                    >
+                      {v.label} · ₹{v.price}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Custom quantity note */}
+          <div className="mt-4">
+            <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Custom quantity / note (optional)</label>
+            <input
+              value={customNote}
+              onChange={(e) => setCustomNote(e.target.value)}
+              placeholder="e.g. 750 grams, riper ones please"
+              className="input-base"
+              data-testid="custom-note-input"
+              maxLength={140}
+            />
+          </div>
+
           <div className="mt-8 flex flex-wrap items-center gap-4">
             <div className="flex items-center gap-2 rounded-full border border-[#1B4332] p-1">
               <button
@@ -130,7 +167,12 @@ export default function ProductDetail() {
 
             <button
               disabled={product.stock <= 0}
-              onClick={() => addItem(product, qty)}
+              onClick={() => {
+                const variantExtras = selectedVariant
+                  ? { variant_label: selectedVariant.label, price: selectedVariant.price, unit: selectedVariant.unit || product.unit }
+                  : {};
+                addItem({ ...product, ...variantExtras }, qty, customNote.trim() || null, selectedVariant?.label || null);
+              }}
               className="btn-primary flex-1 sm:flex-initial"
               data-testid="add-to-cart-btn"
             >
@@ -140,7 +182,10 @@ export default function ProductDetail() {
             <button
               disabled={product.stock <= 0}
               onClick={() => {
-                addItem(product, qty);
+                const variantExtras = selectedVariant
+                  ? { variant_label: selectedVariant.label, price: selectedVariant.price, unit: selectedVariant.unit || product.unit }
+                  : {};
+                addItem({ ...product, ...variantExtras }, qty, customNote.trim() || null, selectedVariant?.label || null);
                 navigate("/checkout");
               }}
               className="btn-accent flex-1 sm:flex-initial"

@@ -53,8 +53,12 @@ export default function Cart() {
                 <div>
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <div className="font-semibold text-[#1A1A1A]">{it.name}</div>
+                      <div className="font-semibold text-[#1A1A1A]">
+                        {it.name}
+                        {it.variant_label && <span className="ml-1 rounded-full bg-[#8BA888]/20 px-2 py-0.5 text-[10px] font-semibold text-[#1B4332]">{it.variant_label}</span>}
+                      </div>
                       <div className="text-xs text-gray-500">{it.unit}</div>
+                      {it.note && <div className="mt-0.5 text-xs italic text-[#4A4A4A]">Note: {it.note}</div>}
                     </div>
                     <button
                       onClick={() => removeItem(it.product_id)}

@@ -53,7 +53,16 @@ export default function Checkout() {
     setSubmitting(true);
     try {
       const { data } = await api.post("/orders", {
-        items,
+        items: items.map((i) => ({
+          product_id: i.product_id,
+          name: i.name,
+          price: i.price,
+          quantity: i.quantity,
+          image: i.image,
+          unit: i.unit,
+          variant_label: i.variant_label || null,
+          note: i.note || null,
+        })),
         address: {
           full_name: form.full_name,
           phone: form.phone,
@@ -71,12 +80,21 @@ export default function Checkout() {
       clearCart();
       toast.success("Order placed successfully!");
 
-      // WhatsApp confirmation
-      const num = store.whatsapp.replace(/[^\d]/g, "");
-      const msg = encodeURIComponent(
-        `New order #${data.id.slice(-6).toUpperCase()}\n${data.items.length} item(s) — ${formatINR(data.total)}\nName: ${data.address.full_name}\nPhone: ${data.address.phone}\nAddress: ${data.address.line1}, ${data.address.area}, ${data.address.pincode}\nPayment: ${data.payment_method}`
+      // 1) Store-facing notification with FULL order details (existing behavior — improved)
+      const storeNum = store.whatsapp.replace(/[^\d]/g, "");
+      const itemsBlock = data.items.map((it) =>
+        `- ${it.name}${it.variant_label ? ` (${it.variant_label})` : ` (${it.unit})`} x ${it.quantity} @ ₹${it.price} = ₹${(it.price * it.quantity).toFixed(2)}${it.note ? `\n  Note: ${it.note}` : ""}`
+      ).join("\n");
+      const storeMsg = encodeURIComponent(
+        `NEW ORDER #${data.id.slice(-6).toUpperCase()}\n\n${itemsBlock}\n\nSubtotal: ₹${data.subtotal}\nDelivery: ${data.delivery_fee === 0 ? "FREE" : "₹" + data.delivery_fee}${data.discount ? `\nDiscount: -₹${data.discount}` : ""}\nTotal: ₹${data.total}\nPayment: ${data.payment_method}\n\nCustomer: ${data.address.full_name}\nPhone: ${data.address.phone}\nAddress: ${data.address.line1}${data.address.landmark ? ", " + data.address.landmark : ""}, ${data.address.area}, ${data.address.pincode}`
       );
-      window.open(`https://wa.me/${num}?text=${msg}`, "_blank");
+      window.open(`https://wa.me/${storeNum}?text=${storeMsg}`, "_blank");
+
+      // 2) Customer-facing thank-you (server template with full details)
+      try {
+        const { data: notif } = await api.post("/notify/order-whatsapp", { order_id: data.id, event: "placed" });
+        setTimeout(() => window.open(notif.url, "_blank"), 350);
+      } catch { /* non-blocking */ }
 
       navigate(`/orders/${data.id}`);
     } catch (e) {

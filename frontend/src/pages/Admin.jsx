@@ -590,6 +590,15 @@ function OrdersAdmin() {
                     {ev}
                   </button>
                 ))}
+                {o.status === "Delivered" && (
+                  <button
+                    onClick={() => notify(o.id, "feedback")}
+                    className="rounded-full border border-[#E07A5F] px-2.5 py-0.5 text-xs font-semibold text-[#E07A5F] hover:bg-[#E07A5F]/10"
+                    data-testid={`wa-feedback-${o.id}`}
+                  >
+                    Ask feedback
+                  </button>
+                )}
               </div>
             </div>
           ))}

@@ -1,0 +1,47 @@
+{
+  "summary": "Iteration 12 testing (backend + frontend). Backend: created /app/backend/tests/test_iteration12_order_flow.py — 20/20 pytest cases PASS covering product `variants` on admin POST/PUT + vendor POST, GET /api/products/{slug} variants, server-side variant price/unit authority on POST /api/orders (client price=1 correctly overridden to variant price 110), unknown variant_label -> 400, item note persistence + blank-note normalisation to null, two independent variant products, same-product multiple lines with different variant/note, non-variant regression, coupon apply on a variant order, admin status->Delivered, /api/admin/analytics, and /api/notify/order-whatsapp 'placed' (full itemised template, subtotal/delivery/discount/total, payment, full address, 'Estimated delivery: 30-45 minutes', wa.me 91-prefixed customer phone) + 'feedback' 1-5 star template + RBAC (other customer 403, missing order_id 400, bad id 404, unauth 401/403). Frontend: PDP variant picker + custom note -> cart -> checkout -> order detail flow verified end-to-end on the public preview URL; store-facing wa.me message is fully itemised; customer thank-you POST /api/notify/order-whatsapp {placed} fires and second tab opens with correct URL/message; Admin Orders shows 'Ask feedback' ONLY on Delivered orders and it opens the correct feedback wa.me link. Two HIGH cart bugs found (variant lines not individually addressable) and one variant price-display bug on PDP.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ProductDetail.jsx", "issue": "Selecting a variant chip does NOT update the main price display — data-testid=product-price stays at product.price (₹60) even when the 1kg/₹110 chip is active (MRP/'% off'/unit line also stay on base values). Cart receives the correct variant price, so it is purely a display/trust bug but contradicts the requirement 'selecting a chip changes the price display'. Fix: derive displayed price/mrp/unit from selectedVariant ?? product.", "selector": "[data-testid=\"product-price\"], [data-testid=\"variant-1kg\"]", "priority": "HIGH"},
+      {"component": "CartContext.jsx removeItem/setQuantity", "issue": "Both operate on product_id only. With two lines of the same product (different variant/note): incrementing qty on one line changes BOTH lines to qty 2, and clicking remove on one line deletes BOTH lines (verified: cart went from 2 lines to 0). Needs a stable line key (product_id+variant_label+note) or a line id.", "selector": "[data-testid^=\"remove-\"], [data-testid^=\"cart-item-\"]", "priority": "CRITICAL"},
+      {"component": "Cart.jsx", "issue": "React key + data-testid collision: key={it.product_id} and data-testid=cart-item-<product_id>/remove-<product_id> are duplicated for multiple variant lines of the same product. Console error 'Encountered two children with the same key' repeats on cart/checkout, and the duplicate testids make the lines untestable/ambiguous.", "selector": "[data-testid=\"cart-item-<pid>\"]", "priority": "HIGH"},
+      {"component": "Admin/Vendor product form", "issue": "No variants editor in the admin (Admin.jsx ProductForm) or vendor product form — `variants` can only be set via API/curl, so store owners cannot create variant products from the UI.", "selector": "[data-testid=\"product-form-modal\"]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "ProductDetail (variant product)", "issues": ["Active variant chip shows ₹110 while the big price above still reads ₹60 with '25% off' badge computed from base price — visually contradictory/misleading pricing."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration12_order_flow.py",
+    "/app/backend/tests/seed_it12_ui.py",
+    "/app/test_reports/pytest/it12_results.xml"
+  ],
+  "action_items": [
+    "ProductDetail.jsx: show selectedVariant price/mrp/unit in [data-testid=product-price] (and discount badge) when a variant is chosen.",
+    "CartContext.jsx: make removeItem/setQuantity line-scoped (match product_id + variant_label + note, or add a generated line_id) — currently they mutate/delete every line of the same product.",
+    "Cart.jsx: use the line key for React key and data-testid (cart-item-<lineKey>, remove-<lineKey>) to remove duplicate keys/testids and the console error.",
+    "Optional: add a variants editor to the admin/vendor product forms so variant products can be created without curl."
+  ],
+  "critical_code_review_comments": [
+    "Variant price authority is correctly server-side (POST /api/orders ignores client price and resolves from DB variants; unknown label -> 400) — verified with client price=1.",
+    "CartContext identity model is inconsistent: addItem dedupes on (product_id, variant_label, note) but removeItem/setQuantity dedupe on product_id only — root cause of both HIGH cart bugs.",
+    "notify_order_whatsapp phone normalisation handles 10-digit and leading-0 numbers but not stray non-digit chars beyond space/+/- (e.g. '(0)') — low risk.",
+    "server.py is 1976 lines; consider splitting into routers (products/orders/vendor/notify) per the 700-line guideline."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration12_order_flow.py",
+    "/app/backend/tests/seed_it12_ui.py"
+  ],
+  "success_rate": {"backend": "100% (20/20)", "frontend": "70% (variant picker price display + cart line-scoping failed; PDP note, cart display, checkout WA messages, order detail, admin feedback button all passed)"},
+  "seed_data_creation": "Persistent UI seed product 'TEST It12 UI Variant Dal' slug=test-it12-ui-variant-product (variants 500g/₹60, 1kg/₹110, stock 999) via /app/backend/tests/seed_it12_ui.py (idempotent). Test customers TEST_it12_*@example.com / Test@123. Pytest-created products are auto-deleted; a few TEST orders remain in admin Orders list.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "admin@ambajogai.com / Admin@123 (admin); test_vendor_ui_1785253172@example.com / Vendor@123 (vendor); customer created per-run via /api/auth/register",
+  "context_for_next_testing_agent": "Run `pytest tests/test_iteration12_order_flow.py` from /app/backend (fixtures are worker-safe: register-or-login, uuid slugs; coupon endpoint is /api/admin/coupons, analytics is /api/admin/analytics). Re-seed the UI variant product with `python /app/backend/tests/seed_it12_ui.py` before UI runs. Re-verify after fixes: (1) PDP price display reflects the selected variant chip, (2) remove/qty on one variant cart line does not affect the other line, (3) no duplicate React key console errors on /cart. Backend variant/note/WhatsApp templates need no retest. Vacation-mode block and delivery-boy panel regressions were NOT re-run this iteration (covered in iterations 9-11).",
+  "rca_of_the_issue": "PDP: the price block renders formatINR(product.price) unconditionally (ProductDetail.jsx L89-99) and never consults selectedVariant, while add-to-cart merges variantExtras into the product — hence correct cart price but stale display. Cart: CartContext.addItem keys a line by (product_id, variant_label, note) but removeItem (L49-51) filters and setQuantity (L53-59) maps by product_id alone, so every line sharing the product_id is mutated/removed; Cart.jsx compounds this by using product_id as React key and data-testid, producing duplicate keys."
+}

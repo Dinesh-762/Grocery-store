@@ -18,9 +18,12 @@ export function CartProvider({ children }) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
   }, [items]);
 
-  const addItem = (product, qty = 1) => {
+  const addItem = (product, qty = 1, note = null, variant_label = null) => {
     setItems((prev) => {
-      const idx = prev.findIndex((p) => p.product_id === product.id);
+      // Same product + variant combo merges; different variants or notes stay separate
+      const idx = prev.findIndex(
+        (p) => p.product_id === product.id && (p.variant_label || null) === (variant_label || null) && (p.note || null) === (note || null)
+      );
       if (idx >= 0) {
         const next = [...prev];
         next[idx] = { ...next[idx], quantity: next[idx].quantity + qty };
@@ -35,10 +38,12 @@ export function CartProvider({ children }) {
           image: product.image,
           unit: product.unit,
           quantity: qty,
+          variant_label: variant_label || null,
+          note: note || null,
         },
       ];
     });
-    toast.success(`${product.name} added to cart`);
+    toast.success(`${product.name}${variant_label ? ` (${variant_label})` : ""} added to cart`);
   };
 
   const removeItem = (product_id) => {

@@ -184,6 +184,7 @@ class ProductIn(BaseModel):
     stock: int = 0
     featured: bool = False
     popular: bool = False
+    variants: Optional[List[dict]] = None  # [{label, price, unit}]
 
 
 class ProductOut(ProductIn):
@@ -211,6 +212,8 @@ class OrderItem(BaseModel):
     quantity: int
     image: str
     unit: str
+    variant_label: Optional[str] = None
+    note: Optional[str] = None
 
 
 class OrderIn(BaseModel):
@@ -268,6 +271,7 @@ def product_to_out(p: dict) -> dict:
         "vendor_id": p.get("vendor_id"),
         "vendor_name": p.get("vendor_name"),
         "approval_status": p.get("approval_status", "approved"),
+        "variants": p.get("variants") or [],
     }
 
 
@@ -515,6 +519,16 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
             raise HTTPException(status_code=400, detail="Quantity must be positive")
         if prod.get("stock", 0) < it.quantity:
             raise HTTPException(status_code=400, detail=f"Insufficient stock for {prod['name']}")
+        # Variant resolution — if variant_label supplied, use that variant's price+unit
+        eff_price = prod["price"]
+        eff_unit = prod.get("unit", "1 pc")
+        if it.variant_label:
+            variants = prod.get("variants") or []
+            match = next((v for v in variants if v.get("label") == it.variant_label), None)
+            if not match:
+                raise HTTPException(status_code=400, detail=f"Unknown variant '{it.variant_label}' for {prod['name']}")
+            eff_price = float(match.get("price", eff_price))
+            eff_unit = match.get("unit", eff_unit)
         # Vacation-mode / open-now check per vendor
         vid = prod.get("vendor_id")
         if vid:
@@ -526,17 +540,19 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
                 raise HTTPException(status_code=400, detail=f"{vend.get('business_name', 'This vendor')} is temporarily closed. Please remove their items and try again.")
             if vend and vend.get("open_now") is False:
                 raise HTTPException(status_code=400, detail=f"{vend.get('business_name', 'This vendor')} is not accepting orders right now.")
-            vendor_min_totals[vid] = vendor_min_totals.get(vid, 0.0) + prod["price"] * it.quantity
+            vendor_min_totals[vid] = vendor_min_totals.get(vid, 0.0) + eff_price * it.quantity
         verified_items.append({
             "product_id": str(prod["_id"]),
             "name": prod["name"],
-            "price": prod["price"],
+            "price": eff_price,
             "quantity": it.quantity,
             "image": prod["image"],
-            "unit": prod.get("unit", "1 pc"),
+            "unit": eff_unit,
             "vendor_id": prod.get("vendor_id"),
             "vendor_name": prod.get("vendor_name"),
             "line_status": "Pending",
+            "variant_label": it.variant_label,
+            "note": (it.note or "").strip() or None,
         })
 
     # Enforce per-vendor min_order_amount
@@ -1651,12 +1667,54 @@ async def notify_order_whatsapp(payload: dict, user: dict = Depends(get_current_
         raise HTTPException(status_code=403, detail="Order not assigned to you")
 
     short_id = str(o["_id"])[-6:].upper()
+
+    # Detailed item breakdown for placed / update events
+    def _fmt_items(items):
+        lines = []
+        for i in items:
+            label = i["name"]
+            if i.get("variant_label"):
+                label += f" ({i['variant_label']})"
+            elif i.get("unit"):
+                label += f" ({i['unit']})"
+            line = f"- {label} x {i['quantity']} @ ₹{i['price']} = ₹{round(i['price']*i['quantity'],2)}"
+            if i.get("note"):
+                line += f"\n  Note: {i['note']}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    items_block = _fmt_items(o["items"])
+    addr = o["address"]
+    full_addr = f"{addr['line1']}"
+    if addr.get("landmark"): full_addr += f", {addr['landmark']}"
+    full_addr += f", {addr['area']}, {addr.get('city','Ambajogai')} - {addr['pincode']}"
+
+    placed_detail = (
+        f"Hi {o['user_name']}, thank you for your order at Ambajogai Grocery Store! 🙏\n\n"
+        f"*Order #{short_id}*\n"
+        f"{items_block}\n\n"
+        f"Subtotal: ₹{o.get('subtotal', o['total'])}\n"
+        f"Delivery: {'FREE' if o.get('delivery_fee', 0) == 0 else '₹' + str(o.get('delivery_fee', 0))}"
+        + (f"\nDiscount: -₹{o.get('discount', 0)}" if o.get("discount", 0) else "")
+        + f"\n*Total: ₹{o['total']}*\n"
+        f"Payment: {o['payment_method']}\n\n"
+        f"Delivering to: {addr['full_name']} · {addr['phone']}\n{full_addr}\n\n"
+        f"Estimated delivery: 30-45 minutes. We'll message you as soon as your order is on its way. 💚"
+    )
+
+    feedback_msg = (
+        f"Hi {o['user_name']}, hope you enjoyed your Ambajogai Grocery order #{short_id}! 🌿\n\n"
+        f"Could you share a quick rating (1-5 ⭐) and let us know what we did well and where we can improve?\n\n"
+        f"Just reply to this chat — it takes 30 seconds and helps us serve you better. Thank you!"
+    )
+
     templates = {
-        "placed": f"Hi {o['user_name']}, your Ambajogai Grocery order #{short_id} has been placed and is being reviewed. Total ₹{o['total']}. We'll keep you posted!",
-        "accepted": f"Hi {o['user_name']}, your Ambajogai Grocery order #{short_id} has been accepted and is being prepared. Estimated total ₹{o['total']}.",
+        "placed": placed_detail,
+        "accepted": f"Hi {o['user_name']}, your Ambajogai Grocery order #{short_id} has been accepted and is being prepared. Total ₹{o['total']}.",
         "dispatched": f"Hi {o['user_name']}, your Ambajogai Grocery order #{short_id} is out for delivery. Please keep the payment of ₹{o['total']} ready if paying COD.",
-        "delivered": f"Hi {o['user_name']}, your Ambajogai Grocery order #{short_id} has been delivered. Thanks for shopping with us — please rate your experience!",
+        "delivered": f"Hi {o['user_name']}, your Ambajogai Grocery order #{short_id} has been delivered. Thanks for shopping with us! 🌿",
         "payment": f"Hi {o['user_name']}, we've received your payment for order #{short_id} (₹{o['total']}). Thanks!",
+        "feedback": feedback_msg,
         "update": f"Hi {o['user_name']}, update on your Ambajogai Grocery order #{short_id} — current status: {o['status']}.",
     }
     message = templates.get(event, templates["update"])

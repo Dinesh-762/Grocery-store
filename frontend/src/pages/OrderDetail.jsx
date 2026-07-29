@@ -112,8 +112,12 @@ export default function OrderDetail() {
               <div key={idx} className="flex items-center gap-4">
                 <img src={it.image} alt="" className="h-16 w-16 rounded-xl object-cover" />
                 <div className="flex-1">
-                  <div className="font-semibold">{it.name}</div>
+                  <div className="font-semibold">
+                    {it.name}
+                    {it.variant_label && <span className="ml-1 rounded-full bg-[#8BA888]/20 px-2 py-0.5 text-[10px] font-semibold text-[#1B4332]">{it.variant_label}</span>}
+                  </div>
                   <div className="text-xs text-[#4A4A4A]">{it.unit} · Qty {it.quantity}</div>
+                  {it.note && <div className="text-xs italic text-[#4A4A4A]">Note: {it.note}</div>}
                 </div>
                 <div className="font-semibold text-[#1B4332]">{formatINR(it.price * it.quantity)}</div>
               </div>
