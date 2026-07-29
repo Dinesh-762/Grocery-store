@@ -436,6 +436,13 @@ function VAnalytics() {
     { label: "Total revenue (₹)", value: `₹${data.total_revenue}` },
   ];
 
+  const earningsRow = [
+    { label: "Gross sales", value: `₹${data.total_revenue}`, color: "text-[#1B4332]" },
+    { label: `Commission (${data.commission_pct}%)`, value: `- ₹${data.commission_deducted}`, color: "text-[#E07A5F]" },
+    { label: "Net earnings", value: `₹${data.net_earnings}`, color: "text-[#1B4332]" },
+    { label: "Pending payment", value: `₹${data.pending_payment}`, color: "text-[#F4A261]" },
+  ];
+
   return (
     <div className="space-y-8" data-testid="vendor-analytics">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -445,6 +452,19 @@ function VAnalytics() {
             <div className="mt-1 font-heading text-2xl font-bold">{k.value}</div>
           </div>
         ))}
+      </div>
+
+      <div className="card-base p-6" data-testid="earnings-breakdown">
+        <h3 className="font-heading text-lg font-semibold">Earnings breakdown</h3>
+        <p className="mt-1 text-xs text-[#4A4A4A]">Based on your delivered orders. Payouts are settled by the admin.</p>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {earningsRow.map((r) => (
+            <div key={r.label} className="rounded-xl border border-[#E5E5E5] p-4">
+              <div className="text-xs uppercase tracking-wider text-[#4A4A4A]">{r.label}</div>
+              <div className={`mt-1 font-heading text-xl font-bold ${r.color}`}>{r.value}</div>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">

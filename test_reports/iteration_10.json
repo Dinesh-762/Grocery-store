@@ -1,0 +1,52 @@
+{
+  "summary": "Iteration 10 (commission mgmt, vendor earnings, delivery boy panel, smart assignment, WhatsApp helper, admin sales analytics, vendor performance) tested end-to-end. Backend: new pytest file tests/test_iteration10_business.py — 28/28 pass. Targeted regression: 134 previously existing cases (backend_test, it6/7/8/9, vendor_phase1) all pass. Frontend: FOUND AND FIXED a critical white-screen crash (missing DeliveryPanel import in App.js) that broke the ENTIRE app; after the fix, admin analytics, delivery-boys CRUD, order assignment, WhatsApp deep-link buttons, vendor commission input, delivery panel (dashboard/my-orders/history + status buttons) and vendor earnings-breakdown all verified working. One real UI defect remains: revenue trend chart bars render at 0px height.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/admin/analytics", "issue": "platform_commission_earned / vendor payout are recomputed at READ time using the vendor's CURRENT commission_pct, so changing a vendor's % retroactively rewrites historical commission for already-delivered orders (verified: raising 20%->40% changed commission on previously delivered orders). Recommend snapshotting commission_pct (or commission amount) on the order line at delivery time."},
+      {"endpoint": "GET /api/admin/analytics", "issue": "total_revenue is the sum of ALL delivered orders ever (not limited by ?days window) while daily_trend respects the window — KPI card labelled inside a 'Last 14 days' view is therefore misleading. Also total_revenue (order totals incl. delivery fee) != commission + vendor payout (line totals), which looks like a math error in the UI (₹1710 vs 117+1053)."},
+      {"endpoint": "DELETE /api/admin/delivery-partners/{id}", "issue": "Deleting a delivery partner leaves delivery_partner_id/name/earning on their orders (dangling assignment still shown in Admin Orders). Consider unassigning or blocking delete when active orders exist."},
+      {"endpoint": "GET /api/delivery/earnings", "issue": "Buckets today/week/month are computed from order created_at, not from the delivered timestamp, so an old order delivered today counts in an old bucket (never in 'today'). Minor business-logic inconsistency."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Admin > Analytics > Revenue trend", "issue": "Chart bars are invisible: bar div uses style height:{n}% but its parent column (flex flex-1 flex-col) has auto height (measured parentHeight=19px, bar height=0px). Chart area is blank with only date labels. Fix: give the column h-full + justify-end (or use a fixed-height bar track).", "selector": "[data-testid=\"trend-chart\"]", "priority": "HIGH"},
+      {"component": "Admin > Vendors commission input", "issue": "Commission saves only on blur (onBlur); pressing Enter does nothing and gives no feedback. Add onKeyDown Enter -> commit for usability.", "selector": "[data-testid^=\"commission-input-\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin > Analytics", "issues": ["Revenue trend card is an empty white block because of the 0-height bars", "KPI 'Total revenue' (all-time) sits next to window-scoped chart which reads as inconsistent"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration10_business.py",
+    "/app/test_reports/pytest/it10_results.xml"
+  ],
+  "action_items": [
+    "CRITICAL (already patched by tester, please keep): App.js was missing `import DeliveryPanel from \"@/pages/DeliveryPanel\"` — every route rendered a blank page with 'DeliveryPanel is not defined'. Ensure future route additions include the import and do a quick smoke load.",
+    "Fix the Revenue trend bar heights in Admin Analytics (parent column needs h-full/justify-end).",
+    "Decide on commission snapshotting so historical commission doesn't change when a vendor's % is edited.",
+    "Scope admin analytics total_revenue to the ?days window (or relabel the KPI 'all time').",
+    "Unassign delivery partner from orders on DELETE, or prevent delete while orders are assigned.",
+    "Optional: commit commission input on Enter as well as blur."
+  ],
+  "critical_code_review_comments": [
+    "App.js referenced a component that was never imported — build-time lint would have caught it; add `no-undef`/CI lint gate before shipping route changes.",
+    "/app/backend/server.py is 1918 lines — split into routers (admin, vendor, delivery, orders, catalog) for maintainability.",
+    "CORS is configured with allow_credentials=True and allow_origins default '*' — invalid combination per the CORS spec (works only because auth uses Bearer tokens, not cookies). Set explicit origins via CORS_ORIGINS.",
+    "notify_order_whatsapp accepts a raw dict payload instead of a Pydantic model — no validation of event enum; unknown events silently fall back to 'update'.",
+    "delivery_update_status overwrites line_status for ALL vendors' lines on an order; for multi-vendor orders a delivery boy can mark another vendor's line Delivered — verify this is intended."
+  ],
+  "updated_files": [
+    "/app/frontend/src/App.js (added missing DeliveryPanel import — unblocked all frontend testing)",
+    "/app/backend/tests/test_iteration10_business.py (new)"
+  ],
+  "success_rate": {"backend": "100% (28/28 new, 134/134 regression)", "frontend": "92% (all flows pass except revenue trend chart rendering)"},
+  "seed_data_creation": "Backend test DP dp_e2e_<ts>@example.com created+deleted by fixture. UI-created delivery boy left in place for reuse: dp_ui_1785304926@example.com / Delivery@123 (role=delivery, active). Test customers TEST_it10_*@example.com and several TEST orders on vendor 'TEST UI Kirana 1785253172'. Vendor commission restored to 10%.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "Admin admin@ambajogai.com/Admin@123; Vendor test_vendor_ui_1785253172@example.com/Vendor@123 (commission 10%); Delivery dp_ui_1785304926@example.com/Delivery@123",
+  "context_for_next_testing_agent": "Backend iteration-10 suite lives at /app/backend/tests/test_iteration10_business.py (self-contained: creates its own DP, customer, restocks the vendor product to 500 because repeated ordering depletes stock, and restores commission to 10 + min_order_amount). Note vendor product stock depletes across runs — the fixture auto-restocks. Delivery boy dp_ui_1785304926@example.com/Delivery@123 already exists with 1 delivered order (₹20 earnings). UI flows verified: admin nav testid for delivery boys is 'admin-nav-delivery boys' (with a space); commission input commits on BLUR not Enter; WhatsApp buttons open a popup that redirects wa.me -> api.whatsapp.com/send (assert on 'whatsapp' not strictly 'wa.me'). Remaining unverified: multi-vendor order + delivery boy cancel path, and the trend chart after the CSS fix.",
+  "rca_of_the_issue": "White screen on every route: /app/frontend/src/App.js added a <DeliveryPanel /> route in the iteration but never imported the component, so React threw 'DeliveryPanel is not defined' at render of <App>, unmounting the whole tree (CRA dev build does not fail on undefined JSX identifiers at compile time). Reproduced via console PAGEERROR on /login; fixed by adding the import, after which all pages render. Trend chart bug RCA: bar div height is a percentage of a parent whose height is content-driven (19px label), so computed bar height resolves to 0px."
+}

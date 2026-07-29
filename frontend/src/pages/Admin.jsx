@@ -20,13 +20,18 @@ import {
   Check,
   Ban,
   ExternalLink,
+  Truck,
+  BarChart3,
+  Award,
 } from "lucide-react";
 
 const adminLinks = [
   { to: "/admin", label: "Dashboard", icon: LayoutDashboard, end: true },
+  { to: "/admin/analytics", label: "Analytics", icon: BarChart3 },
   { to: "/admin/products", label: "Products", icon: Package },
   { to: "/admin/orders", label: "Orders", icon: ShoppingBag },
   { to: "/admin/vendors", label: "Vendors", icon: Store },
+  { to: "/admin/delivery", label: "Delivery Boys", icon: Truck },
   { to: "/admin/coupons", label: "Coupons", icon: Ticket },
   { to: "/admin/customers", label: "Customers", icon: Users },
   { to: "/admin/categories", label: "Categories", icon: Tag },
@@ -61,9 +66,11 @@ export default function Admin() {
         <div>
           <Routes>
             <Route index element={<Dashboard />} />
+            <Route path="analytics" element={<Analytics />} />
             <Route path="products" element={<ProductsAdmin />} />
             <Route path="orders" element={<OrdersAdmin />} />
             <Route path="vendors" element={<VendorsAdmin />} />
+            <Route path="delivery" element={<DeliveryAdmin />} />
             <Route path="coupons" element={<CouponsAdmin />} />
             <Route path="customers" element={<Customers />} />
             <Route path="categories" element={<Categories />} />
@@ -451,13 +458,18 @@ const ALL_STATUSES = ["Pending", "Accepted", "Preparing", "Packed", "Ready", "Ou
 
 function OrdersAdmin() {
   const [orders, setOrders] = useState([]);
+  const [dps, setDps] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
-    const { data } = await api.get(`/admin/orders${filter ? `?status=${encodeURIComponent(filter)}` : ""}`);
-    setOrders(data);
+    const [o, d] = await Promise.all([
+      api.get(`/admin/orders${filter ? `?status=${encodeURIComponent(filter)}` : ""}`),
+      api.get("/admin/delivery-partners"),
+    ]);
+    setOrders(o.data);
+    setDps(d.data.filter((x) => x.active));
     setLoading(false);
   }, [filter]);
 
@@ -473,6 +485,22 @@ function OrdersAdmin() {
     } catch (e) {
       toast.error(formatApiError(e));
     }
+  };
+
+  const assignDp = async (id, dpId) => {
+    if (!dpId) return;
+    try {
+      await api.patch(`/admin/orders/${id}/assign`, { delivery_partner_id: dpId });
+      toast.success("Delivery partner assigned");
+      load();
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  const notify = async (id, event) => {
+    try {
+      const { data } = await api.post("/notify/order-whatsapp", { order_id: id, event });
+      window.open(data.url, "_blank");
+    } catch (e) { toast.error(formatApiError(e)); }
   };
 
   return (
@@ -531,6 +559,38 @@ function OrdersAdmin() {
                   ))}
                 </div>
               </details>
+
+              <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-dashed pt-3 text-xs">
+                <span className="font-semibold text-[#4A4A4A]">Delivery:</span>
+                {o.delivery_partner_name ? (
+                  <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-semibold text-blue-800" data-testid={`dp-assigned-${o.id}`}>
+                    {o.delivery_partner_name} · ₹{o.delivery_boy_earning || 0}
+                  </span>
+                ) : (
+                  <span className="text-[#4A4A4A]">Not assigned</span>
+                )}
+                <select
+                  onChange={(e) => { assignDp(o.id, e.target.value); e.target.value = ""; }}
+                  defaultValue=""
+                  className="input-base w-40 py-1.5 text-xs"
+                  data-testid={`assign-dp-${o.id}`}
+                >
+                  <option value="">{o.delivery_partner_name ? "Reassign…" : "Assign to…"}</option>
+                  {dps.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
+                <span className="mx-2 text-[#4A4A4A]">·</span>
+                <span className="font-semibold text-[#4A4A4A]">WhatsApp:</span>
+                {["accepted", "dispatched", "delivered"].map((ev) => (
+                  <button
+                    key={ev}
+                    onClick={() => notify(o.id, ev)}
+                    className="rounded-full border border-[#25D366] px-2.5 py-0.5 text-xs font-semibold text-[#25D366] hover:bg-[#25D366]/10"
+                    data-testid={`wa-${ev}-${o.id}`}
+                  >
+                    {ev}
+                  </button>
+                ))}
+              </div>
             </div>
           ))}
         </div>
@@ -754,6 +814,30 @@ function VendorsAdmin() {
                   Rejection reason: {v.rejection_reason}
                 </div>
               )}
+
+              {v.status === "Approved" && (
+                <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-dashed pt-3 text-xs">
+                  <span className="font-semibold text-[#4A4A4A]">Commission %:</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="90"
+                    defaultValue={v.commission_pct ?? 10}
+                    onBlur={async (e) => {
+                      const pct = Number(e.target.value);
+                      if (isNaN(pct) || pct === (v.commission_pct ?? 10)) return;
+                      try {
+                        await api.patch(`/admin/vendors/${v.id}/commission`, { commission_pct: pct });
+                        toast.success(`Commission set to ${pct}%`);
+                        load();
+                      } catch (err) { toast.error(formatApiError(err)); }
+                    }}
+                    className="input-base w-20 py-1 text-xs"
+                    data-testid={`commission-input-${v.id}`}
+                  />
+                  <span className="text-[#4A4A4A]">applied to delivered items</span>
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -905,3 +989,269 @@ function CouponsAdmin() {
     </div>
   );
 }
+
+/* ================= SALES ANALYTICS ADMIN ================= */
+function Analytics() {
+  const [data, setData] = useState(null);
+  const [perf, setPerf] = useState([]);
+  const [days, setDays] = useState(14);
+
+  useEffect(() => {
+    api.get(`/admin/analytics?days=${days}`).then(({ data }) => setData(data)).catch(() => {});
+    api.get("/admin/vendors/performance").then(({ data }) => setPerf(data)).catch(() => {});
+  }, [days]);
+
+  if (!data) return <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#1B4332]" />;
+
+  const maxRev = Math.max(1, ...data.daily_trend.map((d) => d.revenue));
+  const kpis = [
+    { label: "Total revenue", value: formatINR(data.total_revenue), color: "bg-[#1B4332]" },
+    { label: "Platform commission", value: formatINR(data.platform_commission_earned), color: "bg-[#E07A5F]" },
+    { label: "Vendor payout", value: formatINR(data.total_vendor_payout), color: "bg-[#8BA888]" },
+    { label: "Cancelled orders", value: data.cancelled_orders, color: "bg-red-600" },
+  ];
+
+  return (
+    <div className="space-y-8" data-testid="admin-analytics">
+      <div className="flex items-center justify-between">
+        <h2 className="font-heading text-2xl font-semibold">Sales analytics</h2>
+        <select value={days} onChange={(e) => setDays(Number(e.target.value))} className="input-base w-40 text-sm">
+          <option value={7}>Last 7 days</option>
+          <option value={14}>Last 14 days</option>
+          <option value={30}>Last 30 days</option>
+        </select>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {kpis.map((k) => (
+          <div key={k.label} className="card-base p-5">
+            <div className={`h-1.5 w-10 rounded-full ${k.color}`} />
+            <div className="mt-3 text-xs uppercase tracking-wider text-[#4A4A4A]">{k.label}</div>
+            <div className="mt-1 font-heading text-2xl font-bold">{k.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="card-base p-6" data-testid="trend-chart">
+        <h3 className="font-heading text-lg font-semibold">Revenue trend</h3>
+        <div className="mt-6 flex h-40 items-end gap-1">
+          {data.daily_trend.map((d) => {
+            const h = maxRev > 0 ? (d.revenue / maxRev) * 100 : 0;
+            return (
+              <div key={d.date} className="group relative flex flex-1 flex-col items-center gap-1">
+                <div className="w-full rounded-t bg-[#1B4332]/70 transition-all group-hover:bg-[#1B4332]" style={{ height: `${Math.max(2, h)}%` }} />
+                <div className="text-[10px] text-[#4A4A4A]">{d.date.slice(5)}</div>
+                <div className="absolute -top-8 hidden rounded-md bg-black/80 px-1.5 py-0.5 text-[10px] text-white group-hover:block">
+                  {formatINR(d.revenue)} · {d.orders} orders
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="card-base p-6">
+          <h3 className="font-heading text-lg font-semibold">Top vendors</h3>
+          {data.top_vendors.length === 0 ? (
+            <p className="mt-3 text-sm text-[#4A4A4A]">No delivered vendor items yet.</p>
+          ) : (
+            <div className="mt-4 space-y-3">
+              {data.top_vendors.map((v) => (
+                <div key={v.vendor_id} className="flex items-center justify-between border-b border-dashed pb-2 last:border-0" data-testid={`top-vendor-${v.vendor_id}`}>
+                  <div>
+                    <div className="text-sm font-semibold">{v.vendor_name}</div>
+                    <div className="text-xs text-[#4A4A4A]">{v.delivered_items} items · commission {formatINR(v.commission)}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-sm font-bold text-[#1B4332]">{formatINR(v.gross)}</div>
+                    <div className="text-xs text-[#4A4A4A]">Net payout {formatINR(v.net_payout)}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="card-base p-6">
+          <h3 className="font-heading text-lg font-semibold">Top products</h3>
+          {data.top_products.length === 0 ? (
+            <p className="mt-3 text-sm text-[#4A4A4A]">No delivered products yet.</p>
+          ) : (
+            <div className="mt-4 space-y-3">
+              {data.top_products.map((p) => (
+                <div key={p.product_id} className="flex items-center gap-3">
+                  <img src={p.image} alt="" className="h-10 w-10 rounded-lg object-cover" />
+                  <div className="flex-1">
+                    <div className="text-sm font-semibold">{p.name}</div>
+                    <div className="text-xs text-[#4A4A4A]">sold {p.qty}</div>
+                  </div>
+                  <div className="text-sm font-bold text-[#1B4332]">{formatINR(p.revenue)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Vendor performance */}
+      <div className="card-base p-6" data-testid="vendor-performance">
+        <div className="mb-4 flex items-center gap-2">
+          <Award className="h-5 w-5 text-[#E07A5F]" />
+          <h3 className="font-heading text-lg font-semibold">Vendor performance</h3>
+        </div>
+        {perf.length === 0 ? (
+          <p className="text-sm text-[#4A4A4A]">No approved vendors yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-left text-xs uppercase tracking-wider text-[#4A4A4A]">
+                <tr>
+                  <th className="px-4 py-2">Vendor</th>
+                  <th className="px-4 py-2">Rating</th>
+                  <th className="px-4 py-2">Orders</th>
+                  <th className="px-4 py-2">Completion %</th>
+                  <th className="px-4 py-2">Gross sales</th>
+                  <th className="px-4 py-2">Commission</th>
+                  <th className="px-4 py-2">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {perf.map((v) => (
+                  <tr key={v.vendor_id} className="border-t border-[#E5E5E5]" data-testid={`perf-row-${v.vendor_id}`}>
+                    <td className="px-4 py-2 font-semibold">{v.business_name}</td>
+                    <td className="px-4 py-2 text-[#4A4A4A]">{v.avg_rating != null ? `${v.avg_rating} ★ (${v.review_count})` : "—"}</td>
+                    <td className="px-4 py-2 text-[#4A4A4A]">{v.total_orders} · ✓{v.delivered_orders} · ✕{v.cancelled_orders}</td>
+                    <td className="px-4 py-2">
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${v.completion_rate >= 80 ? "bg-green-100 text-green-700" : v.completion_rate >= 50 ? "bg-yellow-100 text-yellow-700" : "bg-red-100 text-red-700"}`}>
+                        {v.completion_rate}%
+                      </span>
+                    </td>
+                    <td className="px-4 py-2 font-semibold">{formatINR(v.gross_sales)}</td>
+                    <td className="px-4 py-2 text-[#4A4A4A]">{v.commission_pct}%</td>
+                    <td className="px-4 py-2">
+                      {v.vacation_mode ? <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">Vacation</span> :
+                       !v.open_now ? <span className="rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-semibold text-yellow-700">Closed</span> :
+                       <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700">Open</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ================= DELIVERY BOYS ADMIN ================= */
+function DeliveryAdmin() {
+  const [list, setList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [f, setF] = useState({ name: "", email: "", password: "", phone: "", vehicle: "" });
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data } = await api.get("/admin/delivery-partners");
+    setList(data);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const save = async (e) => {
+    e.preventDefault();
+    try {
+      await api.post("/admin/delivery-partners", { ...f });
+      toast.success("Delivery partner added");
+      setShowForm(false);
+      setF({ name: "", email: "", password: "", phone: "", vehicle: "" });
+      load();
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  const toggle = async (id, active) => {
+    try {
+      await api.patch(`/admin/delivery-partners/${id}`, { active });
+      load();
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  const del = async (id) => {
+    if (!window.confirm("Delete this delivery partner?")) return;
+    await api.delete(`/admin/delivery-partners/${id}`);
+    load();
+  };
+
+  if (loading) return <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#1B4332]" />;
+
+  return (
+    <div data-testid="delivery-admin">
+      <div className="mb-6 flex items-center justify-between">
+        <h2 className="font-heading text-2xl font-semibold">Delivery boys ({list.length})</h2>
+        <button onClick={() => setShowForm((v) => !v)} className="btn-primary" data-testid="new-delivery-boy">
+          <Plus className="h-4 w-4" /> Add delivery boy
+        </button>
+      </div>
+
+      {showForm && (
+        <form onSubmit={save} className="card-base mb-6 grid gap-4 p-6 sm:grid-cols-2">
+          <FField label="Name" value={f.name} onChange={(v) => setF({ ...f, name: v })} required />
+          <FField label="Phone" value={f.phone} onChange={(v) => setF({ ...f, phone: v })} required placeholder="+91..." />
+          <FField label="Email" type="email" value={f.email} onChange={(v) => setF({ ...f, email: v })} required />
+          <FField label="Password" type="password" value={f.password} onChange={(v) => setF({ ...f, password: v })} required placeholder="Min 6 chars" />
+          <div className="sm:col-span-2">
+            <FField label="Vehicle (optional)" value={f.vehicle} onChange={(v) => setF({ ...f, vehicle: v })} placeholder="Honda Activa (MH14-AB-1234)" />
+          </div>
+          <div className="sm:col-span-2 flex justify-end gap-3">
+            <button type="button" onClick={() => setShowForm(false)} className="btn-secondary">Cancel</button>
+            <button type="submit" className="btn-primary" data-testid="save-delivery-boy">Save</button>
+          </div>
+        </form>
+      )}
+
+      {list.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-[#E5E5E5] p-10 text-center text-[#4A4A4A]">
+          No delivery boys yet. Add one so you can assign deliveries from the Orders tab.
+        </div>
+      ) : (
+        <div className="card-base overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-left text-xs uppercase tracking-wider text-[#4A4A4A]">
+              <tr>
+                <th className="px-4 py-3">Name</th>
+                <th className="px-4 py-3">Contact</th>
+                <th className="px-4 py-3">Vehicle</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((d) => (
+                <tr key={d.id} className="border-t border-[#E5E5E5]" data-testid={`dp-row-${d.id}`}>
+                  <td className="px-4 py-3 font-semibold">{d.name}</td>
+                  <td className="px-4 py-3 text-[#4A4A4A]">{d.email} · {d.phone}</td>
+                  <td className="px-4 py-3 text-[#4A4A4A]">{d.vehicle || "—"}</td>
+                  <td className="px-4 py-3">
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${d.active ? "bg-green-100 text-green-700" : "bg-gray-200 text-gray-700"}`}>
+                      {d.active ? "Active" : "Inactive"}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <button onClick={() => toggle(d.id, !d.active)} className="mr-2 rounded-full border border-[#1B4332] px-2 py-0.5 text-xs font-semibold text-[#1B4332] hover:bg-[#1B4332]/10" data-testid={`dp-toggle-${d.id}`}>
+                      {d.active ? "Deactivate" : "Activate"}
+                    </button>
+                    <button onClick={() => del(d.id)} className="text-red-600 hover:text-red-800"><Trash2 className="h-4 w-4" /></button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+

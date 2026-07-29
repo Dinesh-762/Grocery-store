@@ -2,7 +2,7 @@ import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { Loader2 } from "lucide-react";
 
-export default function ProtectedRoute({ children, adminOnly = false, vendorOnly = false }) {
+export default function ProtectedRoute({ children, adminOnly = false, vendorOnly = false, deliveryOnly = false }) {
   const { user, loading } = useAuth();
   const location = useLocation();
 
@@ -18,13 +18,9 @@ export default function ProtectedRoute({ children, adminOnly = false, vendorOnly
     return <Navigate to="/login" state={{ from: location.pathname }} replace />;
   }
 
-  if (adminOnly && user.role !== "admin") {
-    return <Navigate to="/" replace />;
-  }
-
-  if (vendorOnly && user.role !== "vendor") {
-    return <Navigate to="/" replace />;
-  }
+  if (adminOnly && user.role !== "admin") return <Navigate to="/" replace />;
+  if (vendorOnly && user.role !== "vendor") return <Navigate to="/" replace />;
+  if (deliveryOnly && user.role !== "delivery") return <Navigate to="/" replace />;
 
   return children;
 }

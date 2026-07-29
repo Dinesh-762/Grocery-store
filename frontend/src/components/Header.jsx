@@ -1,6 +1,6 @@
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useState } from "react";
-import { ShoppingCart, User, Search, Menu, X, LogOut, LayoutDashboard, Package, Leaf, Store } from "lucide-react";
+import { ShoppingCart, User, Search, Menu, X, LogOut, LayoutDashboard, Package, Leaf, Store, Truck } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useCart } from "@/context/CartContext";
 import {
@@ -131,6 +131,13 @@ export default function Header() {
                   <DropdownMenuItem asChild>
                     <Link to="/vendor" data-testid="menu-vendor" className="cursor-pointer">
                       <Store className="mr-2 h-4 w-4" /> Vendor Panel
+                    </Link>
+                  </DropdownMenuItem>
+                )}
+                {user.role === "delivery" && (
+                  <DropdownMenuItem asChild>
+                    <Link to="/delivery" data-testid="menu-delivery" className="cursor-pointer">
+                      <Truck className="mr-2 h-4 w-4" /> Delivery Panel
                     </Link>
                   </DropdownMenuItem>
                 )}

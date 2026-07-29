@@ -23,6 +23,7 @@ import Admin from "@/pages/Admin";
 import BecomeVendor from "@/pages/BecomeVendor";
 import VendorDashboard from "@/pages/VendorDashboard";
 import VendorStorefront from "@/pages/VendorStorefront";
+import DeliveryPanel from "@/pages/DeliveryPanel";
 
 import "@/App.css";
 
@@ -76,6 +77,14 @@ export default function App() {
                   element={
                     <ProtectedRoute vendorOnly>
                       <VendorDashboard />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/delivery/*"
+                  element={
+                    <ProtectedRoute deliveryOnly>
+                      <DeliveryPanel />
                     </ProtectedRoute>
                   }
                 />

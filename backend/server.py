@@ -8,6 +8,7 @@ import os
 import logging
 import uuid
 import re
+import urllib.parse
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Annotated
 
@@ -109,6 +110,16 @@ async def require_admin(user: dict = Depends(get_current_user)) -> dict:
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
+
+
+async def require_delivery(user: dict = Depends(get_current_user)) -> dict:
+    if user.get("role") != "delivery":
+        raise HTTPException(status_code=403, detail="Delivery access required")
+    return user
+
+
+DEFAULT_COMMISSION_PCT = float(os.environ.get("DEFAULT_COMMISSION_PCT", "10"))
+DEFAULT_DELIVERY_EARNING = float(os.environ.get("DEFAULT_DELIVERY_EARNING", "20"))
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +299,9 @@ def order_to_out(o: dict) -> dict:
         "status": o["status"],
         "status_history": o.get("status_history", []),
         "created_at": o.get("created_at", iso_now()),
+        "delivery_partner_id": o.get("delivery_partner_id"),
+        "delivery_partner_name": o.get("delivery_partner_name"),
+        "delivery_boy_earning": o.get("delivery_boy_earning", 0),
     }
 
 
@@ -779,6 +793,7 @@ class VendorSettingsIn(BaseModel):
     delivery_radius_km: Optional[float] = None
     min_order_amount: Optional[float] = None
     estimated_delivery_min: Optional[int] = None
+    commission_pct: Optional[float] = None  # admin-only path is enforced separately
 
 
 def vendor_to_out(v: dict) -> dict:
@@ -810,6 +825,7 @@ def vendor_to_out(v: dict) -> dict:
         "min_order_amount": v.get("min_order_amount", 0),
         "estimated_delivery_min": v.get("estimated_delivery_min"),
         "verified": v.get("status") == "Approved",
+        "commission_pct": v.get("commission_pct", DEFAULT_COMMISSION_PCT),
     }
 
 
@@ -1137,6 +1153,8 @@ async def vendor_get_settings(user: dict = Depends(get_current_user)):
 async def vendor_update_settings(payload: VendorSettingsIn, user: dict = Depends(get_current_user)):
     vendor = await get_vendor_for_user(user)
     update = payload.model_dump(exclude_none=True)
+    # Vendors cannot set their own commission — silently drop
+    update.pop("commission_pct", None)
     if "min_order_amount" in update and update["min_order_amount"] < 0:
         raise HTTPException(status_code=400, detail="Min order must be >= 0")
     if "delivery_radius_km" in update and update["delivery_radius_km"] < 0:
@@ -1207,6 +1225,14 @@ async def vendor_analytics(user: dict = Depends(get_current_user)):
     for s in best_sellers:
         s["revenue"] = round(s["revenue"], 2)
 
+    # Earnings breakdown (commission)
+    commission_pct = float(vendor.get("commission_pct", DEFAULT_COMMISSION_PCT))
+    commission_deducted = round(total_revenue * commission_pct / 100.0, 2)
+    net_earnings = round(total_revenue - commission_deducted, 2)
+
+    # Pending payment = net earnings on delivered but not-yet-paid-out orders (all until payout is implemented)
+    pending_payment = net_earnings
+
     recent = []
     for o in all_orders[:10]:
         my_items = [i for i in o["items"] if i.get("vendor_id") == vid]
@@ -1228,10 +1254,419 @@ async def vendor_analytics(user: dict = Depends(get_current_user)):
         "month_revenue": round(month_revenue, 2),
         "total_revenue": round(total_revenue, 2),
         "total_items_sold": total_items_sold,
+        "commission_pct": commission_pct,
+        "commission_deducted": commission_deducted,
+        "net_earnings": net_earnings,
+        "pending_payment": pending_payment,
         "best_sellers": best_sellers,
         "recent_orders": recent,
         "low_stock": [product_to_out(p) for p in low_stock],
     }
+
+
+# ---------------------------------------------------------------------------
+# Commission, Delivery Partners, Sales Analytics, Vendor Performance
+# ---------------------------------------------------------------------------
+
+class CommissionIn(BaseModel):
+    commission_pct: float = Field(ge=0, le=90)
+
+
+class DeliveryPartnerIn(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
+    email: EmailStr
+    password: str = Field(min_length=6, max_length=128)
+    phone: str
+    vehicle: Optional[str] = ""
+
+
+class DeliveryPartnerUpdate(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    vehicle: Optional[str] = None
+    active: Optional[bool] = None
+
+
+class AssignDeliveryIn(BaseModel):
+    delivery_partner_id: str
+    earning: Optional[float] = None
+
+
+def dp_to_out(u: dict) -> dict:
+    return {
+        "id": str(u["_id"]) if "_id" in u else u.get("id"),
+        "name": u["name"],
+        "email": u["email"],
+        "phone": u.get("phone", ""),
+        "vehicle": u.get("vehicle", ""),
+        "active": u.get("active", True),
+        "created_at": u.get("created_at"),
+    }
+
+
+# Commission — admin sets per-vendor
+@api.patch("/admin/vendors/{vendor_id}/commission")
+async def admin_set_commission(vendor_id: str, payload: CommissionIn, _: dict = Depends(require_admin)):
+    oid = safe_object_id(vendor_id)
+    res = await db.vendors.update_one({"_id": oid}, {"$set": {"commission_pct": payload.commission_pct}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    v = await db.vendors.find_one({"_id": oid})
+    return vendor_to_out(v)
+
+
+# Delivery partners — admin CRUD
+@api.get("/admin/delivery-partners")
+async def admin_list_dp(_: dict = Depends(require_admin)):
+    docs = await db.users.find({"role": "delivery"}).sort("created_at", -1).to_list(1000)
+    return [dp_to_out(d) for d in docs]
+
+
+@api.post("/admin/delivery-partners")
+async def admin_create_dp(payload: DeliveryPartnerIn, _: dict = Depends(require_admin)):
+    email = payload.email.lower().strip()
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(status_code=400, detail="Email already registered")
+    doc = {
+        "name": payload.name.strip(),
+        "email": email,
+        "phone": payload.phone,
+        "vehicle": payload.vehicle or "",
+        "password_hash": hash_password(payload.password),
+        "role": "delivery",
+        "active": True,
+        "created_at": iso_now(),
+    }
+    res = await db.users.insert_one(doc)
+    doc["_id"] = res.inserted_id
+    return dp_to_out(doc)
+
+
+@api.patch("/admin/delivery-partners/{dp_id}")
+async def admin_update_dp(dp_id: str, payload: DeliveryPartnerUpdate, _: dict = Depends(require_admin)):
+    oid = safe_object_id(dp_id)
+    update = payload.model_dump(exclude_none=True)
+    if update:
+        await db.users.update_one({"_id": oid, "role": "delivery"}, {"$set": update})
+    u = await db.users.find_one({"_id": oid, "role": "delivery"})
+    if not u:
+        raise HTTPException(status_code=404, detail="Delivery partner not found")
+    return dp_to_out(u)
+
+
+@api.delete("/admin/delivery-partners/{dp_id}")
+async def admin_delete_dp(dp_id: str, _: dict = Depends(require_admin)):
+    oid = safe_object_id(dp_id)
+    res = await db.users.delete_one({"_id": oid, "role": "delivery"})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Delivery partner not found")
+    return {"success": True}
+
+
+# Assign delivery partner to an order
+@api.patch("/admin/orders/{order_id}/assign")
+async def admin_assign_delivery(order_id: str, payload: AssignDeliveryIn, _: dict = Depends(require_admin)):
+    oid = safe_object_id(order_id)
+    dp_oid = safe_object_id(payload.delivery_partner_id)
+    dp = await db.users.find_one({"_id": dp_oid, "role": "delivery"})
+    if not dp:
+        raise HTTPException(status_code=404, detail="Delivery partner not found")
+    if not dp.get("active", True):
+        raise HTTPException(status_code=400, detail="Delivery partner is inactive")
+    earning = float(payload.earning if payload.earning is not None else DEFAULT_DELIVERY_EARNING)
+    res = await db.orders.update_one(
+        {"_id": oid},
+        {"$set": {
+            "delivery_partner_id": str(dp_oid),
+            "delivery_partner_name": dp["name"],
+            "delivery_boy_earning": earning,
+        }},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Order not found")
+    o = await db.orders.find_one({"_id": oid})
+    return order_to_out(o)
+
+
+# Delivery partner: my orders / status / earnings / history
+@api.get("/delivery/me")
+async def delivery_me(user: dict = Depends(require_delivery)):
+    u = await db.users.find_one({"_id": ObjectId(user["id"])})
+    return dp_to_out(u)
+
+
+@api.get("/delivery/orders")
+async def delivery_my_orders(user: dict = Depends(require_delivery)):
+    docs = await db.orders.find({
+        "delivery_partner_id": user["id"],
+        "status": {"$nin": ["Delivered", "Cancelled"]},
+    }).sort("created_at", -1).to_list(500)
+    return [order_to_out(o) for o in docs]
+
+
+@api.get("/delivery/history")
+async def delivery_history(user: dict = Depends(require_delivery)):
+    docs = await db.orders.find({
+        "delivery_partner_id": user["id"],
+        "status": {"$in": ["Delivered", "Cancelled"]},
+    }).sort("created_at", -1).limit(500).to_list(500)
+    return [order_to_out(o) for o in docs]
+
+
+@api.patch("/delivery/orders/{order_id}/status")
+async def delivery_update_status(order_id: str, payload: OrderStatusUpdate, user: dict = Depends(require_delivery)):
+    if payload.status not in ("Out For Delivery", "Delivered", "Cancelled"):
+        raise HTTPException(status_code=400, detail="Delivery can only mark Out For Delivery / Delivered / Cancelled")
+    oid = safe_object_id(order_id)
+    o = await db.orders.find_one({"_id": oid, "delivery_partner_id": user["id"]})
+    if not o:
+        raise HTTPException(status_code=404, detail="Order not assigned to you")
+    history = o.get("status_history", [])
+    history.append({"status": payload.status, "at": iso_now(), "by": f"delivery:{user['name']}"})
+    # Propagate line_status for lines still in transit
+    items = o["items"]
+    for i in items:
+        if i.get("line_status") not in ("Cancelled", "Delivered"):
+            i["line_status"] = payload.status
+    await db.orders.update_one(
+        {"_id": oid},
+        {"$set": {"status": payload.status, "status_history": history, "items": items}},
+    )
+    o["status"] = payload.status
+    o["status_history"] = history
+    o["items"] = items
+    return order_to_out(o)
+
+
+@api.get("/delivery/earnings")
+async def delivery_earnings(user: dict = Depends(require_delivery)):
+    now = now_utc()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=6)
+    month_start = today_start - timedelta(days=29)
+    docs = await db.orders.find({"delivery_partner_id": user["id"]}).to_list(5000)
+
+    total_deliveries = 0
+    today = 0.0
+    week = 0.0
+    month = 0.0
+    total = 0.0
+    pending = 0.0
+    for o in docs:
+        earn = float(o.get("delivery_boy_earning", 0) or 0)
+        if o["status"] == "Delivered":
+            total_deliveries += 1
+            total += earn
+            try:
+                created = datetime.fromisoformat(o["created_at"])
+            except Exception:
+                created = None
+            if created and created >= today_start:
+                today += earn
+            if created and created >= week_start:
+                week += earn
+            if created and created >= month_start:
+                month += earn
+        elif o["status"] not in ("Cancelled",):
+            pending += earn
+    return {
+        "total_deliveries": total_deliveries,
+        "today_earnings": round(today, 2),
+        "week_earnings": round(week, 2),
+        "month_earnings": round(month, 2),
+        "total_earnings": round(total, 2),
+        "pending_earnings": round(pending, 2),
+    }
+
+
+# Admin: sales analytics
+@api.get("/admin/analytics")
+async def admin_analytics(_: dict = Depends(require_admin), days: int = 14):
+    now = now_utc()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    window_start = today_start - timedelta(days=max(1, days) - 1)
+    docs = await db.orders.find({}).sort("created_at", -1).to_list(20000)
+
+    total_revenue = 0.0
+    total_platform_commission = 0.0
+    total_vendor_payout = 0.0
+    daily_trend: dict = {}  # 'YYYY-MM-DD' -> {orders, revenue}
+    vendor_totals: dict = {}
+    product_totals: dict = {}
+    total_orders = len(docs)
+    pending_orders = 0
+    delivered_orders = 0
+    cancelled_orders = 0
+
+    # Load vendors for commission lookup
+    vendors = {str(v["_id"]): v for v in await db.vendors.find({}).to_list(1000)}
+
+    for o in docs:
+        st = o["status"]
+        if st == "Pending":
+            pending_orders += 1
+        elif st == "Delivered":
+            delivered_orders += 1
+        elif st == "Cancelled":
+            cancelled_orders += 1
+
+        try:
+            created = datetime.fromisoformat(o["created_at"])
+        except Exception:
+            continue
+
+        if st == "Delivered":
+            total_revenue += o.get("total", 0)
+            day = created.strftime("%Y-%m-%d") if created else "unknown"
+            if created >= window_start:
+                daily_trend.setdefault(day, {"orders": 0, "revenue": 0.0})
+                daily_trend[day]["orders"] += 1
+                daily_trend[day]["revenue"] += o.get("total", 0)
+
+            for i in o["items"]:
+                if i.get("line_status") != "Delivered":
+                    continue
+                line_total = i["price"] * i["quantity"]
+                vid = i.get("vendor_id")
+                if vid:
+                    vs = vendor_totals.setdefault(vid, {
+                        "vendor_id": vid,
+                        "vendor_name": i.get("vendor_name", ""),
+                        "gross": 0.0,
+                        "commission": 0.0,
+                        "net_payout": 0.0,
+                        "delivered_items": 0,
+                    })
+                    vs["gross"] += line_total
+                    vs["delivered_items"] += i["quantity"]
+                    vend = vendors.get(vid)
+                    pct = float(vend.get("commission_pct", DEFAULT_COMMISSION_PCT)) if vend else DEFAULT_COMMISSION_PCT
+                    com = round(line_total * pct / 100.0, 2)
+                    vs["commission"] += com
+                    vs["net_payout"] += (line_total - com)
+                    total_platform_commission += com
+                    total_vendor_payout += (line_total - com)
+
+                pid = i.get("product_id")
+                if pid:
+                    ps = product_totals.setdefault(pid, {"product_id": pid, "name": i["name"], "image": i["image"], "qty": 0, "revenue": 0.0})
+                    ps["qty"] += i["quantity"]
+                    ps["revenue"] += line_total
+
+    # Build sorted lists
+    top_vendors = sorted(vendor_totals.values(), key=lambda v: v["gross"], reverse=True)[:5]
+    top_products = sorted(product_totals.values(), key=lambda p: p["revenue"], reverse=True)[:5]
+    for v in top_vendors:
+        v["gross"] = round(v["gross"], 2); v["commission"] = round(v["commission"], 2); v["net_payout"] = round(v["net_payout"], 2)
+    for p in top_products:
+        p["revenue"] = round(p["revenue"], 2)
+
+    # Fill missing days in trend
+    trend = []
+    for i in range(days):
+        d = (today_start - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
+        t = daily_trend.get(d, {"orders": 0, "revenue": 0.0})
+        trend.append({"date": d, "orders": t["orders"], "revenue": round(t["revenue"], 2)})
+
+    return {
+        "total_orders": total_orders,
+        "pending_orders": pending_orders,
+        "delivered_orders": delivered_orders,
+        "cancelled_orders": cancelled_orders,
+        "total_revenue": round(total_revenue, 2),
+        "platform_commission_earned": round(total_platform_commission, 2),
+        "total_vendor_payout": round(total_vendor_payout, 2),
+        "top_vendors": top_vendors,
+        "top_products": top_products,
+        "daily_trend": trend,
+    }
+
+
+# Admin: vendor performance
+@api.get("/admin/vendors/performance")
+async def admin_vendor_performance(_: dict = Depends(require_admin)):
+    vendors = await db.vendors.find({"status": "Approved"}).to_list(1000)
+    result = []
+    for v in vendors:
+        vid = str(v["_id"])
+        # Ratings — from reviews collection (product_slug OR vendor_id)
+        vendor_reviews = await db.reviews.find({"vendor_id": vid}).to_list(1000)
+        avg_rating = round(sum(r["rating"] for r in vendor_reviews) / len(vendor_reviews), 2) if vendor_reviews else None
+
+        # Orders — count line items owned by this vendor
+        orders = await db.orders.find({"items.vendor_id": vid}).to_list(5000)
+        total_orders = len(orders)
+        delivered = 0
+        cancelled = 0
+        gross = 0.0
+        for o in orders:
+            if o["status"] == "Delivered":
+                delivered += 1
+            elif o["status"] == "Cancelled":
+                cancelled += 1
+            for i in o["items"]:
+                if i.get("vendor_id") == vid and i.get("line_status") == "Delivered":
+                    gross += i["price"] * i["quantity"]
+        completion_rate = round((delivered / total_orders * 100), 1) if total_orders else 0.0
+        result.append({
+            "vendor_id": vid,
+            "business_name": v["business_name"],
+            "commission_pct": v.get("commission_pct", DEFAULT_COMMISSION_PCT),
+            "avg_rating": avg_rating,
+            "review_count": len(vendor_reviews),
+            "total_orders": total_orders,
+            "delivered_orders": delivered,
+            "cancelled_orders": cancelled,
+            "completion_rate": completion_rate,
+            "gross_sales": round(gross, 2),
+            "vacation_mode": v.get("vacation_mode", False),
+            "open_now": v.get("open_now", True),
+        })
+    result.sort(key=lambda r: r["gross_sales"], reverse=True)
+    return result
+
+
+# WhatsApp notification helper — generates a wa.me deep link that anyone
+# (admin, vendor, delivery boy) can click to send a status update. No paid API.
+@api.post("/notify/order-whatsapp")
+async def notify_order_whatsapp(payload: dict, user: dict = Depends(get_current_user)):
+    order_id = payload.get("order_id")
+    event = payload.get("event", "update")  # placed|accepted|dispatched|delivered|payment|update
+    if not order_id:
+        raise HTTPException(status_code=400, detail="order_id required")
+    oid = safe_object_id(order_id)
+    o = await db.orders.find_one({"_id": oid})
+    if not o:
+        raise HTTPException(status_code=404, detail="Order not found")
+    # Access control: admin any; vendor if any of their items; delivery if assigned; customer if own
+    role = user.get("role")
+    if role == "customer" and o.get("user_id") != user["id"]:
+        raise HTTPException(status_code=403, detail="Not your order")
+    if role == "vendor":
+        vendor = await db.vendors.find_one({"owner_id": user["id"]})
+        vid = str(vendor["_id"]) if vendor else None
+        if not vid or not any(i.get("vendor_id") == vid for i in o["items"]):
+            raise HTTPException(status_code=403, detail="Order does not contain your items")
+    if role == "delivery" and o.get("delivery_partner_id") != user["id"]:
+        raise HTTPException(status_code=403, detail="Order not assigned to you")
+
+    short_id = str(o["_id"])[-6:].upper()
+    templates = {
+        "placed": f"Hi {o['user_name']}, your Ambajogai Grocery order #{short_id} has been placed and is being reviewed. Total ₹{o['total']}. We'll keep you posted!",
+        "accepted": f"Hi {o['user_name']}, your Ambajogai Grocery order #{short_id} has been accepted and is being prepared. Estimated total ₹{o['total']}.",
+        "dispatched": f"Hi {o['user_name']}, your Ambajogai Grocery order #{short_id} is out for delivery. Please keep the payment of ₹{o['total']} ready if paying COD.",
+        "delivered": f"Hi {o['user_name']}, your Ambajogai Grocery order #{short_id} has been delivered. Thanks for shopping with us — please rate your experience!",
+        "payment": f"Hi {o['user_name']}, we've received your payment for order #{short_id} (₹{o['total']}). Thanks!",
+        "update": f"Hi {o['user_name']}, update on your Ambajogai Grocery order #{short_id} — current status: {o['status']}.",
+    }
+    message = templates.get(event, templates["update"])
+    phone = o["address"]["phone"].replace(" ", "").replace("+", "").replace("-", "")
+    if phone.startswith("0"):
+        phone = "91" + phone[1:]
+    if len(phone) == 10:
+        phone = "91" + phone
+    url = f"https://wa.me/{phone}?text={urllib.parse.quote(message)}"
+    return {"url": url, "message": message}
 
 
 # ---------------------------------------------------------------------------
