@@ -558,9 +558,10 @@ function VSettings() {
         open_now: !!v.open_now,
         vacation_mode: !!v.vacation_mode,
         vacation_message: v.vacation_message || "",
-        delivery_radius_km: v.delivery_radius_km ? Number(v.delivery_radius_km) : null,
-        min_order_amount: v.min_order_amount ? Number(v.min_order_amount) : 0,
-        estimated_delivery_min: v.estimated_delivery_min ? Number(v.estimated_delivery_min) : null,
+        // Send 0 (not null) when cleared so backend actually persists the reset
+        delivery_radius_km: v.delivery_radius_km === "" || v.delivery_radius_km == null ? 0 : Number(v.delivery_radius_km),
+        min_order_amount: v.min_order_amount === "" || v.min_order_amount == null ? 0 : Number(v.min_order_amount),
+        estimated_delivery_min: v.estimated_delivery_min === "" || v.estimated_delivery_min == null ? 0 : Number(v.estimated_delivery_min),
       });
       setV(data);
       toast.success("Shop settings saved");

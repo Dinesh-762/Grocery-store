@@ -534,7 +534,7 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         if vend:
             min_amt = vend.get("min_order_amount") or 0
             if min_amt and sub < min_amt:
-                raise HTTPException(status_code=400, detail=f"Minimum order for {vend.get('business_name', 'this vendor')} is ₹{min_amt}. Current subtotal for their items is ₹{sub:.2f}.")
+                raise HTTPException(status_code=400, detail=f"Minimum order for {vend.get('business_name', 'this vendor')} is ₹{int(min_amt) if float(min_amt).is_integer() else round(min_amt, 2)}. Current subtotal for their items is ₹{sub:.2f}.")
 
     subtotal = round(sum(i["price"] * i["quantity"] for i in verified_items), 2)
     delivery_fee = 0.0 if subtotal >= FREE_DELIVERY_THRESHOLD else DELIVERY_FEE
@@ -1137,9 +1137,6 @@ async def vendor_get_settings(user: dict = Depends(get_current_user)):
 async def vendor_update_settings(payload: VendorSettingsIn, user: dict = Depends(get_current_user)):
     vendor = await get_vendor_for_user(user)
     update = payload.model_dump(exclude_none=True)
-    if "business_hours" in update and isinstance(update["business_hours"], dict):
-        # Persist as plain dict of day -> "HH:MM-HH:MM" or "Closed"
-        update["business_hours"] = {k: v for k, v in update["business_hours"].items() if v is not None}
     if "min_order_amount" in update and update["min_order_amount"] < 0:
         raise HTTPException(status_code=400, detail="Min order must be >= 0")
     if "delivery_radius_km" in update and update["delivery_radius_km"] < 0:
@@ -1148,7 +1145,16 @@ async def vendor_update_settings(payload: VendorSettingsIn, user: dict = Depends
         raise HTTPException(status_code=400, detail="ETA must be >= 0")
     if not update:
         return vendor_to_out(vendor)
-    await db.vendors.update_one({"_id": vendor["_id"]}, {"$set": update})
+
+    # business_hours: merge per-day keys via dotted paths so partial payloads don't wipe other days
+    hours_update = None
+    if "business_hours" in update and isinstance(update["business_hours"], dict):
+        hours_update = {k: v for k, v in update["business_hours"].items() if v is not None}
+        del update["business_hours"]
+    set_doc = {**update}
+    for day, val in (hours_update or {}).items():
+        set_doc[f"business_hours.{day}"] = val
+    await db.vendors.update_one({"_id": vendor["_id"]}, {"$set": set_doc})
     updated = await db.vendors.find_one({"_id": vendor["_id"]})
     return vendor_to_out(updated)
 
