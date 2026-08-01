@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { Search, Truck, ShieldCheck, Clock, Star, ArrowRight, Sparkles } from "lucide-react";
 import { api } from "@/lib/api";
 import ProductCard from "@/components/ProductCard";
+import Footer from "@/components/Footer";
 
 export default function Home() {
   const navigate = useNavigate();
@@ -200,6 +201,7 @@ export default function Home() {
           </div>
         </section>
       )}
+      <Footer />
     </div>
   );
 }

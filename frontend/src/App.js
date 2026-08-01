@@ -1,3 +1,4 @@
+import ScrollToTop from "@/components/ScrollToTop";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AuthProvider } from "@/context/AuthContext";
@@ -32,6 +33,7 @@ export default function App() {
     <AuthProvider>
       <CartProvider>
         <BrowserRouter>
+          <ScrollToTop />
           <div className="App flex min-h-screen flex-col">
             <Header />
             <main className="flex-1">
@@ -98,7 +100,6 @@ export default function App() {
                 />
               </Routes>
             </main>
-            <Footer />
             <WhatsAppFloat />
             <Toaster position="top-right" richColors closeButton />
           </div>

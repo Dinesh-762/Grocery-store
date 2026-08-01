@@ -52,6 +52,11 @@ export default function ProductDetail() {
     ? Math.round(((product.mrp - product.price) / product.mrp) * 100)
     : 0;
 
+  const displayPrice = selectedVariant?.price ?? product.price;
+  const displayUnit = selectedVariant?.unit ?? product.unit;
+  const displayMrp = selectedVariant ? null : product.mrp;
+  const displayOff = selectedVariant ? 0 : off;
+
   return (
     <div className="container-app py-8" data-testid="product-detail-page">
       <button
@@ -70,7 +75,7 @@ export default function ProductDetail() {
 
         <div>
         <div>
-          <div className="text-sm text-[#4A4A4A]">{product.unit}</div>
+          <div className="text-sm text-[#4A4A4A]">{displayUnit}</div>
           {product.vendor_id && product.vendor_name && (
             <Link
               to={`/vendors/${product.vendor_id}`}
@@ -87,13 +92,13 @@ export default function ProductDetail() {
 
           <div className="mt-4 flex items-baseline gap-3">
             <div className="text-3xl font-bold text-[#1B4332]" data-testid="product-price">
-              {formatINR(product.price)}
+              {formatINR(displayPrice)}
             </div>
-            {product.mrp && product.mrp > product.price && (
+            {displayMrp && displayMrp > displayPrice && (
               <>
-                <div className="text-lg text-gray-400 line-through">{formatINR(product.mrp)}</div>
+                <div className="text-lg text-gray-400 line-through">{formatINR(displayMrp)}</div>
                 <span className="rounded-full bg-[#E07A5F]/10 px-2.5 py-0.5 text-sm font-semibold text-[#E07A5F]">
-                  {off}% off
+                  {displayOff}% off
                 </span>
               </>
             )}

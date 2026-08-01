@@ -1,0 +1,26 @@
+{
+  "summary": "Iteration 13 — frontend-only laser retest of the 3 UI bugs from iteration_12.json on the public preview URL. ALL THREE FIXES VERIFIED PASS. (1) PDP /products/test-it12-ui-variant-product: base shows ₹60 + ₹80 MRP + '25% off'; clicking 1kg chip updates [data-testid=product-price] to ₹110 and the unit line to '1 kg' with the MRP/off badge hidden; clicking 500g returns ₹60; deselecting restores base ₹60 + MRP + '% off'. (2) Cart line scoping: added the same product twice (500g/'NOTE A' and 1kg/'NOTE B') — 2 distinct lines rendered; '+' on line 1 changed only line 1 (qty 2 vs 1, total ₹200→₹260); remove on line 1 left line 2 intact in DOM and localStorage. (3) Zero 'Encountered two children with the same key' console errors on /cart; testids are unique (cart-item-<pid>::500g::NOTE A / ::1kg::NOTE B) and remove-<lineKey> works. REGRESSION: non-variant PDP (potato) shows base ₹25 and no variant-picker; single-line cart increment x2/decrement/remove works; cart total = sum(price*qty)+delivery (₹160+₹30=₹190 verified); fresh customer register → checkout → POST /api/orders sent items with variant_label='1kg' and note='CHK NOTE 1kg' (and nulls for the plain line), order created (#627D56), notify/order-whatsapp {placed} fired, cart cleared, order detail page shows variant badge + note. No console errors anywhere in the run.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Checkout.jsx order summary", "issue": "Minor/cosmetic: the checkout Order summary line for a variant item shows only 'TEST It12 UI Variant Dal — Qty 1 × ₹110'; it omits the variant label badge and the custom note (both are shown correctly in /cart and on the order detail page). Consider adding them for consistency.", "selector": "[data-testid=\"checkout-summary\"]", "priority": "LOW"},
+      {"component": "Admin/Vendor product form", "issue": "Known deferred TODO (not retested/blocking): no variants editor in admin/vendor product forms.", "selector": "[data-testid=\"product-form-modal\"]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/seed_it12_ui.py", "/app/test_reports/iteration_12.json"],
+  "action_items": ["No blocking action items. Optional: show variant label + note in the Checkout order summary rows.", "Optional (deferred): variants editor in admin/vendor product forms."],
+  "critical_code_review_comments": [
+    "CartContext lineKey(product_id::variant_label::note) is now used consistently by addItem dedupe, removeItem and setQuantity — identity model is coherent. Note: lineKey collides if a note ever contains '::' (theoretical, low risk); a generated line_id would be fully safe.",
+    "Cart.jsx correctly uses the lineKey for React key, data-testid and mutation args — no duplicate keys observed."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested (per request)", "frontend": "100% (3/3 fixes verified + 4/4 regressions pass)"},
+  "seed_data_creation": "Re-ran /app/backend/tests/seed_it12_ui.py (idempotent) — product 'TEST It12 UI Variant Dal' slug=test-it12-ui-variant-product (500g/₹60, 1kg/₹110). New customer test_it13_1785307756@example.com / Test@123 and one COD order 6a69a274f29be4e774627d56 (₹165) created.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@ambajogai.com / Admin@123; customer test_it13_1785307756@example.com / Test@123",
+  "context_for_next_testing_agent": "Iteration 12's 3 UI bugs (PDP variant price display, cart line scoping, duplicate React keys) are fixed and verified — no need to retest. Backend was untouched this iteration (100% green in iteration 12). Remaining open item: variants editor missing in admin/vendor product forms (deferred), and variant label/note not shown in the Checkout summary (cosmetic). Vacation-mode block and delivery-boy panel still not re-run since iterations 9-11.",
+  "rca_of_the_issue": "N/A — fixes confirmed working: ProductDetail derives displayPrice/displayUnit/displayMrp/displayOff from selectedVariant; CartContext removeItem/setQuantity now match by lineKey; Cart.jsx keys/testids use lineKey."
+}

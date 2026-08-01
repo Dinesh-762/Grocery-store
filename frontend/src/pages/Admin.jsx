@@ -344,10 +344,6 @@ function ProductsAdmin() {
   );
 }
 
-function slugify(s) {
-  return s.toLowerCase().trim().replace(/[^\w\s-]/g, "").replace(/\s+/g, "-");
-}
-
 function ProductForm({ initial, categories, onClose, onSaved }) {
   const [form, setForm] = useState(
     initial || {
@@ -364,6 +360,8 @@ function ProductForm({ initial, categories, onClose, onSaved }) {
       popular: false,
     }
   );
+
+  const [variants, setVariants] = useState(initial?.variants || []);
   const [saving, setSaving] = useState(false);
 
   const update = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -378,6 +376,7 @@ function ProductForm({ initial, categories, onClose, onSaved }) {
         price: Number(form.price),
         mrp: form.mrp ? Number(form.mrp) : null,
         stock: Number(form.stock),
+        variants: variants,
       };
       if (initial) await api.put(`/products/${initial.id}`, payload);
       else await api.post("/products", payload);
@@ -421,6 +420,102 @@ function ProductForm({ initial, categories, onClose, onSaved }) {
             <FField label="Image URL" value={form.image} onChange={(v) => update("image", v)} required data-testid="product-image" />
           </div>
           <FField label="Stock" type="number" value={form.stock} onChange={(v) => update("stock", v)} required data-testid="product-stock" />
+           <FField
+  label="Stock"
+  type="number"
+  value={form.stock}
+  onChange={(v) => update("stock", v)}
+  required
+  data-testid="product-stock"
+/>
+
+<div className="sm:col-span-2">
+  <label className="mb-2 block text-xs font-semibold text-[#4A4A4A]">
+    Product Variants
+  </label>
+
+  {variants.map((v, i) => (
+    <div key={i} className="mb-2 flex gap-2">
+      <input
+        className="input-base flex-1"
+        placeholder="Label (500g)"
+        value={v.label}
+        onChange={(e) => {
+          const copy = [...variants];
+          copy[i].label = e.target.value;
+          setVariants(copy);
+        }}
+      />
+
+      <input
+        className="input-base w-28"
+        type="number"
+        placeholder="Price"
+        value={v.price}
+        onChange={(e) => {
+          const copy = [...variants];
+          copy[i].price = Number(e.target.value);
+          setVariants(copy);
+        }}
+      />
+
+      <input
+        className="input-base w-28"
+        placeholder="Unit"
+        value={v.unit}
+        onChange={(e) => {
+          const copy = [...variants];
+          copy[i].unit = e.target.value;
+          setVariants(copy);
+        }}
+      />
+
+      <button
+        type="button"
+        className="btn-secondary"
+        onClick={() => setVariants(variants.filter((_, idx) => idx !== i))}
+      >
+        ✕
+      </button>
+    </div>
+  ))}
+
+  <button
+    type="button"
+    className="btn-secondary mt-2"
+    onClick={() =>
+      setVariants([
+        ...variants,
+        { label: "", price: 0, unit: "" },
+      ])
+    }
+  >
+    + Add Variant
+  </button>
+</div>
+
+<div className="flex items-center gap-4 pt-6">
+  <label className="flex items-center gap-2 text-sm">
+    <input
+      type="checkbox"
+      checked={form.featured}
+      onChange={(e) => update("featured", e.target.checked)}
+    />
+    Featured
+  </label>
+
+  <label className="flex items-center gap-2 text-sm">
+    <input
+      type="checkbox"
+      checked={form.popular}
+      onChange={(e) => update("popular", e.target.checked)}
+    />
+    Popular
+  </label>
+</div> 
+           <div className="flex items-center gap-4 pt-6">
+  ...
+</div>
           <div className="flex items-center gap-4 pt-6">
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={form.featured} onChange={(e) => update("featured", e.target.checked)} />

@@ -36,7 +36,7 @@ export default function Header() {
 
   return (
     <header
-      className="sticky top-0 z-40 border-b border-[#E5E5E5]/60 bg-[#FDFBF7]/85 backdrop-blur-md"
+     className="border-b border-[#E5E5E5]/60 bg-[#FDFBF7] backdrop-blur-md"
       data-testid="site-header"
     >
       <div className="container-app flex h-16 items-center justify-between gap-4">

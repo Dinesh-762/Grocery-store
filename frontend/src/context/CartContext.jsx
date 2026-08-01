@@ -4,6 +4,10 @@ import { toast } from "sonner";
 const CartContext = createContext(null);
 const STORAGE_KEY = "ambajogai_cart";
 
+function lineKey(item) {
+  return `${item.product_id}::${item.variant_label || ""}::${item.note || ""}`;
+}
+
 export function CartProvider({ children }) {
   const [items, setItems] = useState(() => {
     try {
@@ -20,7 +24,6 @@ export function CartProvider({ children }) {
 
   const addItem = (product, qty = 1, note = null, variant_label = null) => {
     setItems((prev) => {
-      // Same product + variant combo merges; different variants or notes stay separate
       const idx = prev.findIndex(
         (p) => p.product_id === product.id && (p.variant_label || null) === (variant_label || null) && (p.note || null) === (note || null)
       );
@@ -46,14 +49,14 @@ export function CartProvider({ children }) {
     toast.success(`${product.name}${variant_label ? ` (${variant_label})` : ""} added to cart`);
   };
 
-  const removeItem = (product_id) => {
-    setItems((prev) => prev.filter((p) => p.product_id !== product_id));
+  const removeItem = (key) => {
+    setItems((prev) => prev.filter((p) => lineKey(p) !== key));
   };
 
-  const setQuantity = (product_id, quantity) => {
+  const setQuantity = (key, quantity) => {
     setItems((prev) =>
       prev
-        .map((p) => (p.product_id === product_id ? { ...p, quantity } : p))
+        .map((p) => (lineKey(p) === key ? { ...p, quantity } : p))
         .filter((p) => p.quantity > 0)
     );
   };
@@ -94,3 +97,5 @@ export function CartProvider({ children }) {
 export function useCart() {
   return useContext(CartContext);
 }
+
+export { lineKey };

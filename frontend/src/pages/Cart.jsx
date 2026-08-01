@@ -1,5 +1,5 @@
 import { Link, useNavigate } from "react-router-dom";
-import { useCart } from "@/context/CartContext";
+import { useCart, lineKey } from "@/context/CartContext";
 import { useAuth } from "@/context/AuthContext";
 import { formatINR } from "@/lib/api";
 import { Minus, Plus, X, ShoppingBag, ArrowRight } from "lucide-react";
@@ -40,11 +40,13 @@ export default function Cart() {
 
       <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_360px]">
         <div className="space-y-4">
-          {items.map((it) => (
+          {items.map((it) => {
+            const k = lineKey(it);
+            return (
             <div
-              key={it.product_id}
+              key={k}
               className="card-base flex gap-4 p-4"
-              data-testid={`cart-item-${it.product_id}`}
+              data-testid={`cart-item-${k}`}
             >
               <div className="h-24 w-24 flex-shrink-0 overflow-hidden rounded-xl bg-gray-50">
                 <img src={it.image} alt={it.name} className="h-full w-full object-cover" />
@@ -61,10 +63,10 @@ export default function Cart() {
                       {it.note && <div className="mt-0.5 text-xs italic text-[#4A4A4A]">Note: {it.note}</div>}
                     </div>
                     <button
-                      onClick={() => removeItem(it.product_id)}
+                      onClick={() => removeItem(k)}
                       className="text-gray-400 hover:text-red-500"
                       aria-label="Remove"
-                      data-testid={`remove-${it.product_id}`}
+                      data-testid={`remove-${k}`}
                     >
                       <X className="h-4 w-4" />
                     </button>
@@ -75,14 +77,14 @@ export default function Cart() {
                 <div className="mt-2 flex items-center justify-between">
                   <div className="flex items-center gap-2 rounded-full border border-[#1B4332] p-0.5">
                     <button
-                      onClick={() => setQuantity(it.product_id, it.quantity - 1)}
+                      onClick={() => setQuantity(k, it.quantity - 1)}
                       className="grid h-7 w-7 place-items-center rounded-full text-[#1B4332] hover:bg-[#1B4332]/10"
                     >
                       <Minus className="h-3.5 w-3.5" />
                     </button>
                     <span className="min-w-6 text-center text-sm font-semibold text-[#1B4332]">{it.quantity}</span>
                     <button
-                      onClick={() => setQuantity(it.product_id, it.quantity + 1)}
+                      onClick={() => setQuantity(k, it.quantity + 1)}
                       className="grid h-7 w-7 place-items-center rounded-full text-[#1B4332] hover:bg-[#1B4332]/10"
                     >
                       <Plus className="h-3.5 w-3.5" />
@@ -92,7 +94,8 @@ export default function Cart() {
                 </div>
               </div>
             </div>
-          ))}
+          );
+          })}
         </div>
 
         <aside className="card-base sticky top-24 h-fit p-6" data-testid="cart-summary">
