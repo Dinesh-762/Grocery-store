@@ -1,6 +1,7 @@
 import { Link, NavLink, useNavigate } from "react-router-dom";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ShoppingCart, User, Search, Menu, X, LogOut, LayoutDashboard, Package, Leaf, Store, Truck } from "lucide-react";
+import { api } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useCart } from "@/context/CartContext";
 import {
@@ -25,14 +26,39 @@ export default function Header() {
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [suggestions, setSuggestions] = useState([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
 
   const submitSearch = (e) => {
-    e.preventDefault();
-    if (!search.trim()) return;
-    navigate(`/products?q=${encodeURIComponent(search.trim())}`);
-    setSearch("");
-    setMobileOpen(false);
+  e.preventDefault();
+  if (!search.trim()) return;
+
+  navigate(`/products?q=${encodeURIComponent(search.trim())}`);
+  setSearch("");
+  setMobileOpen(false);
   };
+  useEffect(() => {
+  if (search.trim().length === 0) {
+    setSuggestions([]);
+    setShowSuggestions(false);
+    return;
+  }
+
+  const timer = setTimeout(async () => {
+    try {
+      const res = await api.get(
+        `/products?q=${encodeURIComponent(search)}&limit=5`
+      );
+
+      setSuggestions(res.data);
+      setShowSuggestions(true);
+    } catch (err) {
+      console.error(err);
+    }
+  }, 300);
+
+  return () => clearTimeout(timer);
+}, [search]);
 
   return (
     <header
@@ -50,6 +76,35 @@ export default function Header() {
         </Link>
 
         <form onSubmit={submitSearch} className="hidden max-w-md flex-1 md:block" data-testid="header-search-form">
+          {showSuggestions && suggestions.length > 0 && (
+  <div className="absolute left-0 right-0 top-full z-50 mt-2 rounded-xl border bg-white shadow-xl">
+    {suggestions.map((item) => (
+      <button
+        key={item.id}
+        onClick={() => {
+          navigate(`/products/${item.slug}`);
+          setSearch("");
+          setSuggestions([]);
+          setShowSuggestions(false);
+        }}
+        className="flex w-full items-center gap-3 px-4 py-3 hover:bg-gray-50"
+      >
+        <img
+          src={item.image}
+          className="h-10 w-10 rounded object-cover"
+          alt={item.name}
+        />
+
+        <div className="text-left">
+          <div className="font-medium">{item.name}</div>
+          <div className="text-sm text-gray-500">
+            ₹{item.price}
+          </div>
+        </div>
+      </button>
+    ))}
+  </div>
+)}
           <div className="relative">
             <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
             <input
