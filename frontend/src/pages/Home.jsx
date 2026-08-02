@@ -23,6 +23,8 @@ export default function Home() {
           api.get("/reviews?limit=6"),
         ]);
         setCategories(cRes.data);
+        console.log("Featured:", fRes.data);
+        console.log("Popular:", pRes.data);
         setFeatured(fRes.data);
         setPopular(pRes.data);
         setReviews(rRes.data);

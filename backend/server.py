@@ -15,10 +15,12 @@ from typing import List, Optional, Annotated
 import bcrypt
 import jwt
 from bson import ObjectId
-from fastapi import FastAPI, APIRouter, HTTPException, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+import cloudinary
+import cloudinary.uploader
 from pydantic import BaseModel, Field, EmailStr, ConfigDict, BeforeValidator
 
 
@@ -31,6 +33,11 @@ DB_NAME = os.environ["DB_NAME"]
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_DAYS = int(os.environ.get("JWT_EXPIRE_DAYS", "7"))
+cloudinary.config(
+    cloud_name=os.environ.get("CLOUDINARY_CLOUD_NAME"),
+    api_key=os.environ.get("CLOUDINARY_API_KEY"),
+    api_secret=os.environ.get("CLOUDINARY_API_SECRET")
+)
 
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
@@ -312,6 +319,29 @@ def order_to_out(o: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Auth routes
 # ---------------------------------------------------------------------------
+
+
+@api.post("/upload/image")
+async def upload_image(file: UploadFile = File(...)):
+    try:
+        contents = await file.read()
+
+        result = cloudinary.uploader.upload(
+            contents,
+            folder="grocery_products"
+        )
+
+        return {
+            "url": result.get("secure_url")
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Image upload failed: {str(e)}"
+        )
+
+
 
 @api.post("/auth/register", response_model=AuthResponse)
 async def register(payload: RegisterIn):

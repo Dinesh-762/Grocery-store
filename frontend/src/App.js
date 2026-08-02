@@ -10,6 +10,7 @@ import ProtectedRoute from "@/components/ProtectedRoute";
 
 import Home from "@/pages/Home";
 import Products from "@/pages/Products";
+import VendorDashboard from "./pages/VendorDashboard";
 import ProductDetail from "@/pages/ProductDetail";
 import Cart from "@/pages/Cart";
 import Checkout from "@/pages/Checkout";
@@ -22,7 +23,7 @@ import Contact from "@/pages/Contact";
 import Legal from "@/pages/Legal";
 import Admin from "@/pages/Admin";
 import BecomeVendor from "@/pages/BecomeVendor";
-import VendorDashboard from "@/pages/VendorDashboard";
+
 import VendorStorefront from "@/pages/VendorStorefront";
 import DeliveryPanel from "@/pages/DeliveryPanel";
 

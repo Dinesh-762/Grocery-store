@@ -1,3 +1,6 @@
+import Dashboard from "@/pages/Dashboard";
+import Catalogue from "@/pages/Catalogue";
+import VendorBottomNav from "@/components/VendorBottomNav";
 import { useEffect, useState, useCallback } from "react";
 import { NavLink, Routes, Route, Navigate } from "react-router-dom";
 import { api, formatINR, formatApiError } from "@/lib/api";
@@ -23,11 +26,27 @@ import {
 const ORDER_STATUSES = ["Pending", "Accepted", "Preparing", "Packed", "Ready", "Out For Delivery", "Delivered", "Cancelled"];
 
 const vendorLinks = [
-  { to: "/vendor", label: "Dashboard", icon: LayoutDashboard, end: true },
-  { to: "/vendor/products", label: "Products", icon: Package },
-  { to: "/vendor/orders", label: "Orders", icon: ShoppingBag },
-  { to: "/vendor/analytics", label: "Analytics", icon: BarChart3 },
-  { to: "/vendor/settings", label: "Shop Settings", icon: Settings },
+  { 
+    to: "/vendor", 
+    label: "Dashboard", 
+    icon: LayoutDashboard, 
+    end: true 
+  },
+  { 
+    to: "/vendor/catalogue", 
+    label: "Catalogue", 
+    icon: Package 
+  },
+  { 
+    to: "/vendor/orders", 
+    label: "Orders", 
+    icon: ShoppingBag 
+  },
+  { 
+    to: "/vendor/more", 
+    label: "More", 
+    icon: Settings 
+  },
 ];
 
 export default function VendorDashboard() {
@@ -37,7 +56,7 @@ export default function VendorDashboard() {
       <p className="mt-2 text-sm text-[#4A4A4A]">Manage your catalogue, inventory, and orders</p>
 
       <div className="mt-8 grid gap-8 lg:grid-cols-[220px_1fr]">
-        <aside className="space-y-1">
+        <aside className="hidden lg:block space-y-1">
           {vendorLinks.map((l) => (
             <NavLink
               key={l.to}
@@ -56,16 +75,18 @@ export default function VendorDashboard() {
           ))}
         </aside>
 
-        <div>
+        <div className="pb-20 lg:pb-0">
           <Routes>
-            <Route index element={<VDashboard />} />
-            <Route path="products" element={<VProducts />} />
+            <Route index element={<Dashboard />} />
+            <Route path="catalogue" element={<Catalogue />} />
+            <Route path="products" element={<Catalogue />} />
             <Route path="orders" element={<VOrders />} />
             <Route path="analytics" element={<VAnalytics />} />
             <Route path="settings" element={<VSettings />} />
             <Route path="*" element={<Navigate to="/vendor" replace />} />
           </Routes>
         </div>
+        <VendorBottomNav />
       </div>
     </div>
   );
@@ -160,12 +181,13 @@ function slugify(s) {
   return s.toLowerCase().trim().replace(/[^\w\s-]/g, "").replace(/\s+/g, "-");
 }
 
-function VProducts() {
+export function VProducts() {
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null);
   const [showForm, setShowForm] = useState(false);
+  
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -276,27 +298,76 @@ function VProductForm({ initial, categories, onClose, onSaved }) {
     }
   );
   const [saving, setSaving] = useState(false);
+  const [preview, setPreview] = useState(initial?.image || "");
+  const [uploading, setUploading] = useState(false);
 
-  const update = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+const uploadImage = async (file) => {
+  if (!file) return;
 
-  const save = async (e) => {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      const payload = {
-        ...form,
-        slug: form.slug || slugify(form.name),
-        price: Number(form.price),
-        mrp: form.mrp ? Number(form.mrp) : null,
-        stock: Number(form.stock),
-      };
-      if (initial) await api.put(`/vendor/products/${initial.id}`, payload);
-      else await api.post("/vendor/products", payload);
-      toast.success(initial ? "Updated" : "Submitted for approval");
-      onSaved();
-    } catch (e) { toast.error(formatApiError(e)); }
-    finally { setSaving(false); }
-  };
+  const formData = new FormData();
+  formData.append("file", file);
+
+  try {
+    setUploading(true);
+
+    const res = await api.post("/upload/image", formData, {
+      headers: {
+        "Content-Type": "multipart/form-data",
+      },
+    });
+
+    update("image", res.data.url);
+    setPreview(res.data.url);
+    console.log("Uploaded URL:", res.data.url);
+
+    toast.success("Image uploaded successfully");
+  } catch (error) {
+  console.log("Upload Error:", error);
+  console.log("Response:", error.response?.data);
+
+  toast.error(error.response?.data?.detail || "Image upload failed");
+
+  } finally {
+    setUploading(false);
+  }
+};
+
+const update = (k, v) => {
+  console.log("Updating:", k, v);
+
+  setForm((f) => {
+    const newForm = { ...f, [k]: v };
+    console.log("New Form:", newForm);
+    return newForm;
+  });
+};
+const save = async (e) => {
+  e.preventDefault();
+  setSaving(true);
+
+  try {
+    const payload = {
+      ...form,
+      slug: form.slug || slugify(form.name),
+      price: Number(form.price),
+      mrp: form.mrp ? Number(form.mrp) : null,
+      stock: Number(form.stock),
+    };
+
+    if (initial) {
+      await api.put(`/vendor/products/${initial.id}`, payload);
+    } else {
+      await api.post("/vendor/products", payload);
+    }
+
+    toast.success(initial ? "Updated" : "Submitted for approval");
+    onSaved();
+  } catch (e) {
+    toast.error(formatApiError(e));
+  } finally {
+    setSaving(false);
+  }
+};
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" data-testid="v-product-form">
@@ -309,6 +380,7 @@ function VProductForm({ initial, categories, onClose, onSaved }) {
           <FF label="Name" value={form.name} onChange={(v) => update("name", v)} required />
           <FF label="Slug" value={form.slug} onChange={(v) => update("slug", v)} placeholder="auto from name" />
           <div className="sm:col-span-2">
+      
             <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Description</label>
             <textarea value={form.description} onChange={(e) => update("description", e.target.value)} rows={2} className="input-base resize-none" />
           </div>
@@ -321,9 +393,30 @@ function VProductForm({ initial, categories, onClose, onSaved }) {
               {categories.map((c) => <option key={c.slug} value={c.slug}>{c.name}</option>)}
             </select>
           </div>
-          <div className="sm:col-span-2">
-            <FF label="Image URL" value={form.image} onChange={(v) => update("image", v)} required />
-          </div>
+<div className="sm:col-span-2">
+  <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">
+    Product Image
+  </label>
+
+  <input
+    type="file"
+    accept="image/*"
+    onChange={(e) => uploadImage(e.target.files?.[0])}
+    className="input-base"
+  />
+
+  {uploading ? (
+    <p className="mt-2 text-sm text-[#1B4332]">Uploading image...</p>
+  ) : null}
+
+  {preview ? (
+    <img
+      src={preview}
+      alt="Preview"
+      className="mt-3 h-24 w-24 rounded-lg object-cover"
+    />
+  ) : null}
+</div>
           <FF label="Stock" type="number" value={form.stock} onChange={(v) => update("stock", v)} required />
           <div className="sm:col-span-2 flex justify-end gap-3 pt-2">
             <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
@@ -518,18 +611,36 @@ function VAnalytics() {
             <h3 className="font-heading text-lg font-semibold">Low stock</h3>
           </div>
           <div className="space-y-3">
-            {data.low_stock.map((p) => (
-              <div key={p.id} className="flex items-center gap-3">
-                <img src={p.image} alt="" className="h-10 w-10 rounded-lg object-cover" />
-                <div className="flex-1">
-                  <div className="text-sm font-semibold">{p.name}</div>
-                  <div className="text-xs text-[#4A4A4A]">{p.unit}</div>
-                </div>
-                <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${p.stock === 0 ? "bg-red-100 text-red-700" : "bg-yellow-100 text-yellow-700"}`}>
-                  {p.stock} left
-                </span>
-              </div>
-            ))}
+ {data.low_stock.map((p) => (
+  <div key={p.id} className="flex items-center gap-3">
+
+    {p.image && (
+      <img
+        src={p.image}
+        alt={p.name || ""}
+        className="h-10 w-10 rounded-lg object-cover"
+      />
+    )}
+
+    <div className="flex-1">
+      <p className="font-medium">{p.name}</p>
+      <p className="text-sm text-gray-500">
+        {p.stock} left
+      </p>
+    </div>
+
+    <span
+      className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+        p.stock === 0
+          ? "bg-red-100 text-red-700"
+          : "bg-yellow-100 text-yellow-700"
+      }`}
+    >
+      {p.stock} left
+    </span>
+
+  </div>
+))}
           </div>
         </div>
       )}
