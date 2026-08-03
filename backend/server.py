@@ -229,6 +229,7 @@ class OrderIn(BaseModel):
     payment_method: str  # "UPI" or "COD"
     notes: Optional[str] = ""
     coupon_code: Optional[str] = None
+    distance_km: Optional[float] = None
 
 
 ORDER_STATUSES = ["Pending", "Accepted", "Preparing", "Packed", "Ready", "Out For Delivery", "Delivered", "Cancelled"]
@@ -519,7 +520,9 @@ async def delete_product(prod_id: str, _: dict = Depends(require_admin)):
 # Orders
 # ---------------------------------------------------------------------------
 
-DELIVERY_FEE = 30.0
+DELIVERY_FEE = 20.0
+DELIVERY_FEE_NEAR = 13.0
+NEAR_DISTANCE_KM = 1.5
 FREE_DELIVERY_THRESHOLD = 499.0
 
 
@@ -597,7 +600,10 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
                 raise HTTPException(status_code=400, detail=f"Minimum order for {vend.get('business_name', 'this vendor')} is ₹{int(min_amt) if float(min_amt).is_integer() else round(min_amt, 2)}. Current subtotal for their items is ₹{sub:.2f}.")
 
     subtotal = round(sum(i["price"] * i["quantity"] for i in verified_items), 2)
-    delivery_fee = 0.0 if subtotal >= FREE_DELIVERY_THRESHOLD else DELIVERY_FEE
+    # Distance-based delivery fee (default: assume near if unspecified)
+    dist = payload.distance_km if payload.distance_km is not None else 1.0
+    base_fee = DELIVERY_FEE_NEAR if dist <= NEAR_DISTANCE_KM else DELIVERY_FEE
+    delivery_fee = 0.0 if subtotal >= FREE_DELIVERY_THRESHOLD else base_fee
 
     # Apply coupon if provided
     discount = 0.0

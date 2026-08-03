@@ -5,6 +5,7 @@ import { useEffect, useState, useCallback } from "react";
 import { NavLink, Routes, Route, Navigate } from "react-router-dom";
 import { api, formatINR, formatApiError } from "@/lib/api";
 import { toast } from "sonner";
+import { useAuth } from "@/context/AuthContext";
 import {
   LayoutDashboard,
   Package,
@@ -83,6 +84,7 @@ export default function VendorDashboard() {
             <Route path="orders" element={<VOrders />} />
             <Route path="analytics" element={<VAnalytics />} />
             <Route path="settings" element={<VSettings />} />
+            <Route path="more" element={<VMore />} />
             <Route path="*" element={<Navigate to="/vendor" replace />} />
           </Routes>
         </div>
@@ -814,6 +816,44 @@ function VSettings() {
         </button>
       </div>
     </form>
+  );
+}
+
+
+/* ================= MORE (consolidates business links) ================= */
+function VMore() {
+  const tiles = [
+    { to: "/vendor/analytics", title: "Analytics", body: "Sales trends, best-sellers, earnings breakdown", available: true, icon: BarChart3, color: "bg-[#1B4332]" },
+    { to: "/vendor/settings", title: "Shop Settings", body: "Business profile, hours, vacation mode, delivery radius", available: true, icon: Settings, color: "bg-[#E07A5F]" },
+    { to: "/vendor/settings", title: "Business Details", body: "Update your name, address, description, logo", available: true, icon: Store, color: "bg-[#8BA888]" },
+    { to: null, title: "Bank Details", body: "Payout account setup — coming soon", available: false, icon: Store, color: "bg-[#F4A261]" },
+    { to: "/vendor/analytics", title: "Commission & Earnings", body: "See platform commission and net earnings", available: true, icon: BarChart3, color: "bg-[#1B4332]" },
+    { to: "/contact", title: "Support", body: "Need help? Chat with the Ambajogai team", available: true, icon: Store, color: "bg-[#8BA888]" },
+  ];
+  const { logout } = useAuth();
+  return (
+    <div className="space-y-6" data-testid="vendor-more">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {tiles.map((t) => {
+          const inner = (
+            <div className={`card-base h-full p-5 ${!t.available ? "opacity-60" : "hover:border-[#8BA888]"}`}>
+              <div className={`grid h-10 w-10 place-items-center rounded-xl ${t.color} text-white`}>
+                <t.icon className="h-5 w-5" />
+              </div>
+              <div className="mt-4 font-heading text-lg font-semibold">{t.title}</div>
+              <div className="mt-1 text-xs text-[#4A4A4A]">{t.body}</div>
+              {!t.available && <div className="mt-2 inline-block rounded-full bg-yellow-100 px-2 py-0.5 text-[10px] font-semibold text-yellow-800">Coming soon</div>}
+            </div>
+          );
+          return t.available && t.to ? (
+            <NavLink key={t.title} to={t.to} data-testid={`more-tile-${t.title.toLowerCase().replace(/\s/g, "-")}`}>{inner}</NavLink>
+          ) : (
+            <div key={t.title}>{inner}</div>
+          );
+        })}
+      </div>
+      <button onClick={logout} className="btn-secondary" data-testid="more-logout">Log out</button>
+    </div>
   );
 }
 

@@ -69,7 +69,7 @@ export function CartProvider({ children }) {
     return { subtotal: Math.round(s * 100) / 100, count: c };
   }, [items]);
 
-  const DELIVERY_FEE = 30;
+  const DELIVERY_FEE = 20;
   const FREE_THRESHOLD = 499;
   const deliveryFee = subtotal >= FREE_THRESHOLD || subtotal === 0 ? 0 : DELIVERY_FEE;
   const total = Math.round((subtotal + deliveryFee) * 100) / 100;

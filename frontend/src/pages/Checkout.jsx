@@ -25,8 +25,8 @@ export default function Checkout() {
     area: "",
     pincode: "",
     notes: "",
+    distance_km: "1.0",
   });
-  // Legacy alias so all existing `form.foo` references keep working (this was a rename mid-refactor)
   const form = f;
 
   useEffect(() => {
@@ -75,6 +75,7 @@ export default function Checkout() {
         payment_method: payment,
         notes: form.notes,
         coupon_code: coupon?.code || null,
+        distance_km: form.distance_km ? Number(form.distance_km) : null,
       });
       setPlaced(true);
       clearCart();
@@ -151,6 +152,18 @@ export default function Checkout() {
               <Field label="Landmark (optional)" value={form.landmark} onChange={update("landmark")} testid="addr-landmark" />
               <Field label="Area / Locality" value={form.area} onChange={update("area")} testid="addr-area" />
               <Field label="Pincode" value={form.pincode} onChange={update("pincode")} testid="addr-pincode" placeholder="431517" />
+              <div className="sm:col-span-2">
+                <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Distance from store (km)</label>
+                <select
+                  value={f.distance_km}
+                  onChange={(e) => setForm({ ...f, distance_km: e.target.value })}
+                  className="input-base"
+                  data-testid="distance-km"
+                >
+                  <option value="1.0">Within 1.5 km (₹13 delivery)</option>
+                  <option value="3.0">More than 1.5 km (₹20 delivery)</option>
+                </select>
+              </div>
               <div className="sm:col-span-2">
                 <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Delivery notes (optional)</label>
                 <textarea

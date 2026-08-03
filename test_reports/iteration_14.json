@@ -1,0 +1,50 @@
+{
+  "summary": "Iteration 14 targeted testing: vendor sidebar consolidation (4 links), /vendor/more page, Catalogue route regression, and distance-based delivery fee end-to-end. Found and fixed a CRITICAL blocker: OrderIn Pydantic model was missing the distance_km field, so EVERY POST /api/orders returned 500 (AttributeError). After adding the field, 13/13 backend tests pass and both distance tiers verified end-to-end in the UI (near => delivery ₹13, far => ₹20, subtotal >= ₹499 => free). Remaining HIGH issue: the checkout Order-summary/UPI QR always shows ₹20 delivery (client constant) even when 'Within 1.5 km (₹13)' is selected, so displayed total (₹45) differs from actual charged total (₹38).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/orders", "issue": "FIXED BY TESTER: create_order read payload.distance_km but OrderIn had no distance_km field -> AttributeError -> HTTP 500 on every order placement (complete checkout outage). Added `distance_km: Optional[float] = None` to OrderIn in /app/backend/server.py. Main agent should keep this and add a model-level test.", "priority": "CRITICAL"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/orders", "issue": "distance_km is used to compute the fee but is not persisted on the order document, so vendor/delivery panels and admin cannot see the delivery distance/tier for an order."},
+      {"endpoint": "CORS config (server.py ~1997)", "issue": "allow_credentials=True combined with default allow_origins='*' is an invalid/insecure combination; browsers reject credentialed wildcard origins. Set explicit CORS_ORIGINS."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Checkout order summary / UPI QR", "issue": "Delivery is rendered from CartContext's hardcoded DELIVERY_FEE=20, so selecting 'Within 1.5 km (₹13)' still shows Delivery ₹20, Total ₹45 and 'Scan & pay ₹45', while the server charges ₹13 (order total ₹38). Customer is shown/asked to pay the wrong amount. Derive the displayed fee from the selected distance_km (13 if <=1.5km) or fetch a server quote.", "selector": "[data-testid=\"distance-km\"], [data-testid=\"checkout-total\"]", "priority": "HIGH"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Vendor Catalogue (/vendor/products, /vendor/catalogue)", "issues": ["Sidebar label renamed to 'Catalogue' but the page heading still reads 'Products (4)' — inconsistent naming"]},
+      {"screen": "Vendor More page", "issues": ["'Business Details' tile links to the same /vendor/settings page and 'Commission & Earnings' links to the same /vendor/analytics page as two other tiles (duplicate destinations, no deep-link/anchor)", "'Bank Details' and 'Support' tiles reuse the generic Store icon"]},
+      {"screen": "Unknown routes (e.g. /shop)", "issues": ["No 404/catch-all route at app level — unknown top-level paths render a completely blank page with only the header"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration14_distance.py",
+    "/app/test_reports/pytest/it14_results.xml"
+  ],
+  "action_items": [
+    "Keep/verify the OrderIn.distance_km field added by the tester (was the cause of 500 on all order placements) — add a regression test so the model and handler stay in sync.",
+    "Fix checkout delivery-fee display to reflect the selected distance option (₹13 vs ₹20) including the UPI 'Scan & pay' amount.",
+    "Persist distance_km (and the resolved delivery tier) on the order document for vendor/delivery visibility.",
+    "Rename the Catalogue page heading from 'Products' to 'Catalogue' for consistency.",
+    "Add an app-level 404/catch-all route so unknown paths do not render a blank page."
+  ],
+  "critical_code_review_comments": [
+    "server.py: handler referenced a Pydantic attribute that was never declared — this class of bug is invisible until runtime; keep the model and handler edits together.",
+    "CartContext.jsx duplicates the delivery-fee business rule client-side (DELIVERY_FEE=20 / FREE_THRESHOLD=499); with distance tiers this is now guaranteed to drift from the server. Prefer a single server-side quote endpoint.",
+    "VendorDashboard.jsx is 859 lines and hosts Dashboard/Orders/Analytics/Settings/More components in one file — split into /pages/vendor/*.jsx."
+  ],
+  "updated_files": [
+    "/app/backend/server.py (added OrderIn.distance_km — 1 line)",
+    "/app/backend/tests/test_iteration14_distance.py (new)"
+  ],
+  "success_rate": {"backend": "100% (13/13 after the 1-line model fix; 0% before)", "frontend": "92% (all vendor nav/More/route checks pass; 1 HIGH pricing-display bug)"},
+  "seed_data_creation": "Created customer TEST_it14_ui_1785765866@example.com / Cust@123 and TEST_it14_* products/coupons via API (products cleaned up by fixture; test coupons TEST14*/TEST14B* remain).",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "Admin admin@ambajogai.com / Admin@123; Vendor test_vendor_ui_1785253172@example.com / Vendor@123; Customer TEST_it14_ui_1785765866@example.com / Cust@123",
+  "context_for_next_testing_agent": "Verified this iteration: sidebar has exactly 4 links (vendor-nav-dashboard/catalogue/orders/more, old analytics/settings links removed but routes /vendor/analytics and /vendor/settings still render), /vendor/more shows all 6 tiles + Coming-soon badge on Bank Details, more-tile-analytics and more-tile-shop-settings navigate correctly, more-logout clears ambajogai_token and redirects to /login, no console/page errors on any /vendor/* page. Distance fee verified end-to-end in UI (₹13 near / ₹20 far on the created order detail page) and via pytest (boundary 1.5 km = near, omitted/null distance = near, subtotal>=499 = free for both tiers). Coupon validate uses GET /api/coupons/{code}/validate?subtotal=..., coupon create is POST /api/admin/coupons, products require slug + category_slug, order items require name/price/image/unit. Note /shop is NOT a route (use /products). Next run: re-verify the checkout delivery-fee display fix and distance_km persistence.",
+  "rca_of_the_issue": "Root cause of the 500 on POST /api/orders: create_order (server.py:603) accessed payload.distance_km, but the OrderIn Pydantic model never declared distance_km, so extra JSON keys were dropped and attribute access raised AttributeError ('OrderIn' object has no attribute 'distance_km'), surfacing as 500 for every order — including requests that omitted distance_km. Reproduction: POST /api/orders with any valid payload -> 500; backend.err.log shows the AttributeError traceback. Mitigation applied: declared distance_km: Optional[float] = None on OrderIn."
+}
