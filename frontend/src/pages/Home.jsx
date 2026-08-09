@@ -22,12 +22,12 @@ export default function Home() {
           api.get("/products?popular=true&limit=8"),
           api.get("/reviews?limit=6"),
         ]);
-        setCategories(cRes.data);
+       setCategories(Array.isArray(cRes.data) ? cRes.data : []);
         console.log("Featured:", fRes.data);
         console.log("Popular:", pRes.data);
-        setFeatured(fRes.data);
-        setPopular(pRes.data);
-        setReviews(rRes.data);
+        setFeatured(Array.isArray(fRes.data) ? fRes.data : []);
+        setPopular(Array.isArray(pRes.data) ? pRes.data : []);
+        setReviews(Array.isArray(rRes.data) ? rRes.data : []);
       } catch {
         /* ignore fetch errors on home */
       }
