@@ -5,7 +5,10 @@ import { formatINR } from "@/lib/api";
 
 export default function ProductCard({ product }) {
   const { addItem, items, setQuantity } = useCart();
-  const inCart = items.find((i) => i.product_id === product.id);
+  
+  // FIXED: Added Array.isArray check and corrected .find() syntax
+  const inCart = Array.isArray(items) ? items.find((i) => i.product_id === product.id) : null;
+  
   const off = product.mrp && product.mrp > product.price
     ? Math.round(((product.mrp - product.price) / product.mrp) * 100)
     : 0;

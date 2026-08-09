@@ -80,21 +80,21 @@ export default function OrderDetail() {
               const active = i === currentIdx;
               return (
                 <li key={s} className="relative flex flex-1 items-start gap-3 md:flex-col md:items-center md:gap-2 md:text-center">
-                  <div className={`grid h-9 w-9 flex-shrink-0 place-items-center rounded-full ${done ? "bg-[#1B4332] text-white" : "bg-gray-100 text-gray-400"}`}>
-                    {done ? <CheckCircle2 className="h-5 w-5" /> : <Circle className="h-5 w-5" />}
-                  </div>
-                  <div>
-                    <div className={`text-sm font-semibold ${active ? "text-[#E07A5F]" : done ? "text-[#1B4332]" : "text-gray-400"}`}>{s}</div>
-                    {order.status_history?.find((h) => h.status === s) && (
-                      <div className="text-xs text-[#4A4A4A]">
-                        {new Date(order.status_history.find((h) => h.status === s).at).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "short" })}
-                      </div>
-                    )}
-                  </div>
-                  {i < STATUSES.length - 1 && (
-                    <div className={`hidden h-0.5 flex-1 md:absolute md:top-4 md:left-[calc(50%+18px)] md:right-[calc(-50%+18px)] md:block ${i < currentIdx ? "bg-[#1B4332]" : "bg-gray-200"}`} />
-                  )}
-                </li>
+  <div className={`grid h-9 w-9 flex-shrink-0 place-items-center rounded-full ${done ? "bg-[#1B4332] text-white" : "bg-gray-100 text-gray-400"}`}>
+    {done ? <CheckCircle2 className="h-5 w-5" /> : <Circle className="h-5 w-5" />}
+  </div>
+  <div>
+    <div className={`text-sm font-semibold ${active ? "text-[#E07A5F]" : done ? "text-[#1B4332]" : "text-gray-400"}`}>{s}</div>
+    {Array.isArray(order?.status_history) && order.status_history.find((h) => h.status === s) && (
+      <div className="text-xs text-[#4A4A4A]">
+        {new Date(order.status_history.find((h) => h.status === s)?.at).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "short" })}
+      </div>
+    )}
+  </div>
+  {i < STATUSES.length - 1 && (
+    <div className={`hidden h-0.5 flex-1 md:absolute md:top-4 md:left-[calc(50%+18px)] md:right-[calc(-50%+18px)] md:block ${i < currentIdx ? "bg-[#1B4332]" : "bg-gray-200"}`} />
+  )}
+</li>
               );
             })}
           </ol>

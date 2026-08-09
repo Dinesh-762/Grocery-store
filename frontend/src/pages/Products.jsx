@@ -52,7 +52,7 @@ export default function Products() {
     updateParam("q", searchInput.trim());
   };
 
-  const activeCat = categories.find((c) => c.slug === category);
+  const activeCat = Array.isArray(categories) ? categories.find((c) => c.slug === category) : null;
 
   return (
     <div className="container-app py-8" data-testid="products-page">
