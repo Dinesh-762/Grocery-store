@@ -145,7 +145,7 @@ export default function Home() {
         <section className="container-app py-8">
           <SectionHeading title="Featured Today" subtitle="Hand-picked deals just for you" cta={{ to: "/products", label: "Shop all" }} />
           <div className="mt-8 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
-            {featured.map((p) => (
+            {(Array.isArray(featured) ? featured : []).map((p) => (
               <ProductCard key={p.id} product={p} />
             ))}
           </div>
@@ -157,7 +157,7 @@ export default function Home() {
         <section className="container-app py-8">
           <SectionHeading title="Popular Right Now" subtitle="What Ambajogai is buying this week" />
           <div className="mt-8 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
-            {popular.map((p) => (
+            {(Array.isArray(popular) ? popular : []).map((p) => (
               <ProductCard key={p.id} product={p} />
             ))}
           </div>

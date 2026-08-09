@@ -96,7 +96,7 @@ export default function Products() {
               >
                 All products
               </button>
-              {categories.map((c) => (
+              {(Array.isArray(categories) ? categories : []).map((c) => (
                 <button
                   key={c.slug}
                   onClick={() => updateParam("category", c.slug)}
@@ -144,7 +144,7 @@ export default function Products() {
               className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4"
               data-testid="products-grid"
             >
-              {sorted.map((p) => (
+             {(Array.isArray(sorted) ? sorted : []).map((p) => (
                 <ProductCard key={p.id} product={p} />
               ))}
             </div>
