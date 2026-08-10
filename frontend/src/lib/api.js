@@ -1,7 +1,8 @@
 import axios from "axios";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-export const API_BASE = `${BACKEND_URL}/api`;
+const API_BASE = "/api";
+
+export const api = axios.create({ baseURL: API_BASE });
 
 export const api = axios.create({ baseURL: API_BASE });
 
@@ -17,7 +18,6 @@ api.interceptors.response.use(
   (r) => r,
   (err) => {
     if (err?.response?.status === 401) {
-      // Token expired or invalid — clear silently. Route guards will redirect.
       const path = window.location.pathname;
       if (
         path.startsWith("/checkout") ||
