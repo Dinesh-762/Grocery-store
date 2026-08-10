@@ -4,7 +4,6 @@ const API_BASE = "/api";
 
 export const api = axios.create({ baseURL: API_BASE });
 
-export const api = axios.create({ baseURL: API_BASE });
 
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("ambajogai_token");
