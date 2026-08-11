@@ -210,6 +210,8 @@ class AddressIn(BaseModel):
     area: str
     city: str = "Ambajogai"
     pincode: str
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 
 class OrderItem(BaseModel):

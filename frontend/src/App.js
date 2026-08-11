@@ -4,6 +4,7 @@ import { Toaster } from "sonner";
 import { AuthProvider } from "@/context/AuthContext";
 import { CartProvider } from "@/context/CartContext";
 import Header from "@/components/Header";
+import StickyCartBar from "@/components/StickyCartBar";
 import Footer from "@/components/Footer";
 import WhatsAppFloat from "@/components/WhatsAppFloat";
 import ProtectedRoute from "@/components/ProtectedRoute";
@@ -101,6 +102,9 @@ export default function App() {
                 />
               </Routes>
             </main>
+
+            <StickyCartBar />
+
             <WhatsAppFloat />
             <Toaster position="top-right" richColors closeButton />
           </div>
