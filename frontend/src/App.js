@@ -16,6 +16,7 @@ import ProductDetail from "@/pages/ProductDetail";
 import Cart from "@/pages/Cart";
 import Checkout from "@/pages/Checkout";
 import Login from "@/pages/Login";
+import ForgotPassword from "@/pages/ForgotPassword";
 import Register from "@/pages/Register";
 import Orders from "@/pages/Orders";
 import OrderDetail from "@/pages/OrderDetail";
@@ -36,20 +37,46 @@ export default function App() {
       <CartProvider>
         <BrowserRouter>
           <ScrollToTop />
+
           <div className="App flex min-h-screen flex-col">
             <Header />
+
             <main className="flex-1">
               <Routes>
                 <Route path="/" element={<Home />} />
+
                 <Route path="/products" element={<Products />} />
-                <Route path="/products/:slug" element={<ProductDetail />} />
+
+                <Route
+                  path="/products/:slug"
+                  element={<ProductDetail />}
+                />
+
                 <Route path="/cart" element={<Cart />} />
+
                 <Route path="/login" element={<Login />} />
+
+                <Route
+                  path="/forgot-password"
+                  element={<ForgotPassword />}
+                />
+
                 <Route path="/register" element={<Register />} />
+
                 <Route path="/about" element={<About />} />
+
                 <Route path="/contact" element={<Contact />} />
-                <Route path="/privacy" element={<Legal type="privacy" />} />
-                <Route path="/terms" element={<Legal type="terms" />} />
+
+                <Route
+                  path="/privacy"
+                  element={<Legal type="privacy" />}
+                />
+
+                <Route
+                  path="/terms"
+                  element={<Legal type="terms" />}
+                />
+
                 <Route
                   path="/checkout"
                   element={
@@ -58,6 +85,7 @@ export default function App() {
                     </ProtectedRoute>
                   }
                 />
+
                 <Route
                   path="/orders"
                   element={
@@ -66,6 +94,7 @@ export default function App() {
                     </ProtectedRoute>
                   }
                 />
+
                 <Route
                   path="/orders/:id"
                   element={
@@ -74,8 +103,17 @@ export default function App() {
                     </ProtectedRoute>
                   }
                 />
-                <Route path="/become-vendor" element={<BecomeVendor />} />
-                <Route path="/vendors/:id" element={<VendorStorefront />} />
+
+                <Route
+                  path="/become-vendor"
+                  element={<BecomeVendor />}
+                />
+
+                <Route
+                  path="/vendors/:id"
+                  element={<VendorStorefront />}
+                />
+
                 <Route
                   path="/vendor/*"
                   element={
@@ -84,6 +122,7 @@ export default function App() {
                     </ProtectedRoute>
                   }
                 />
+
                 <Route
                   path="/delivery/*"
                   element={
@@ -92,6 +131,7 @@ export default function App() {
                     </ProtectedRoute>
                   }
                 />
+
                 <Route
                   path="/admin/*"
                   element={
@@ -106,7 +146,12 @@ export default function App() {
             <StickyCartBar />
 
             <WhatsAppFloat />
-            <Toaster position="top-right" richColors closeButton />
+
+            <Toaster
+              position="top-right"
+              richColors
+              closeButton
+            />
           </div>
         </BrowserRouter>
       </CartProvider>

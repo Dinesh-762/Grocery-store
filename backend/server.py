@@ -167,6 +167,24 @@ class OTPVerify(BaseModel):
     phone: str
     code: str
 
+class ForgotPasswordRequest(BaseModel):
+    phone: str
+
+
+class ResetPasswordRequest(BaseModel):
+    phone: str
+    code: str
+    new_password: str = Field(min_length=6, max_length=128)   
+
+    
+class ForgotPasswordRequest(BaseModel):
+    phone: str
+
+
+class ResetPasswordRequest(BaseModel):
+    phone: str
+    code: str
+    new_password: str = Field(min_length=6, max_length=128)
 
 class CategoryIn(BaseModel):
     name: str
@@ -412,6 +430,108 @@ async def otp_verify(payload: OTPVerify):
         raise HTTPException(status_code=400, detail="OTP expired")
     await db.otps.delete_one({"phone": payload.phone})
     return {"success": True, "message": "OTP verified"}
+
+@api.post("/auth/password-reset/request")
+async def password_reset_request(payload: ForgotPasswordRequest):
+    phone = payload.phone.strip()
+
+    user = await db.users.find_one({"phone": phone})
+
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="No account found with this phone number"
+        )
+
+    code = str(uuid.uuid4().int)[-6:]
+
+    await db.password_reset_otps.update_one(
+        {"phone": phone},
+        {
+            "$set": {
+                "code": code,
+                "expires_at": (
+                    now_utc() + timedelta(minutes=5)
+                ).isoformat()
+            }
+        },
+        upsert=True,
+    )
+
+    logger.info(
+        f"[PASSWORD RESET OTP] phone={phone} code={code}"
+    )
+
+    return {
+        "success": True,
+        "message": "Password reset OTP generated",
+        "debug_code": code
+    }
+@api.post("/auth/password-reset")
+async def password_reset(payload: ResetPasswordRequest):
+    phone = payload.phone.strip()
+
+    reset_record = await db.password_reset_otps.find_one(
+        {"phone": phone}
+    )
+
+    if not reset_record:
+        raise HTTPException(
+            status_code=400,
+            detail="Password reset OTP not found or expired"
+        )
+
+    if reset_record.get("code") != payload.code:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid OTP"
+        )
+
+    expires_at = datetime.fromisoformat(
+        reset_record["expires_at"]
+    )
+
+    if expires_at < now_utc():
+        await db.password_reset_otps.delete_one(
+            {"phone": phone}
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="OTP expired"
+        )
+
+    user = await db.users.find_one(
+        {"phone": phone}
+    )
+
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="User account not found"
+        )
+
+    new_password_hash = hash_password(
+        payload.new_password
+    )
+
+    await db.users.update_one(
+        {"_id": user["_id"]},
+        {
+            "$set": {
+                "password_hash": new_password_hash
+            }
+        }
+    )
+
+    # OTP can only be used once
+    await db.password_reset_otps.delete_one(
+        {"phone": phone}
+    )
+
+    return {
+        "success": True,
+        "message": "Password reset successfully"
+    }
 
 
 # ---------------------------------------------------------------------------
