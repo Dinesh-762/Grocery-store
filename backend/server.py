@@ -981,8 +981,10 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
             if min_amt and sub < min_amt:
                 raise HTTPException(status_code=400, detail=f"Minimum order for {vend.get('business_name', 'this vendor')} is ₹{int(min_amt) if float(min_amt).is_integer() else round(min_amt, 2)}. Current subtotal for their items is ₹{sub:.2f}.")
 
-    subtotal = round(sum(i["price"] * i["quantity"] for i in verified_items), 2)
-    subtotal = round(sum(i["price"] * i["quantity"] for i in verified_items), 2)
+        subtotal = round(
+        sum(i["price"] * i["quantity"] for i in verified_items),
+        2
+    )
 
     # -----------------------------------------------------------------------
     # Delivery distance + charges
@@ -997,15 +999,70 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
             detail="Please allow location access so delivery charges can be calculated."
         )
 
-    store_lat = float(os.environ.get("STORE_LATITUDE", "18.73"))
-    store_lon = float(os.environ.get("STORE_LONGITUDE", "76.38"))
+    # Get vendor locations for all products in this order
+    vendor_locations = {}
 
-    distance_km = calculate_distance_km(
-        store_lat,
-        store_lon,
-        customer_lat,
-        customer_lon,
-    )
+    for item in verified_items:
+        vendor_id = item.get("vendor_id")
+
+        if not vendor_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Vendor location is not configured for {item.get('name', 'this product')}."
+            )
+
+        if vendor_id not in vendor_locations:
+            try:
+                vendor = await db.vendors.find_one({
+                    "_id": ObjectId(vendor_id),
+                    "status": "Approved"
+                })
+            except Exception:
+                vendor = None
+
+            if not vendor:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Vendor not found for {item.get('name', 'this product')}."
+                )
+
+            vendor_lat = vendor.get("latitude")
+            vendor_lon = vendor.get("longitude")
+
+            if vendor_lat is None or vendor_lon is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Delivery location is not configured for "
+                        f"{vendor.get('business_name', 'this vendor')}."
+                    )
+                )
+
+            vendor_locations[vendor_id] = (
+                float(vendor_lat),
+                float(vendor_lon)
+            )
+
+    # Calculate distance from customer to each vendor
+    distances = []
+
+    for vendor_id, (vendor_lat, vendor_lon) in vendor_locations.items():
+        distance = calculate_distance_km(
+            vendor_lat,
+            vendor_lon,
+            customer_lat,
+            customer_lon,
+        )
+        distances.append(distance)
+
+    if not distances:
+        raise HTTPException(
+            status_code=400,
+            detail="Unable to calculate delivery distance."
+        )
+
+    # For multi-vendor orders, use the farthest vendor distance
+    distance_km = max(distances)
 
     delivery_fee = calculate_delivery_fee(distance_km)
 
@@ -1016,11 +1073,6 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
     platform_fee = PLATFORM_FEE
 
     # -----------------------------------------------------------------------
-    # Coupon
-    # -----------------------------------------------------------------------
-
-    discount = 0.0
-        # -----------------------------------------------------------------------
     # Coupon
     # -----------------------------------------------------------------------
 
@@ -1041,13 +1093,14 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
                 detail="Invalid coupon code"
             )
 
-        if coupon.get("expires_at") and datetime.fromisoformat(
-            coupon["expires_at"]
-        ) < now_utc():
-            raise HTTPException(
-                status_code=400,
-                detail="Coupon expired"
-            )
+        if coupon.get("expires_at"):
+            if datetime.fromisoformat(
+                coupon["expires_at"]
+            ) < now_utc():
+                raise HTTPException(
+                    status_code=400,
+                    detail="Coupon expired"
+                )
 
         if subtotal < coupon.get("min_amount", 0):
             raise HTTPException(
@@ -1069,36 +1122,25 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
             "discount_pct": coupon["discount_pct"],
             "discount": discount,
         }
-            
 
-        if coupon.get("expires_at") and datetime.fromisoformat(
-            coupon["expires_at"]
-        ) < now_utc():
-            raise HTTPException(
-                status_code=400,
-                detail="Coupon expired"
-            )
+    # -----------------------------------------------------------------------
+    # GST
+    # -----------------------------------------------------------------------
 
-        if subtotal < coupon.get("min_amount", 0):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Order must be at least ₹"
-                    f"{coupon.get('min_amount', 0)} "
-                    f"to use this coupon"
-                )
-            )
+    taxable_amount = max(
+        0,
+        subtotal - discount + platform_fee + delivery_fee
+    )
 
-        discount = round(
-            subtotal * (coupon["discount_pct"] / 100.0),
-            2
-        )
+    cgst = round(taxable_amount * CGST_RATE, 2)
+    sgst = round(taxable_amount * SGST_RATE, 2)
 
-        coupon_applied = {
-            "code": coupon["code"],
-            "discount_pct": coupon["discount_pct"],
-            "discount": discount,
-        }
+    gst = round(cgst + sgst, 2)
+
+    total = round(
+        taxable_amount + gst,
+        2
+    )
 
     # -----------------------------------------------------------------------
     # GST
@@ -1299,18 +1341,23 @@ class VendorDocs(BaseModel):
     gst_url: Optional[str] = ""
     shop_license_url: Optional[str] = ""
 
-
 class VendorRegisterIn(BaseModel):
     # user
     name: str = Field(min_length=2, max_length=80)
     email: EmailStr
     password: str = Field(min_length=6, max_length=128)
     phone: str
+
     # vendor profile
     business_name: str
     business_description: str = ""
     business_address: str
     business_pincode: str
+
+    # Vendor shop GPS location
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
     docs: VendorDocs = VendorDocs()
 
 
@@ -1334,6 +1381,8 @@ class VendorSettingsIn(BaseModel):
     business_description: Optional[str] = None
     business_address: Optional[str] = None
     business_pincode: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     shop_phone: Optional[str] = None
     shop_whatsapp: Optional[str] = None
     shop_logo: Optional[str] = None
@@ -1374,6 +1423,8 @@ def vendor_to_out(v: dict) -> dict:
         "vacation_mode": v.get("vacation_mode", False),
         "vacation_message": v.get("vacation_message", ""),
         "delivery_radius_km": v.get("delivery_radius_km"),
+        "latitude": v.get("latitude"),
+        "longitude": v.get("longitude"),
         "min_order_amount": v.get("min_order_amount", 0),
         "estimated_delivery_min": v.get("estimated_delivery_min"),
         "verified": v.get("status") == "Approved",
@@ -1408,18 +1459,23 @@ async def vendor_register(payload: VendorRegisterIn):
     }
     ures = await db.users.insert_one(user_doc)
     vendor_doc = {
-        "owner_id": str(ures.inserted_id),
-        "owner_email": email,
-        "owner_name": payload.name.strip(),
-        "phone": payload.phone,
-        "business_name": payload.business_name.strip(),
-        "business_description": payload.business_description.strip(),
-        "business_address": payload.business_address.strip(),
-        "business_pincode": payload.business_pincode.strip(),
-        "docs": payload.docs.model_dump(),
-        "status": "Pending",
-        "created_at": iso_now(),
-    }
+    "owner_id": str(ures.inserted_id),
+    "owner_email": email,
+    "owner_name": payload.name.strip(),
+    "phone": payload.phone,
+    "business_name": payload.business_name.strip(),
+    "business_description": payload.business_description.strip(),
+    "business_address": payload.business_address.strip(),
+    "business_pincode": payload.business_pincode.strip(),
+
+    "latitude": payload.latitude,
+    "longitude": payload.longitude,
+
+    "docs": payload.docs.model_dump(),
+    "status": "Pending",
+    "created_at": iso_now(),
+}
+
     vres = await db.vendors.insert_one(vendor_doc)
     vendor_doc["_id"] = vres.inserted_id
     return {
