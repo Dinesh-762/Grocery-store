@@ -844,8 +844,68 @@ async def delete_product(prod_id: str, _: dict = Depends(require_admin)):
 # Orders
 # ---------------------------------------------------------------------------
 
-DELIVERY_FEE = 30.0
+# ---------------------------------------------------------------------------
+# Pricing
+# ---------------------------------------------------------------------------
+
+PLATFORM_FEE = 10.0
+
+GST_RATE = 0.05
+CGST_RATE = 0.025
+SGST_RATE = 0.025
+
+DELIVERY_RATE_PER_KM = 13.0
+DELIVERY_RATE_ABOVE_1_5_KM = 20.0
+
 FREE_DELIVERY_THRESHOLD = 499.0
+
+
+def calculate_distance_km(
+    lat1: float,
+    lon1: float,
+    lat2: float,
+    lon2: float,
+) -> float:
+    """
+    Calculate distance between two GPS coordinates using Haversine formula.
+    Returns distance in kilometers.
+    """
+    import math
+
+    earth_radius_km = 6371.0
+
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+
+    delta_lat = math.radians(lat2 - lat1)
+    delta_lon = math.radians(lon2 - lon1)
+
+    a = (
+        math.sin(delta_lat / 2) ** 2
+        + math.cos(lat1_rad)
+        * math.cos(lat2_rad)
+        * math.sin(delta_lon / 2) ** 2
+    )
+
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    return round(earth_radius_km * c, 2)
+
+
+def calculate_delivery_fee(distance_km: float) -> float:
+    """
+    Delivery:
+    <= 1.5 km  -> ₹13/km
+    > 1.5 km   -> ₹20/km
+    """
+
+    if distance_km <= 0:
+        return 0.0
+
+    if distance_km <= 1.5:
+        return round(distance_km * DELIVERY_RATE_PER_KM, 2)
+
+    return round(distance_km * DELIVERY_RATE_ABOVE_1_5_KM, 2)
 
 
 def safe_object_id(id_str: str) -> ObjectId:
@@ -922,22 +982,143 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
                 raise HTTPException(status_code=400, detail=f"Minimum order for {vend.get('business_name', 'this vendor')} is ₹{int(min_amt) if float(min_amt).is_integer() else round(min_amt, 2)}. Current subtotal for their items is ₹{sub:.2f}.")
 
     subtotal = round(sum(i["price"] * i["quantity"] for i in verified_items), 2)
-    delivery_fee = 0.0 if subtotal >= FREE_DELIVERY_THRESHOLD else DELIVERY_FEE
+    subtotal = round(sum(i["price"] * i["quantity"] for i in verified_items), 2)
 
-    # Apply coupon if provided
+    # -----------------------------------------------------------------------
+    # Delivery distance + charges
+    # -----------------------------------------------------------------------
+
+    customer_lat = payload.address.latitude
+    customer_lon = payload.address.longitude
+
+    if customer_lat is None or customer_lon is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Please allow location access so delivery charges can be calculated."
+        )
+
+    store_lat = float(os.environ.get("STORE_LATITUDE", "18.73"))
+    store_lon = float(os.environ.get("STORE_LONGITUDE", "76.38"))
+
+    distance_km = calculate_distance_km(
+        store_lat,
+        store_lon,
+        customer_lat,
+        customer_lon,
+    )
+
+    delivery_fee = calculate_delivery_fee(distance_km)
+
+    # -----------------------------------------------------------------------
+    # Platform fee
+    # -----------------------------------------------------------------------
+
+    platform_fee = PLATFORM_FEE
+
+    # -----------------------------------------------------------------------
+    # Coupon
+    # -----------------------------------------------------------------------
+
+    discount = 0.0
+        # -----------------------------------------------------------------------
+    # Coupon
+    # -----------------------------------------------------------------------
+
     discount = 0.0
     coupon_applied = None
+
     if payload.coupon_code:
         code = payload.coupon_code.strip().upper()
-        coupon = await db.coupons.find_one({"code": code, "active": True})
+
+        coupon = await db.coupons.find_one({
+            "code": code,
+            "active": True
+        })
+
         if not coupon:
-            raise HTTPException(status_code=400, detail="Invalid coupon code")
-        if coupon.get("expires_at") and datetime.fromisoformat(coupon["expires_at"]) < now_utc():
-            raise HTTPException(status_code=400, detail="Coupon expired")
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid coupon code"
+            )
+
+        if coupon.get("expires_at") and datetime.fromisoformat(
+            coupon["expires_at"]
+        ) < now_utc():
+            raise HTTPException(
+                status_code=400,
+                detail="Coupon expired"
+            )
+
         if subtotal < coupon.get("min_amount", 0):
-            raise HTTPException(status_code=400, detail=f"Order must be at least ₹{coupon.get('min_amount', 0)} to use this coupon")
-        discount = round(subtotal * (coupon["discount_pct"] / 100.0), 2)
-        coupon_applied = {"code": coupon["code"], "discount_pct": coupon["discount_pct"], "discount": discount}
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Order must be at least ₹"
+                    f"{coupon.get('min_amount', 0)} "
+                    f"to use this coupon"
+                )
+            )
+
+        discount = round(
+            subtotal * (coupon["discount_pct"] / 100.0),
+            2
+        )
+
+        coupon_applied = {
+            "code": coupon["code"],
+            "discount_pct": coupon["discount_pct"],
+            "discount": discount,
+        }
+            
+
+        if coupon.get("expires_at") and datetime.fromisoformat(
+            coupon["expires_at"]
+        ) < now_utc():
+            raise HTTPException(
+                status_code=400,
+                detail="Coupon expired"
+            )
+
+        if subtotal < coupon.get("min_amount", 0):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Order must be at least ₹"
+                    f"{coupon.get('min_amount', 0)} "
+                    f"to use this coupon"
+                )
+            )
+
+        discount = round(
+            subtotal * (coupon["discount_pct"] / 100.0),
+            2
+        )
+
+        coupon_applied = {
+            "code": coupon["code"],
+            "discount_pct": coupon["discount_pct"],
+            "discount": discount,
+        }
+
+    # -----------------------------------------------------------------------
+    # GST
+    # -----------------------------------------------------------------------
+
+    taxable_amount = max(
+        0,
+        subtotal - discount + platform_fee + delivery_fee
+    )
+
+    cgst = round(taxable_amount * CGST_RATE, 2)
+    sgst = round(taxable_amount * SGST_RATE, 2)
+
+    gst = round(cgst + sgst, 2)
+
+    total = round(
+        taxable_amount + gst,
+        2
+    )
+
 
     total = round(max(0, subtotal + delivery_fee - discount), 2)
     status_history = [{"status": "Pending", "at": iso_now()}]
@@ -2189,12 +2370,30 @@ async def store_info():
     return {
         "name": os.environ.get("STORE_NAME", "Ambajogai Grocery Store"),
         "whatsapp": os.environ.get("STORE_WHATSAPP", "+918237214975"),
-        "phone": os.environ.get("STORE_PHONE", os.environ.get("STORE_WHATSAPP", "+918237214975")),
+        "phone": os.environ.get(
+            "STORE_PHONE",
+            os.environ.get("STORE_WHATSAPP", "+918237214975")
+        ),
         "upi_id": os.environ.get("STORE_UPI_ID", "ambajogai@upi"),
-        "upi_name": os.environ.get("STORE_UPI_NAME", "Ambajogai Grocery Store"),
+        "upi_name": os.environ.get(
+            "STORE_UPI_NAME",
+            "Ambajogai Grocery Store"
+        ),
         "upi_qr": os.environ.get("STORE_UPI_QR", ""),
+
         "address": "Main Road, Ambajogai, Maharashtra 431517",
-        "email": os.environ.get("STORE_EMAIL", "ambajogaigrocerystores@gmail.com"),
+
+        "latitude": float(
+            os.environ.get("STORE_LATITUDE", "18.73")
+        ),
+        "longitude": float(
+            os.environ.get("STORE_LONGITUDE", "76.38")
+        ),
+
+        "email": os.environ.get(
+            "STORE_EMAIL",
+            "ambajogaigrocerystores@gmail.com"
+        ),
     }
 
 
