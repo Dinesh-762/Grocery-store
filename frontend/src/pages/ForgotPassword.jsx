@@ -1,30 +1,62 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { Loader2, ArrowLeft, LockKeyhole } from "lucide-react";
+import {
+  Loader2,
+  ArrowLeft,
+  LockKeyhole,
+  Smartphone,
+  Mail,
+} from "lucide-react";
 import { api, formatApiError } from "@/lib/api";
 
 export default function ForgotPassword() {
   const navigate = useNavigate();
 
+  // 1 = choose recovery method
+  // 2 = enter OTP + new password
   const [step, setStep] = useState(1);
 
-  const [phone, setPhone] = useState("");
+  // Recovery method
+  const [method, setMethod] = useState("phone");
+
+  // User identifier
+  const [identifier, setIdentifier] = useState("");
+
+  // OTP and password
   const [otp, setOtp] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
   const [loading, setLoading] = useState(false);
 
-  // Step 1: Request OTP
+  // ---------------------------------------------------------------------------
+  // STEP 1 — Request OTP
+  // ---------------------------------------------------------------------------
+
   const requestOtp = async (e) => {
     e.preventDefault();
 
-    const cleanPhone = phone.trim();
+    const cleanIdentifier = identifier.trim();
 
-    if (!/^\d{10}$/.test(cleanPhone)) {
-      toast.error("Please enter a valid 10-digit phone number.");
-      return;
+    // Validate phone
+    if (method === "phone") {
+      if (!/^\d{10}$/.test(cleanIdentifier)) {
+        toast.error("Please enter a valid 10-digit mobile number.");
+        return;
+      }
+    }
+
+    // Validate email
+    if (method === "email") {
+      if (
+        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
+          cleanIdentifier
+        )
+      ) {
+        toast.error("Please enter a valid email address.");
+        return;
+      }
     }
 
     setLoading(true);
@@ -33,19 +65,28 @@ export default function ForgotPassword() {
       const response = await api.post(
         "/auth/password-reset/request",
         {
-          phone: cleanPhone,
+          method,
+          identifier:
+            method === "email"
+              ? cleanIdentifier.toLowerCase()
+              : cleanIdentifier,
         }
       );
 
       toast.success(
-        response.data?.message || "OTP generated successfully."
+        response.data?.message ||
+          "OTP generated successfully."
       );
 
-      // Current backend is using mock OTP for development.
+      // Current backend uses mock OTP for development.
+      // Remove this once real SMS/email OTP is connected.
       if (response.data?.debug_code) {
-        toast.info(`Your OTP is ${response.data.debug_code}`, {
-          duration: 10000,
-        });
+        toast.info(
+          `Your OTP is ${response.data.debug_code}`,
+          {
+            duration: 10000,
+          }
+        );
       }
 
       setStep(2);
@@ -61,17 +102,25 @@ export default function ForgotPassword() {
     }
   };
 
-  // Step 2: Verify OTP and reset password
+  // ---------------------------------------------------------------------------
+  // STEP 2 — Verify OTP and reset password
+  // ---------------------------------------------------------------------------
+
   const resetPassword = async (e) => {
     e.preventDefault();
 
-    if (!/^\d{6}$/.test(otp.trim())) {
+    const cleanIdentifier = identifier.trim();
+    const cleanOtp = otp.trim();
+
+    if (!/^\d{6}$/.test(cleanOtp)) {
       toast.error("Please enter the 6-digit OTP.");
       return;
     }
 
     if (newPassword.length < 6) {
-      toast.error("Password must be at least 6 characters.");
+      toast.error(
+        "Password must be at least 6 characters."
+      );
       return;
     }
 
@@ -86,8 +135,12 @@ export default function ForgotPassword() {
       const response = await api.post(
         "/auth/password-reset",
         {
-          phone: phone.trim(),
-          code: otp.trim(),
+          method,
+          identifier:
+            method === "email"
+              ? cleanIdentifier.toLowerCase()
+              : cleanIdentifier,
+          code: cleanOtp,
           new_password: newPassword,
         }
       );
@@ -97,7 +150,9 @@ export default function ForgotPassword() {
           "Password reset successfully!"
       );
 
-      navigate("/login", { replace: true });
+      navigate("/login", {
+        replace: true,
+      });
     } catch (err) {
       toast.error(
         formatApiError(
@@ -110,6 +165,31 @@ export default function ForgotPassword() {
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // Change recovery method
+  // ---------------------------------------------------------------------------
+
+  const changeMethod = () => {
+    setStep(1);
+    setIdentifier("");
+    setOtp("");
+    setNewPassword("");
+    setConfirmPassword("");
+  };
+
+  // ---------------------------------------------------------------------------
+  // Change method while on step 1
+  // ---------------------------------------------------------------------------
+
+  const selectMethod = (selectedMethod) => {
+    setMethod(selectedMethod);
+    setIdentifier("");
+  };
+
+  // ---------------------------------------------------------------------------
+  // UI
+  // ---------------------------------------------------------------------------
+
   return (
     <div className="container-app grid min-h-[80vh] place-items-center py-12">
       <div
@@ -118,7 +198,10 @@ export default function ForgotPassword() {
       >
         <div className="card-base p-8">
 
-          {/* Header */}
+          {/* ---------------------------------------------------------------- */}
+          {/* HEADER */}
+          {/* ---------------------------------------------------------------- */}
+
           <div className="mb-6">
             <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-[#1B4332]/10">
               <LockKeyhole className="h-6 w-6 text-[#1B4332]" />
@@ -130,40 +213,126 @@ export default function ForgotPassword() {
 
             <p className="mt-2 text-sm text-[#4A4A4A]">
               {step === 1
-                ? "Enter your registered phone number to receive an OTP."
+                ? "Choose how you want to reset your password."
                 : "Enter the OTP and create your new password."}
             </p>
           </div>
 
-          {/* STEP 1 — Phone Number */}
+          {/* ---------------------------------------------------------------- */}
+          {/* STEP 1 — SELECT METHOD + SEND OTP */}
+          {/* ---------------------------------------------------------------- */}
+
           {step === 1 && (
             <form
               onSubmit={requestOtp}
               className="space-y-5"
             >
+
+              {/* Recovery Method */}
+
               <div>
-                <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">
-                  Registered Phone Number
+                <label className="mb-2 block text-xs font-semibold text-[#4A4A4A]">
+                  Reset password using
                 </label>
 
-                <input
-                  type="tel"
-                  inputMode="numeric"
-                  maxLength={10}
-                  required
-                  value={phone}
-                  onChange={(e) =>
-                    setPhone(
-                      e.target.value
-                        .replace(/\D/g, "")
-                        .slice(0, 10)
-                    )
-                  }
-                  className="input-base"
-                  placeholder="Enter 10-digit phone number"
-                  data-testid="forgot-phone-input"
-                />
+                <div className="grid grid-cols-2 gap-3">
+
+                  {/* Mobile */}
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      selectMethod("phone")
+                    }
+                    className={`flex items-center justify-center gap-2 rounded-xl border px-4 py-3 text-sm font-semibold transition ${
+                      method === "phone"
+                        ? "border-[#1B4332] bg-[#1B4332]/10 text-[#1B4332]"
+                        : "border-black/10 bg-white text-[#4A4A4A] hover:border-[#1B4332]/40"
+                    }`}
+                    data-testid="forgot-phone-method"
+                  >
+                    <Smartphone className="h-4 w-4" />
+                    Mobile
+                  </button>
+
+                  {/* Email */}
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      selectMethod("email")
+                    }
+                    className={`flex items-center justify-center gap-2 rounded-xl border px-4 py-3 text-sm font-semibold transition ${
+                      method === "email"
+                        ? "border-[#1B4332] bg-[#1B4332]/10 text-[#1B4332]"
+                        : "border-black/10 bg-white text-[#4A4A4A] hover:border-[#1B4332]/40"
+                    }`}
+                    data-testid="forgot-email-method"
+                  >
+                    <Mail className="h-4 w-4" />
+                    Email
+                  </button>
+
+                </div>
               </div>
+
+              {/* ---------------------------------------------------------------- */}
+              {/* MOBILE INPUT */}
+              {/* ---------------------------------------------------------------- */}
+
+              {method === "phone" && (
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">
+                    Registered Mobile Number
+                  </label>
+
+                  <input
+                    type="tel"
+                    inputMode="numeric"
+                    maxLength={10}
+                    required
+                    value={identifier}
+                    onChange={(e) =>
+                      setIdentifier(
+                        e.target.value
+                          .replace(/\D/g, "")
+                          .slice(0, 10)
+                      )
+                    }
+                    className="input-base"
+                    placeholder="Enter 10-digit mobile number"
+                    data-testid="forgot-phone-input"
+                  />
+                </div>
+              )}
+
+              {/* ---------------------------------------------------------------- */}
+              {/* EMAIL INPUT */}
+              {/* ---------------------------------------------------------------- */}
+
+              {method === "email" && (
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">
+                    Registered Email Address
+                  </label>
+
+                  <input
+                    type="email"
+                    required
+                    value={identifier}
+                    onChange={(e) =>
+                      setIdentifier(
+                        e.target.value
+                      )
+                    }
+                    className="input-base"
+                    placeholder="Enter your registered email"
+                    data-testid="forgot-email-input"
+                  />
+                </div>
+              )}
+
+              {/* SEND OTP */}
 
               <button
                 type="submit"
@@ -175,17 +344,36 @@ export default function ForgotPassword() {
                   <Loader2 className="h-4 w-4 animate-spin" />
                 )}
 
-                {loading ? "Sending OTP..." : "Send OTP"}
+                {loading
+                  ? "Sending OTP..."
+                  : "Send OTP"}
               </button>
             </form>
           )}
 
-          {/* STEP 2 — OTP + Password */}
+          {/* ---------------------------------------------------------------- */}
+          {/* STEP 2 — OTP + PASSWORD */}
+          {/* ---------------------------------------------------------------- */}
+
           {step === 2 && (
             <form
               onSubmit={resetPassword}
               className="space-y-5"
             >
+
+              {/* Recovery information */}
+
+              <div className="rounded-xl bg-[#1B4332]/5 p-3 text-sm text-[#4A4A4A]">
+                OTP sent to{" "}
+                <span className="font-semibold text-[#1B4332]">
+                  {method === "phone"
+                    ? `••••••${identifier.slice(-4)}`
+                    : identifier}
+                </span>
+              </div>
+
+              {/* OTP */}
+
               <div>
                 <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">
                   OTP
@@ -210,6 +398,8 @@ export default function ForgotPassword() {
                 />
               </div>
 
+              {/* New Password */}
+
               <div>
                 <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">
                   New Password
@@ -219,15 +409,20 @@ export default function ForgotPassword() {
                   type="password"
                   required
                   minLength={6}
+                  maxLength={128}
                   value={newPassword}
                   onChange={(e) =>
-                    setNewPassword(e.target.value)
+                    setNewPassword(
+                      e.target.value
+                    )
                   }
                   className="input-base"
                   placeholder="Enter new password"
                   data-testid="forgot-new-password"
                 />
               </div>
+
+              {/* Confirm Password */}
 
               <div>
                 <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">
@@ -238,15 +433,20 @@ export default function ForgotPassword() {
                   type="password"
                   required
                   minLength={6}
+                  maxLength={128}
                   value={confirmPassword}
                   onChange={(e) =>
-                    setConfirmPassword(e.target.value)
+                    setConfirmPassword(
+                      e.target.value
+                    )
                   }
                   className="input-base"
                   placeholder="Confirm new password"
                   data-testid="forgot-confirm-password"
                 />
               </div>
+
+              {/* RESET PASSWORD */}
 
               <button
                 type="submit"
@@ -263,20 +463,22 @@ export default function ForgotPassword() {
                   : "Reset Password"}
               </button>
 
+              {/* CHANGE METHOD */}
+
               <button
                 type="button"
-                onClick={() => {
-                  setStep(1);
-                  setOtp("");
-                }}
+                onClick={changeMethod}
                 className="w-full text-sm font-semibold text-[#1B4332] hover:text-[#E07A5F]"
               >
-                Change phone number
+                Change recovery method
               </button>
             </form>
           )}
 
-          {/* Back to Login */}
+          {/* ---------------------------------------------------------------- */}
+          {/* BACK TO LOGIN */}
+          {/* ---------------------------------------------------------------- */}
+
           <div className="mt-6 border-t border-black/10 pt-5 text-center">
             <Link
               to="/login"
