@@ -168,21 +168,15 @@ class OTPVerify(BaseModel):
     code: str
 
 class ForgotPasswordRequest(BaseModel):
-    phone: str
+    method: str
+    phone: Optional[str] = None
+    email: Optional[EmailStr] = None
 
 
 class ResetPasswordRequest(BaseModel):
-    phone: str
-    code: str
-    new_password: str = Field(min_length=6, max_length=128)   
-
-    
-class ForgotPasswordRequest(BaseModel):
-    phone: str
-
-
-class ResetPasswordRequest(BaseModel):
-    phone: str
+    method: str
+    phone: Optional[str] = None
+    email: Optional[EmailStr] = None
     code: str
     new_password: str = Field(min_length=6, max_length=128)
 
@@ -407,7 +401,6 @@ async def login(payload: LoginIn):
 async def me(user: dict = Depends(get_current_user)):
     return user
 
-
 # Mock OTP: generate 6-digit code stored server-side (for demo, returned in response)
 @api.post("/auth/otp/request")
 async def otp_request(payload: OTPRequest):
@@ -433,22 +426,82 @@ async def otp_verify(payload: OTPVerify):
 
 @api.post("/auth/password-reset/request")
 async def password_reset_request(payload: ForgotPasswordRequest):
-    phone = payload.phone.strip()
+    method = payload.method.strip().lower()
 
-    user = await db.users.find_one({"phone": phone})
+    # ---------------------------------
+    # MOBILE NUMBER RESET
+    # ---------------------------------
+    if method == "phone":
+        if not payload.phone:
+            raise HTTPException(
+                status_code=400,
+                detail="Phone number is required"
+            )
 
-    if not user:
+        phone = payload.phone.strip()
+
+        if not phone.isdigit() or len(phone) != 10:
+            raise HTTPException(
+                status_code=400,
+                detail="Please enter a valid 10-digit phone number"
+            )
+
+        user = await db.users.find_one({
+            "phone": phone
+        })
+
+        if not user:
+            raise HTTPException(
+                status_code=404,
+                detail="No account found with this phone number"
+            )
+
+        identifier = phone
+
+    # ---------------------------------
+    # EMAIL RESET
+    # ---------------------------------
+    elif method == "email":
+        if not payload.email:
+            raise HTTPException(
+                status_code=400,
+                detail="Email address is required"
+            )
+
+        email = str(payload.email).strip().lower()
+
+        user = await db.users.find_one({
+            "email": email
+        })
+
+        if not user:
+            raise HTTPException(
+                status_code=404,
+                detail="No account found with this email address"
+            )
+
+        identifier = email
+
+    else:
         raise HTTPException(
-            status_code=404,
-            detail="No account found with this phone number"
+            status_code=400,
+            detail="Invalid password reset method"
         )
 
+    # ---------------------------------
+    # GENERATE OTP
+    # ---------------------------------
     code = str(uuid.uuid4().int)[-6:]
 
     await db.password_reset_otps.update_one(
-        {"phone": phone},
+        {
+            "method": method,
+            "identifier": identifier
+        },
         {
             "$set": {
+                "method": method,
+                "identifier": identifier,
                 "code": code,
                 "expires_at": (
                     now_utc() + timedelta(minutes=5)
@@ -459,7 +512,10 @@ async def password_reset_request(payload: ForgotPasswordRequest):
     )
 
     logger.info(
-        f"[PASSWORD RESET OTP] phone={phone} code={code}"
+        f"[PASSWORD RESET OTP] "
+        f"method={method} "
+        f"identifier={identifier} "
+        f"code={code}"
     )
 
     return {
@@ -467,6 +523,153 @@ async def password_reset_request(payload: ForgotPasswordRequest):
         "message": "Password reset OTP generated",
         "debug_code": code
     }
+
+
+@api.post("/auth/password-reset")
+async def password_reset(payload: ResetPasswordRequest):
+    method = payload.method.strip().lower()
+
+    # ---------------------------------
+    # MOBILE NUMBER RESET
+    # ---------------------------------
+    if method == "phone":
+        if not payload.phone:
+            raise HTTPException(
+                status_code=400,
+                detail="Phone number is required"
+            )
+
+        phone = payload.phone.strip()
+
+        if not phone.isdigit() or len(phone) != 10:
+            raise HTTPException(
+                status_code=400,
+                detail="Please enter a valid 10-digit phone number"
+            )
+
+        user_query = {
+            "phone": phone
+        }
+
+        identifier = phone
+
+    # ---------------------------------
+    # EMAIL RESET
+    # ---------------------------------
+    elif method == "email":
+        if not payload.email:
+            raise HTTPException(
+                status_code=400,
+                detail="Email address is required"
+            )
+
+        email = str(payload.email).strip().lower()
+
+        user_query = {
+            "email": email
+        }
+
+        identifier = email
+
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid password reset method"
+        )
+
+    # ---------------------------------
+    # FIND RESET OTP
+    # ---------------------------------
+    reset_record = await db.password_reset_otps.find_one(
+        {
+            "method": method,
+            "identifier": identifier
+        }
+    )
+
+    if not reset_record:
+        raise HTTPException(
+            status_code=400,
+            detail="Password reset OTP not found or expired"
+        )
+
+    # ---------------------------------
+    # VERIFY OTP
+    # ---------------------------------
+    if reset_record.get("code") != payload.code.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid OTP"
+        )
+
+    # ---------------------------------
+    # CHECK OTP EXPIRATION
+    # ---------------------------------
+    expires_at = datetime.fromisoformat(
+        reset_record["expires_at"]
+    )
+
+    if expires_at < now_utc():
+        await db.password_reset_otps.delete_one(
+            {
+                "method": method,
+                "identifier": identifier
+            }
+        )
+
+        raise HTTPException(
+            status_code=400,
+            detail="OTP expired"
+        )
+
+    # ---------------------------------
+    # FIND USER
+    # ---------------------------------
+    user = await db.users.find_one(user_query)
+
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="User account not found"
+        )
+
+    # ---------------------------------
+    # HASH NEW PASSWORD
+    # ---------------------------------
+    new_password_hash = hash_password(
+        payload.new_password
+    )
+
+    # ---------------------------------
+    # UPDATE PASSWORD
+    # ---------------------------------
+    await db.users.update_one(
+        {
+            "_id": user["_id"]
+        },
+        {
+            "$set": {
+                "password_hash": new_password_hash
+            }
+        }
+    )
+
+    # ---------------------------------
+    # DELETE OTP AFTER SUCCESS
+    # OTP CAN ONLY BE USED ONCE
+    # ---------------------------------
+    await db.password_reset_otps.delete_one(
+        {
+            "method": method,
+            "identifier": identifier
+        }
+    )
+
+    return {
+        "success": True,
+        "message": "Password reset successfully"
+    }
+
 @api.post("/auth/password-reset")
 async def password_reset(payload: ResetPasswordRequest):
     phone = payload.phone.strip()
