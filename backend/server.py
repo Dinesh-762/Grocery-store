@@ -2417,8 +2417,41 @@ SEED_CATEGORIES = [
 
 SEED_PRODUCTS = [
     # Fruits & Vegetables
-    {"name": "Fresh Tomato", "slug": "fresh-tomato", "price": 30, "mrp": 40, "unit": "1 kg", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1592924357228-91a4daadcfea?w=600&q=80", "stock": 50, "featured": True, "popular": True, "description": "Farm-fresh red tomatoes, hand-picked daily."},
-    {"name": "Onion", "slug": "onion", "price": 40, "mrp": 50, "unit": "1 kg", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1508747703725-719777637510?w=600&q=80", "stock": 80, "popular": True, "description": "Premium quality Nashik onions."},
+    {
+    "name": "Fresh Tomato",
+    "slug": "fresh-tomato",
+    "price": 30,
+    "mrp": 40,
+    "unit": "1 kg",
+    "category_slug": "fruits-vegetables",
+    "image": "https://images.unsplash.com/photo-1592924357228-91a4daadcfea?w=600&q=80",
+    "stock": 50,
+    "featured": True,
+    "popular": True,
+    "description": "Farm-fresh red tomatoes, hand-picked daily.",
+    "variants": [
+        {"label": "1/2 kg", "price": 15, "unit": "1/2 kg"},
+        {"label": "1 kg", "price": 30, "unit": "1 kg"},
+        {"label": "2 kg", "price": 60, "unit": "2 kg"}
+    ]
+},
+    {
+    "name": "Onion",
+    "slug": "onion",
+    "price": 40,
+    "mrp": 50,
+    "unit": "1 kg",
+    "category_slug": "fruits-vegetables",
+    "image": "https://images.unsplash.com/photo-1508747703725-719777637510?w=600&q=80",
+    "stock": 80,
+    "popular": True,
+    "description": "Premium quality Nashik onions.",
+    "variants": [
+        {"label": "1/2 kg", "price": 20, "unit": "1/2 kg"},
+        {"label": "1 kg", "price": 40, "unit": "1 kg"},
+        {"label": "2 kg", "price": 80, "unit": "2 kg"}
+    ]
+},
     {"name": "Banana", "slug": "banana", "price": 50, "mrp": 60, "unit": "1 dozen", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?w=600&q=80", "stock": 30, "featured": True, "description": "Ripe yellow bananas, rich in potassium."},
     {"name": "Apple - Shimla", "slug": "apple-shimla", "price": 180, "mrp": 220, "unit": "1 kg", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1568702846914-96b305d2aaeb?w=600&q=80", "stock": 25, "featured": True, "popular": True, "description": "Crisp red apples straight from Himachal orchards."},
     {"name": "Potato", "slug": "potato", "price": 25, "mrp": 30, "unit": "1 kg", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1518977676601-b53f82aba655?w=600&q=80", "stock": 100, "description": "Fresh farm potatoes."},
@@ -2483,22 +2516,47 @@ async def seed_data():
         )
         logger.info(f"Admin password refreshed: {admin_email}")
 
-    # Categories
-    for c in SEED_CATEGORIES:
-        await db.categories.update_one({"slug": c["slug"]}, {"$setOnInsert": c}, upsert=True)
-
-    # Products
+       # Products
     for p in SEED_PRODUCTS:
         p_doc = {**p, "created_at": iso_now()}
-        await db.products.update_one({"slug": p["slug"]}, {"$setOnInsert": p_doc}, upsert=True)
+
+        await db.products.update_one(
+            {"slug": p["slug"]},
+            {
+                "$setOnInsert": p_doc,
+                "$set": {
+                    "variants": p.get("variants", [])
+                }
+            },
+            upsert=True
+        )
 
     # Reviews (seed a few if empty)
     if await db.reviews.count_documents({}) == 0:
         sample_reviews = [
-            {"product_slug": None, "rating": 5, "comment": "Best grocery store in Ambajogai! Fresh vegetables delivered within 2 hours.", "author_name": "Rohit Deshmukh", "created_at": iso_now()},
-            {"product_slug": None, "rating": 5, "comment": "Great prices and friendly staff. My family shops here every week.", "author_name": "Priya Kulkarni", "created_at": iso_now()},
-            {"product_slug": None, "rating": 4, "comment": "Wide product range and reliable delivery. Highly recommended.", "author_name": "Sameer Patil", "created_at": iso_now()},
+            {
+                "product_slug": None,
+                "rating": 5,
+                "comment": "Best grocery store in Ambajogai! Fresh vegetables delivered within 2 hours.",
+                "author_name": "Rohit Deshmukh",
+                "created_at": iso_now()
+            },
+            {
+                "product_slug": None,
+                "rating": 5,
+                "comment": "Great prices and friendly staff. My family shops here every week.",
+                "author_name": "Priya Kulkarni",
+                "created_at": iso_now()
+            },
+            {
+                "product_slug": None,
+                "rating": 4,
+                "comment": "Wide product range and reliable delivery. Highly recommended.",
+                "author_name": "Sameer Patil",
+                "created_at": iso_now()
+            },
         ]
+
         await db.reviews.insert_many(sample_reviews)
 
     logger.info("Seed data loaded.")
