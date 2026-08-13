@@ -34,8 +34,8 @@ import {
 
 const PLATFORM_FEE = 10;
 const GST_RATE = 0.05;
-const CGST_RATE = 0.025;
-const SGST_RATE = 0.025;
+const CGST_RATE = 0.05;
+const SGST_RATE = 0.05;
 
 const DELIVERY_RATE_PER_KM = 13;
 const DELIVERY_RATE_ABOVE_1_5_KM = 20;
@@ -530,8 +530,8 @@ Subtotal: ₹${finalSubtotal.toFixed(2)}
 Discount: -₹${finalDiscount.toFixed(2)}
 Platform Fee: ₹${finalPlatformFee.toFixed(2)}
 Delivery: ₹${finalDeliveryFee.toFixed(2)}
-CGST (2.5%): ₹${finalCgst.toFixed(2)}
-SGST (2.5%): ₹${finalSgst.toFixed(2)}
+CGST (5%): ₹${finalCgst.toFixed(2)}
+SGST (5%): ₹${finalSgst.toFixed(2)}
 GST (5%): ₹${finalGst.toFixed(2)}
 Total: ₹${finalTotal.toFixed(2)}
 
@@ -1105,12 +1105,12 @@ https://www.google.com/maps?q=${
             )}
 
             <Row
-              label="CGST (2.5%)"
+              label="CGST (5%)"
               value={formatINR(cgst)}
             />
 
             <Row
-              label="SGST (2.5%)"
+              label="SGST (5%)"
               value={formatINR(sgst)}
             />
 
