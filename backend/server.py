@@ -8,6 +8,8 @@ import os
 import logging
 import uuid
 import re
+import secrets
+import hashlib
 import urllib.parse
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Annotated
@@ -167,18 +169,20 @@ class OTPVerify(BaseModel):
     phone: str
     code: str
 
+
 class ForgotPasswordRequest(BaseModel):
-    method: str
-    phone: Optional[str] = None
-    email: Optional[EmailStr] = None
+    phone: str
 
 
-class ResetPasswordRequest(BaseModel):
-    method: str
-    phone: Optional[str] = None
-    email: Optional[EmailStr] = None
+class PasswordResetOTPVerify(BaseModel):
+    phone: str
     code: str
+
+
+class PasswordResetConfirm(BaseModel):
+    reset_token: str = Field(min_length=20, max_length=200)
     new_password: str = Field(min_length=6, max_length=128)
+
 
 class CategoryIn(BaseModel):
     name: str
@@ -243,6 +247,9 @@ class OrderIn(BaseModel):
     payment_method: str  # "UPI" or "COD"
     notes: Optional[str] = ""
     coupon_code: Optional[str] = None
+    # Checkout also sends GPS at the top level. Keep both forms supported.
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 
 ORDER_STATUSES = ["Pending", "Accepted", "Preparing", "Packed", "Ready", "Out For Delivery", "Delivered", "Cancelled"]
@@ -318,6 +325,7 @@ def order_to_out(o: dict) -> dict:
         "notes": o.get("notes", ""),
         "subtotal": o["subtotal"],
         "delivery_fee": o["delivery_fee"],
+        "delivery_distance_km": o.get("delivery_distance_km"),
         "discount": o.get("discount", 0),
         "coupon": o.get("coupon"),
         "total": o["total"],
@@ -401,6 +409,7 @@ async def login(payload: LoginIn):
 async def me(user: dict = Depends(get_current_user)):
     return user
 
+
 # Mock OTP: generate 6-digit code stored server-side (for demo, returned in response)
 @api.post("/auth/otp/request")
 async def otp_request(payload: OTPRequest):
@@ -424,317 +433,106 @@ async def otp_verify(payload: OTPVerify):
     await db.otps.delete_one({"phone": payload.phone})
     return {"success": True, "message": "OTP verified"}
 
+
 @api.post("/auth/password-reset/request")
 async def password_reset_request(payload: ForgotPasswordRequest):
-    method = payload.method.strip().lower()
+    phone = payload.phone.strip()
+    if not phone:
+        raise HTTPException(status_code=400, detail="Phone number is required")
 
-    # ---------------------------------
-    # MOBILE NUMBER RESET
-    # ---------------------------------
-    if method == "phone":
-        if not payload.phone:
-            raise HTTPException(
-                status_code=400,
-                detail="Phone number is required"
-            )
+    # Keep the response generic in production to avoid account enumeration.
+    user = await db.users.find_one({"phone": phone})
+    code = f"{secrets.randbelow(1000000):06d}"
 
-        phone = payload.phone.strip()
-
-        if not phone.isdigit() or len(phone) != 10:
-            raise HTTPException(
-                status_code=400,
-                detail="Please enter a valid 10-digit phone number"
-            )
-
-        user = await db.users.find_one({
-            "phone": phone
-        })
-
-        if not user:
-            raise HTTPException(
-                status_code=404,
-                detail="No account found with this phone number"
-            )
-
-        identifier = phone
-
-    # ---------------------------------
-    # EMAIL RESET
-    # ---------------------------------
-    elif method == "email":
-        if not payload.email:
-            raise HTTPException(
-                status_code=400,
-                detail="Email address is required"
-            )
-
-        email = str(payload.email).strip().lower()
-
-        user = await db.users.find_one({
-            "email": email
-        })
-
-        if not user:
-            raise HTTPException(
-                status_code=404,
-                detail="No account found with this email address"
-            )
-
-        identifier = email
-
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid password reset method"
+    if user:
+        await db.password_reset_otps.update_one(
+            {"phone": phone},
+            {
+                "$set": {
+                    "code": code,
+                    "expires_at": (now_utc() + timedelta(minutes=5)).isoformat(),
+                    "attempts": 0,
+                }
+            },
+            upsert=True,
         )
+        logger.info(f"[PASSWORD RESET OTP] phone={phone} code={code}")
 
-    # ---------------------------------
-    # GENERATE OTP
-    # ---------------------------------
-    code = str(uuid.uuid4().int)[-6:]
+    response = {
+        "success": True,
+        "message": "If an account exists with this phone number, an OTP has been generated."
+    }
+    # Existing project uses mock OTPs. Keep the code available for local/dev testing,
+    # but never expose it when APP_ENV=production.
+    if os.environ.get("APP_ENV", "development").lower() != "production" and user:
+        response["debug_code"] = code
+    return response
 
-    await db.password_reset_otps.update_one(
-        {
-            "method": method,
-            "identifier": identifier
-        },
+
+@api.post("/auth/password-reset/verify")
+async def password_reset_verify(payload: PasswordResetOTPVerify):
+    phone = payload.phone.strip()
+    rec = await db.password_reset_otps.find_one({"phone": phone})
+    if not rec or rec.get("code") != payload.code:
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+    if datetime.fromisoformat(rec["expires_at"]) < now_utc():
+        await db.password_reset_otps.delete_one({"phone": phone})
+        raise HTTPException(status_code=400, detail="OTP expired")
+
+    user = await db.users.find_one({"phone": phone})
+    if not user:
+        await db.password_reset_otps.delete_one({"phone": phone})
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+
+    reset_token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(reset_token.encode()).hexdigest()
+    await db.password_reset_tokens.update_one(
+        {"phone": phone},
         {
             "$set": {
-                "method": method,
-                "identifier": identifier,
-                "code": code,
-                "expires_at": (
-                    now_utc() + timedelta(minutes=5)
-                ).isoformat()
+                "user_id": str(user["_id"]),
+                "token_hash": token_hash,
+                "expires_at": (now_utc() + timedelta(minutes=10)).isoformat(),
             }
         },
         upsert=True,
     )
-
-    logger.info(
-        f"[PASSWORD RESET OTP] "
-        f"method={method} "
-        f"identifier={identifier} "
-        f"code={code}"
-    )
+    await db.password_reset_otps.delete_one({"phone": phone})
 
     return {
         "success": True,
-        "message": "Password reset OTP generated",
-        "debug_code": code
+        "message": "OTP verified. You can now set a new password.",
+        "reset_token": reset_token,
     }
 
 
-@api.post("/auth/password-reset")
-async def password_reset(payload: ResetPasswordRequest):
-    method = payload.method.strip().lower()
+@api.post("/auth/password-reset/confirm")
+async def password_reset_confirm(payload: PasswordResetConfirm):
+    token_hash = hashlib.sha256(payload.reset_token.encode()).hexdigest()
+    rec = await db.password_reset_tokens.find_one({"token_hash": token_hash})
+    if not rec:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+    if datetime.fromisoformat(rec["expires_at"]) < now_utc():
+        await db.password_reset_tokens.delete_one({"_id": rec["_id"]})
+        raise HTTPException(status_code=400, detail="Reset token expired")
 
-    # ---------------------------------
-    # MOBILE NUMBER RESET
-    # ---------------------------------
-    if method == "phone":
-        if not payload.phone:
-            raise HTTPException(
-                status_code=400,
-                detail="Phone number is required"
-            )
+    try:
+        user_oid = ObjectId(rec["user_id"])
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid reset token")
 
-        phone = payload.phone.strip()
-
-        if not phone.isdigit() or len(phone) != 10:
-            raise HTTPException(
-                status_code=400,
-                detail="Please enter a valid 10-digit phone number"
-            )
-
-        user_query = {
-            "phone": phone
-        }
-
-        identifier = phone
-
-    # ---------------------------------
-    # EMAIL RESET
-    # ---------------------------------
-    elif method == "email":
-        if not payload.email:
-            raise HTTPException(
-                status_code=400,
-                detail="Email address is required"
-            )
-
-        email = str(payload.email).strip().lower()
-
-        user_query = {
-            "email": email
-        }
-
-        identifier = email
-
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid password reset method"
-        )
-
-    # ---------------------------------
-    # FIND RESET OTP
-    # ---------------------------------
-    reset_record = await db.password_reset_otps.find_one(
-        {
-            "method": method,
-            "identifier": identifier
-        }
-    )
-
-    if not reset_record:
-        raise HTTPException(
-            status_code=400,
-            detail="Password reset OTP not found or expired"
-        )
-
-    # ---------------------------------
-    # VERIFY OTP
-    # ---------------------------------
-    if reset_record.get("code") != payload.code.strip():
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid OTP"
-        )
-
-    # ---------------------------------
-    # CHECK OTP EXPIRATION
-    # ---------------------------------
-    expires_at = datetime.fromisoformat(
-        reset_record["expires_at"]
-    )
-
-    if expires_at < now_utc():
-        await db.password_reset_otps.delete_one(
-            {
-                "method": method,
-                "identifier": identifier
-            }
-        )
-
-        raise HTTPException(
-            status_code=400,
-            detail="OTP expired"
-        )
-
-    # ---------------------------------
-    # FIND USER
-    # ---------------------------------
-    user = await db.users.find_one(user_query)
-
+    user = await db.users.find_one({"_id": user_oid})
     if not user:
-        raise HTTPException(
-            status_code=404,
-            detail="User account not found"
-        )
-
-    # ---------------------------------
-    # HASH NEW PASSWORD
-    # ---------------------------------
-    new_password_hash = hash_password(
-        payload.new_password
-    )
-
-    # ---------------------------------
-    # UPDATE PASSWORD
-    # ---------------------------------
-    await db.users.update_one(
-        {
-            "_id": user["_id"]
-        },
-        {
-            "$set": {
-                "password_hash": new_password_hash
-            }
-        }
-    )
-
-    # ---------------------------------
-    # DELETE OTP AFTER SUCCESS
-    # OTP CAN ONLY BE USED ONCE
-    # ---------------------------------
-    await db.password_reset_otps.delete_one(
-        {
-            "method": method,
-            "identifier": identifier
-        }
-    )
-
-    return {
-        "success": True,
-        "message": "Password reset successfully"
-    }
-
-@api.post("/auth/password-reset")
-async def password_reset(payload: ResetPasswordRequest):
-    phone = payload.phone.strip()
-
-    reset_record = await db.password_reset_otps.find_one(
-        {"phone": phone}
-    )
-
-    if not reset_record:
-        raise HTTPException(
-            status_code=400,
-            detail="Password reset OTP not found or expired"
-        )
-
-    if reset_record.get("code") != payload.code:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid OTP"
-        )
-
-    expires_at = datetime.fromisoformat(
-        reset_record["expires_at"]
-    )
-
-    if expires_at < now_utc():
-        await db.password_reset_otps.delete_one(
-            {"phone": phone}
-        )
-        raise HTTPException(
-            status_code=400,
-            detail="OTP expired"
-        )
-
-    user = await db.users.find_one(
-        {"phone": phone}
-    )
-
-    if not user:
-        raise HTTPException(
-            status_code=404,
-            detail="User account not found"
-        )
-
-    new_password_hash = hash_password(
-        payload.new_password
-    )
+        await db.password_reset_tokens.delete_one({"_id": rec["_id"]})
+        raise HTTPException(status_code=404, detail="User not found")
 
     await db.users.update_one(
-        {"_id": user["_id"]},
-        {
-            "$set": {
-                "password_hash": new_password_hash
-            }
-        }
+        {"_id": user_oid},
+        {"$set": {"password_hash": hash_password(payload.new_password)}}
     )
+    await db.password_reset_tokens.delete_one({"_id": rec["_id"]})
 
-    # OTP can only be used once
-    await db.password_reset_otps.delete_one(
-        {"phone": phone}
-    )
-
-    return {
-        "success": True,
-        "message": "Password reset successfully"
-    }
+    return {"success": True, "message": "Password reset successfully. Please log in with your new password."}
 
 
 # ---------------------------------------------------------------------------
@@ -841,22 +639,15 @@ async def delete_product(prod_id: str, _: dict = Depends(require_admin)):
 
 
 # ---------------------------------------------------------------------------
-# Orders
+# Orders / Delivery Pricing
 # ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Pricing
-# ---------------------------------------------------------------------------
-
-PLATFORM_FEE = 10.0
-
-GST_RATE = 0.05
-CGST_RATE = 0.025
-SGST_RATE = 0.025
-
+# Delivery pricing requested for the grocery store:
+# <= 1.5 km  -> ₹13 per km
+# > 1.5 km   -> ₹20 per km
+# Orders >= ₹499 keep the existing free-delivery rule.
 DELIVERY_RATE_PER_KM = 13.0
 DELIVERY_RATE_ABOVE_1_5_KM = 20.0
-
 FREE_DELIVERY_THRESHOLD = 499.0
 
 
@@ -866,17 +657,12 @@ def calculate_distance_km(
     lat2: float,
     lon2: float,
 ) -> float:
-    """
-    Calculate distance between two GPS coordinates using Haversine formula.
-    Returns distance in kilometers.
-    """
+    """Return great-circle distance between two GPS coordinates in km."""
     import math
 
     earth_radius_km = 6371.0
-
     lat1_rad = math.radians(lat1)
     lat2_rad = math.radians(lat2)
-
     delta_lat = math.radians(lat2 - lat1)
     delta_lon = math.radians(lon2 - lon1)
 
@@ -886,27 +672,19 @@ def calculate_distance_km(
         * math.cos(lat2_rad)
         * math.sin(delta_lon / 2) ** 2
     )
-
+    a = min(1.0, max(0.0, a))
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
     return round(earth_radius_km * c, 2)
 
 
-
-def calculate_delivery_fee(distance_km: float) -> float:
-    """
-    Delivery charges:
-    <= 1.5 km -> ₹20 flat
-    > 1.5 km  -> ₹13 per km
-    """
-
-    if distance_km <= 0:
+def calculate_delivery_fee(distance_km: float, subtotal: float = 0.0) -> float:
+    """Calculate delivery fee using the configured distance bands."""
+    if subtotal >= FREE_DELIVERY_THRESHOLD or distance_km <= 0:
         return 0.0
-
     if distance_km <= 1.5:
-        return 20.0
+        return round(distance_km * DELIVERY_RATE_PER_KM, 2)
+    return round(distance_km * DELIVERY_RATE_ABOVE_1_5_KM, 2)
 
-    return round(distance_km * DELIVERY_RATE_PER_KM, 2)
 
 def safe_object_id(id_str: str) -> ObjectId:
     try:
@@ -932,18 +710,31 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
             raise HTTPException(status_code=400, detail=f"Product not found: {it.name}")
         if it.quantity <= 0:
             raise HTTPException(status_code=400, detail="Quantity must be positive")
-        if prod.get("stock", 0) < it.quantity:
-            raise HTTPException(status_code=400, detail=f"Insufficient stock for {prod['name']}")
-        # Variant resolution — if variant_label supplied, use that variant's price+unit
-        eff_price = prod["price"]
+
+        # Variant resolution — selected variant controls price/unit and, when present, stock.
+        eff_price = float(prod["price"])
         eff_unit = prod.get("unit", "1 pc")
+        selected_variant = None
+        variant_has_own_stock = False
         if it.variant_label:
             variants = prod.get("variants") or []
-            match = next((v for v in variants if v.get("label") == it.variant_label), None)
-            if not match:
+            selected_variant = next((v for v in variants if v.get("label") == it.variant_label), None)
+            if not selected_variant:
                 raise HTTPException(status_code=400, detail=f"Unknown variant '{it.variant_label}' for {prod['name']}")
-            eff_price = float(match.get("price", eff_price))
-            eff_unit = match.get("unit", eff_unit)
+            eff_price = float(selected_variant.get("price", eff_price))
+            eff_unit = selected_variant.get("unit", eff_unit)
+            variant_has_own_stock = "stock" in selected_variant
+
+        available_stock = (
+            int(selected_variant.get("stock", 0))
+            if variant_has_own_stock and selected_variant
+            else int(prod.get("stock", 0))
+        )
+        if available_stock < it.quantity:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Insufficient stock for {prod['name']} ({it.variant_label or eff_unit})"
+            )
         # Vacation-mode / open-now check per vendor
         vid = prod.get("vendor_id")
         if vid:
@@ -981,199 +772,108 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
             if min_amt and sub < min_amt:
                 raise HTTPException(status_code=400, detail=f"Minimum order for {vend.get('business_name', 'this vendor')} is ₹{int(min_amt) if float(min_amt).is_integer() else round(min_amt, 2)}. Current subtotal for their items is ₹{sub:.2f}.")
 
-        subtotal = round(
-        sum(i["price"] * i["quantity"] for i in verified_items),
-        2
-    )
+    subtotal = round(sum(i["price"] * i["quantity"] for i in verified_items), 2)
 
-    # -----------------------------------------------------------------------
-    # Delivery distance + charges
-    # -----------------------------------------------------------------------
-
-    customer_lat = payload.address.latitude
-    customer_lon = payload.address.longitude
+    # ---------------------------------------------------------------
+    # Delivery distance
+    # ---------------------------------------------------------------
+    # Checkout currently sends GPS at the top level, while AddressIn also
+    # supports latitude/longitude. Accept either form for compatibility.
+    customer_lat = payload.latitude
+    customer_lon = payload.longitude
+    if customer_lat is None:
+        customer_lat = payload.address.latitude
+    if customer_lon is None:
+        customer_lon = payload.address.longitude
 
     if customer_lat is None or customer_lon is None:
         raise HTTPException(
             status_code=400,
-            detail="Please allow location access so delivery charges can be calculated."
+            detail="Please allow location access so delivery charges can be calculated.",
         )
 
-    # Get vendor locations for all products in this order
+    # Determine the delivery distance from every vendor represented in the
+    # order. For legacy/admin products without a vendor, use the main store
+    # coordinates. For a multi-vendor order, the farthest vendor determines
+    # the delivery charge so the customer is never undercharged.
+    store_lat = float(os.environ.get("STORE_LATITUDE", "18.73"))
+    store_lon = float(os.environ.get("STORE_LONGITUDE", "76.38"))
     vendor_locations = {}
 
     for item in verified_items:
         vendor_id = item.get("vendor_id")
 
         if not vendor_id:
+            vendor_locations["__store__"] = (store_lat, store_lon)
+            continue
+
+        if vendor_id in vendor_locations:
+            continue
+
+        try:
+            vendor = await db.vendors.find_one({"_id": ObjectId(vendor_id)})
+        except Exception:
+            vendor = None
+
+        if not vendor:
             raise HTTPException(
                 status_code=400,
-                detail=f"Vendor location is not configured for {item.get('name', 'this product')}."
+                detail=f"Vendor not found for {item.get('name', 'this product')}."
             )
 
-        if vendor_id not in vendor_locations:
-            try:
-                vendor = await db.vendors.find_one({
-                    "_id": ObjectId(vendor_id),
-                    "status": "Approved"
-                })
-            except Exception:
-                vendor = None
+        vendor_lat = vendor.get("latitude")
+        vendor_lon = vendor.get("longitude")
 
-            if not vendor:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Vendor not found for {item.get('name', 'this product')}."
-                )
+        # Keep old vendor records working: if a vendor has not configured
+        # GPS yet, fall back to the main store coordinates instead of making
+        # every existing product impossible to order.
+        if vendor_lat is None or vendor_lon is None:
+            vendor_locations[vendor_id] = (store_lat, store_lon)
+        else:
+            vendor_locations[vendor_id] = (float(vendor_lat), float(vendor_lon))
 
-            vendor_lat = vendor.get("latitude")
-            vendor_lon = vendor.get("longitude")
+    distances = [
+        calculate_distance_km(v_lat, v_lon, float(customer_lat), float(customer_lon))
+        for v_lat, v_lon in vendor_locations.values()
+    ]
 
-            if vendor_lat is None or vendor_lon is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"Delivery location is not configured for "
-                        f"{vendor.get('business_name', 'this vendor')}."
-                    )
-                )
+    distance_km = max(distances) if distances else 0.0
+    delivery_fee = calculate_delivery_fee(distance_km, subtotal)
 
-            vendor_locations[vendor_id] = (
-                float(vendor_lat),
-                float(vendor_lon)
-            )
+    # Store the coordinates actually used for this order so the admin/vendor
+    # panels and future delivery tracking have the original location data.
+    order_address = payload.address.model_dump()
+    order_address["latitude"] = float(customer_lat)
+    order_address["longitude"] = float(customer_lon)
 
-    # Calculate distance from customer to each vendor
-    distances = []
-
-    for vendor_id, (vendor_lat, vendor_lon) in vendor_locations.items():
-        distance = calculate_distance_km(
-            vendor_lat,
-            vendor_lon,
-            customer_lat,
-            customer_lon,
-        )
-        distances.append(distance)
-
-    if not distances:
-        raise HTTPException(
-            status_code=400,
-            detail="Unable to calculate delivery distance."
-        )
-
-    # For multi-vendor orders, use the farthest vendor distance
-    distance_km = max(distances)
-
-    delivery_fee = calculate_delivery_fee(distance_km)
-
-    # -----------------------------------------------------------------------
-    # Platform fee
-    # -----------------------------------------------------------------------
-
-    platform_fee = PLATFORM_FEE
-
-    # -----------------------------------------------------------------------
-    # Coupon
-    # -----------------------------------------------------------------------
-
+    # Apply coupon if provided
     discount = 0.0
     coupon_applied = None
-
     if payload.coupon_code:
         code = payload.coupon_code.strip().upper()
-
-        coupon = await db.coupons.find_one({
-            "code": code,
-            "active": True
-        })
-
+        coupon = await db.coupons.find_one({"code": code, "active": True})
         if not coupon:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid coupon code"
-            )
-
-        if coupon.get("expires_at"):
-            if datetime.fromisoformat(
-                coupon["expires_at"]
-            ) < now_utc():
-                raise HTTPException(
-                    status_code=400,
-                    detail="Coupon expired"
-                )
-
+            raise HTTPException(status_code=400, detail="Invalid coupon code")
+        if coupon.get("expires_at") and datetime.fromisoformat(coupon["expires_at"]) < now_utc():
+            raise HTTPException(status_code=400, detail="Coupon expired")
         if subtotal < coupon.get("min_amount", 0):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Order must be at least ₹"
-                    f"{coupon.get('min_amount', 0)} "
-                    f"to use this coupon"
-                )
-            )
+            raise HTTPException(status_code=400, detail=f"Order must be at least ₹{coupon.get('min_amount', 0)} to use this coupon")
+        discount = round(subtotal * (coupon["discount_pct"] / 100.0), 2)
+        coupon_applied = {"code": coupon["code"], "discount_pct": coupon["discount_pct"], "discount": discount}
 
-        discount = round(
-            subtotal * (coupon["discount_pct"] / 100.0),
-            2
-        )
-
-        coupon_applied = {
-            "code": coupon["code"],
-            "discount_pct": coupon["discount_pct"],
-            "discount": discount,
-        }
-
-    # -----------------------------------------------------------------------
-    # GST
-    # -----------------------------------------------------------------------
-
-    taxable_amount = max(
-        0,
-        subtotal - discount + platform_fee + delivery_fee
-    )
-
-    cgst = round(taxable_amount * CGST_RATE, 2)
-    sgst = round(taxable_amount * SGST_RATE, 2)
-
-    gst = round(cgst + sgst, 2)
-
-    total = round(
-        taxable_amount + gst,
-        2
-    )
-
-    # -----------------------------------------------------------------------
-    # GST
-    # -----------------------------------------------------------------------
-
-    taxable_amount = max(
-        0,
-        subtotal - discount + platform_fee + delivery_fee
-    )
-
-    cgst = round(taxable_amount * CGST_RATE, 2)
-    sgst = round(taxable_amount * SGST_RATE, 2)
-
-    gst = round(cgst + sgst, 2)
-
-    total = round(
-        taxable_amount + gst,
-        2
-    )
-
-
-    
+    total = round(max(0, subtotal + delivery_fee - discount), 2)
     status_history = [{"status": "Pending", "at": iso_now()}]
     doc = {
         "user_id": user["id"],
         "user_email": user["email"],
         "user_name": user["name"],
         "items": verified_items,
-        "address": payload.address.model_dump(),
+        "address": order_address,
         "payment_method": payload.payment_method,
         "notes": payload.notes or "",
         "subtotal": subtotal,
         "delivery_fee": delivery_fee,
+        "delivery_distance_km": distance_km,
         "discount": discount,
         "coupon": coupon_applied,
         "total": total,
@@ -1181,15 +881,67 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         "status_history": status_history,
         "created_at": iso_now(),
     }
-    res = await db.orders.insert_one(doc)
-    doc["_id"] = res.inserted_id
+    # Reserve stock atomically before creating the order. If any reservation fails,
+    # roll back reservations already made so we do not create an order that cannot be fulfilled.
+    reservations = []
+    try:
+        for it in verified_items:
+            product_oid = ObjectId(it["product_id"])
+            reserved_variant = False
 
-    # Reduce stock (best effort)
-    for it in verified_items:
-        try:
-            await db.products.update_one({"_id": ObjectId(it["product_id"])}, {"$inc": {"stock": -it["quantity"]}})
-        except Exception:
-            pass
+            if it.get("variant_label"):
+                prod_now = await db.products.find_one({"_id": product_oid}, {"variants": 1})
+                variants_now = (prod_now or {}).get("variants") or []
+                variant_now = next((v for v in variants_now if v.get("label") == it["variant_label"]), None)
+                if variant_now is not None and "stock" in variant_now:
+                    result = await db.products.update_one(
+                        {
+                            "_id": product_oid,
+                            "variants": {
+                                "$elemMatch": {
+                                    "label": it["variant_label"],
+                                    "stock": {"$gte": it["quantity"]},
+                                }
+                            },
+                        },
+                        {"$inc": {"variants.$.stock": -it["quantity"]}},
+                    )
+                    if result.modified_count == 0:
+                        raise HTTPException(status_code=409, detail=f"Stock changed for {it['name']}. Please refresh and try again.")
+                    reservations.append({"product_id": product_oid, "quantity": it["quantity"], "variant_label": it["variant_label"]})
+                    reserved_variant = True
+
+            if not reserved_variant:
+                result = await db.products.update_one(
+                    {"_id": product_oid, "stock": {"$gte": it["quantity"]}},
+                    {"$inc": {"stock": -it["quantity"]}},
+                )
+                if result.modified_count == 0:
+                    raise HTTPException(status_code=409, detail=f"Stock changed for {it['name']}. Please refresh and try again.")
+                reservations.append({"product_id": product_oid, "quantity": it["quantity"], "variant_label": None})
+
+        res = await db.orders.insert_one(doc)
+        doc["_id"] = res.inserted_id
+    except Exception:
+        # Best-effort rollback of all reservations made before the failure.
+        for reservation in reservations:
+            try:
+                if reservation["variant_label"]:
+                    await db.products.update_one(
+                        {
+                            "_id": reservation["product_id"],
+                            "variants": {"$elemMatch": {"label": reservation["variant_label"]}},
+                        },
+                        {"$inc": {"variants.$.stock": reservation["quantity"]}},
+                    )
+                else:
+                    await db.products.update_one(
+                        {"_id": reservation["product_id"]},
+                        {"$inc": {"stock": reservation["quantity"]}},
+                    )
+            except Exception as rollback_exc:
+                logger.error(f"Stock rollback failed: {rollback_exc}")
+        raise
 
     return order_to_out(doc)
 
@@ -1341,23 +1093,20 @@ class VendorDocs(BaseModel):
     gst_url: Optional[str] = ""
     shop_license_url: Optional[str] = ""
 
+
 class VendorRegisterIn(BaseModel):
     # user
     name: str = Field(min_length=2, max_length=80)
     email: EmailStr
     password: str = Field(min_length=6, max_length=128)
     phone: str
-
     # vendor profile
     business_name: str
     business_description: str = ""
     business_address: str
     business_pincode: str
-
-    # Vendor shop GPS location
     latitude: Optional[float] = None
     longitude: Optional[float] = None
-
     docs: VendorDocs = VendorDocs()
 
 
@@ -1408,6 +1157,8 @@ def vendor_to_out(v: dict) -> dict:
         "business_description": v.get("business_description", ""),
         "business_address": v.get("business_address", ""),
         "business_pincode": v.get("business_pincode", ""),
+        "latitude": v.get("latitude"),
+        "longitude": v.get("longitude"),
         "docs": v.get("docs", {}),
         "status": v.get("status", "Pending"),
         "rejection_reason": v.get("rejection_reason", ""),
@@ -1423,8 +1174,6 @@ def vendor_to_out(v: dict) -> dict:
         "vacation_mode": v.get("vacation_mode", False),
         "vacation_message": v.get("vacation_message", ""),
         "delivery_radius_km": v.get("delivery_radius_km"),
-        "latitude": v.get("latitude"),
-        "longitude": v.get("longitude"),
         "min_order_amount": v.get("min_order_amount", 0),
         "estimated_delivery_min": v.get("estimated_delivery_min"),
         "verified": v.get("status") == "Approved",
@@ -1459,23 +1208,18 @@ async def vendor_register(payload: VendorRegisterIn):
     }
     ures = await db.users.insert_one(user_doc)
     vendor_doc = {
-    "owner_id": str(ures.inserted_id),
-    "owner_email": email,
-    "owner_name": payload.name.strip(),
-    "phone": payload.phone,
-    "business_name": payload.business_name.strip(),
-    "business_description": payload.business_description.strip(),
-    "business_address": payload.business_address.strip(),
-    "business_pincode": payload.business_pincode.strip(),
-
-    "latitude": payload.latitude,
-    "longitude": payload.longitude,
-
-    "docs": payload.docs.model_dump(),
-    "status": "Pending",
-    "created_at": iso_now(),
-}
-
+        "owner_id": str(ures.inserted_id),
+        "owner_email": email,
+        "owner_name": payload.name.strip(),
+        "phone": payload.phone,
+        "business_name": payload.business_name.strip(),
+        "business_description": payload.business_description.strip(),
+        "business_address": payload.business_address.strip(),
+        "business_pincode": payload.business_pincode.strip(),
+        "docs": payload.docs.model_dump(),
+        "status": "Pending",
+        "created_at": iso_now(),
+    }
     vres = await db.vendors.insert_one(vendor_doc)
     vendor_doc["_id"] = vres.inserted_id
     return {
@@ -2426,30 +2170,14 @@ async def store_info():
     return {
         "name": os.environ.get("STORE_NAME", "Ambajogai Grocery Store"),
         "whatsapp": os.environ.get("STORE_WHATSAPP", "+918237214975"),
-        "phone": os.environ.get(
-            "STORE_PHONE",
-            os.environ.get("STORE_WHATSAPP", "+918237214975")
-        ),
+        "phone": os.environ.get("STORE_PHONE", os.environ.get("STORE_WHATSAPP", "+918237214975")),
         "upi_id": os.environ.get("STORE_UPI_ID", "ambajogai@upi"),
-        "upi_name": os.environ.get(
-            "STORE_UPI_NAME",
-            "Ambajogai Grocery Store"
-        ),
+        "upi_name": os.environ.get("STORE_UPI_NAME", "Ambajogai Grocery Store"),
         "upi_qr": os.environ.get("STORE_UPI_QR", ""),
-
         "address": "Main Road, Ambajogai, Maharashtra 431517",
-
-        "latitude": float(
-            os.environ.get("STORE_LATITUDE", "18.73")
-        ),
-        "longitude": float(
-            os.environ.get("STORE_LONGITUDE", "76.38")
-        ),
-
-        "email": os.environ.get(
-            "STORE_EMAIL",
-            "ambajogaigrocerystores@gmail.com"
-        ),
+        "latitude": float(os.environ.get("STORE_LATITUDE", "18.73")),
+        "longitude": float(os.environ.get("STORE_LONGITUDE", "76.38")),
+        "email": os.environ.get("STORE_EMAIL", "ambajogaigrocerystores@gmail.com"),
     }
 
 
@@ -2473,41 +2201,8 @@ SEED_CATEGORIES = [
 
 SEED_PRODUCTS = [
     # Fruits & Vegetables
-    {
-    "name": "Fresh Tomato",
-    "slug": "fresh-tomato",
-    "price": 30,
-    "mrp": 40,
-    "unit": "1 kg",
-    "category_slug": "fruits-vegetables",
-    "image": "https://images.unsplash.com/photo-1592924357228-91a4daadcfea?w=600&q=80",
-    "stock": 50,
-    "featured": True,
-    "popular": True,
-    "description": "Farm-fresh red tomatoes, hand-picked daily.",
-    "variants": [
-        {"label": "1/2 kg", "price": 15, "unit": "1/2 kg"},
-        {"label": "1 kg", "price": 30, "unit": "1 kg"},
-        {"label": "2 kg", "price": 60, "unit": "2 kg"}
-    ]
-},
-    {
-    "name": "Onion",
-    "slug": "onion",
-    "price": 40,
-    "mrp": 50,
-    "unit": "1 kg",
-    "category_slug": "fruits-vegetables",
-    "image": "https://images.unsplash.com/photo-1508747703725-719777637510?w=600&q=80",
-    "stock": 80,
-    "popular": True,
-    "description": "Premium quality Nashik onions.",
-    "variants": [
-        {"label": "1/2 kg", "price": 20, "unit": "1/2 kg"},
-        {"label": "1 kg", "price": 40, "unit": "1 kg"},
-        {"label": "2 kg", "price": 80, "unit": "2 kg"}
-    ]
-},
+    {"name": "Fresh Tomato", "slug": "fresh-tomato", "price": 30, "mrp": 40, "unit": "1 kg", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1592924357228-91a4daadcfea?w=600&q=80", "stock": 50, "featured": True, "popular": True, "description": "Farm-fresh red tomatoes, hand-picked daily."},
+    {"name": "Onion", "slug": "onion", "price": 40, "mrp": 50, "unit": "1 kg", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1508747703725-719777637510?w=600&q=80", "stock": 80, "popular": True, "description": "Premium quality Nashik onions."},
     {"name": "Banana", "slug": "banana", "price": 50, "mrp": 60, "unit": "1 dozen", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?w=600&q=80", "stock": 30, "featured": True, "description": "Ripe yellow bananas, rich in potassium."},
     {"name": "Apple - Shimla", "slug": "apple-shimla", "price": 180, "mrp": 220, "unit": "1 kg", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1568702846914-96b305d2aaeb?w=600&q=80", "stock": 25, "featured": True, "popular": True, "description": "Crisp red apples straight from Himachal orchards."},
     {"name": "Potato", "slug": "potato", "price": 25, "mrp": 30, "unit": "1 kg", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1518977676601-b53f82aba655?w=600&q=80", "stock": 100, "description": "Fresh farm potatoes."},
@@ -2547,6 +2242,9 @@ async def seed_data():
     await db.categories.create_index("slug", unique=True)
     await db.vendors.create_index("owner_id")
     await db.coupons.create_index("code", unique=True)
+    await db.password_reset_otps.create_index("phone", unique=True)
+    await db.password_reset_tokens.create_index("token_hash", unique=True)
+    await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
 
     # Migration: ensure existing products have approval_status set (defaults to approved for legacy store products)
     await db.products.update_many({"approval_status": {"$exists": False}}, {"$set": {"approval_status": "approved"}})
@@ -2571,15 +2269,15 @@ async def seed_data():
             {"$set": {"password_hash": hash_password(admin_password), "role": "admin"}},
         )
         logger.info(f"Admin password refreshed: {admin_email}")
-     # Categories
+
+    # Categories
+    for c in SEED_CATEGORIES:
+        await db.categories.update_one({"slug": c["slug"]}, {"$setOnInsert": c}, upsert=True)
+
+    # Products
     for p in SEED_PRODUCTS:
         p_doc = {**p, "created_at": iso_now()}
-
-        await db.products.update_one(
-            {"slug": p["slug"]},
-            {"$setOnInsert": p_doc},
-            upsert=True
-        )
+        await db.products.update_one({"slug": p["slug"]}, {"$setOnInsert": p_doc}, upsert=True)
 
     # Reviews (seed a few if empty)
     if await db.reviews.count_documents({}) == 0:
