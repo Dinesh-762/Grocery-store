@@ -796,8 +796,19 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
     # order. For legacy/admin products without a vendor, use the main store
     # coordinates. For a multi-vendor order, the farthest vendor determines
     # the delivery charge so the customer is never undercharged.
-    store_lat = float(os.environ.get("STORE_LATITUDE", "18.73"))
-    store_lon = float(os.environ.get("STORE_LONGITUDE", "76.38"))
+    store_lat = float(
+        os.environ.get(
+            "STORE_LATITUDE",
+            "18.7271336"
+       )
+   )
+
+    store_lon = float(
+        os.environ.get(
+            "STORE_LONGITUDE",
+            "76.3810922"
+       )
+   )
     vendor_locations = {}
 
     for item in verified_items:

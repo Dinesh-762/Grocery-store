@@ -19,22 +19,6 @@ import {
 |--------------------------------------------------------------------------
 | Pricing Configuration
 |--------------------------------------------------------------------------
-|
-| Product price:
-| Comes from the selected product variant.
-|
-| Platform fee:
-| ₹10
-|
-| Tax:
-| CGST = 2.5%
-| SGST = 2.5%
-| Total GST = 5%
-|
-| Delivery:
-| <= 1.5 km = ₹13/km
-| > 1.5 km  = ₹20/km
-|--------------------------------------------------------------------------
 */
 
 const PLATFORM_FEE = 10;
@@ -48,12 +32,142 @@ const DELIVERY_RATE_ABOVE_1_5_KM = 20;
 
 /*
 |--------------------------------------------------------------------------
-| Store Location
+| EXACT AMBAJOGAI STORE LOCATION
+|--------------------------------------------------------------------------
+|
+| Google Maps location supplied:
+| Ambajogai, Maharashtra
+|
+| Latitude  : 18.7271336
+| Longitude : 76.3810922
+|
+*/
+
+const STORE_LATITUDE = 18.7271336;
+const STORE_LONGITUDE = 76.3810922;
+
+/*
+|--------------------------------------------------------------------------
+| Helpers
 |--------------------------------------------------------------------------
 */
 
-const STORE_LATITUDE = 18.73;
-const STORE_LONGITUDE = 76.38;
+function calculateDistanceKm(
+  lat1,
+  lon1,
+  lat2,
+  lon2
+) {
+  const earthRadiusKm = 6371;
+
+  const latitude1 =
+    Number(lat1);
+
+  const longitude1 =
+    Number(lon1);
+
+  const latitude2 =
+    Number(lat2);
+
+  const longitude2 =
+    Number(lon2);
+
+  if (
+    !Number.isFinite(latitude1) ||
+    !Number.isFinite(longitude1) ||
+    !Number.isFinite(latitude2) ||
+    !Number.isFinite(longitude2)
+  ) {
+    return 0;
+  }
+
+  const dLat =
+    ((latitude2 - latitude1) *
+      Math.PI) /
+    180;
+
+  const dLon =
+    ((longitude2 - longitude1) *
+      Math.PI) /
+    180;
+
+  const lat1Rad =
+    (latitude1 * Math.PI) /
+    180;
+
+  const lat2Rad =
+    (latitude2 * Math.PI) /
+    180;
+
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1Rad) *
+      Math.cos(lat2Rad) *
+      Math.sin(dLon / 2) ** 2;
+
+  const safeA = Math.min(
+    1,
+    Math.max(0, a)
+  );
+
+  const c =
+    2 *
+    Math.atan2(
+      Math.sqrt(safeA),
+      Math.sqrt(1 - safeA)
+    );
+
+  return Math.round(
+    earthRadiusKm * c * 100
+  ) / 100;
+}
+
+/*
+|--------------------------------------------------------------------------
+| Delivery fee
+|--------------------------------------------------------------------------
+*/
+
+function calculateDeliveryFee(
+  distanceKm,
+  subtotal = 0
+) {
+  if (
+    !Number.isFinite(distanceKm) ||
+    distanceKm <= 0
+  ) {
+    return 0;
+  }
+
+  /*
+   * Keep the existing backend rule:
+   * Orders >= ₹499 are free delivery.
+   *
+   * Backend remains authoritative.
+   */
+
+  if (
+    Number(subtotal) >= 499
+  ) {
+    return 0;
+  }
+
+  if (
+    distanceKm <= 1.5
+  ) {
+    return Math.round(
+      distanceKm *
+        DELIVERY_RATE_PER_KM *
+        100
+    ) / 100;
+  }
+
+  return Math.round(
+    distanceKm *
+      DELIVERY_RATE_ABOVE_1_5_KM *
+      100
+  ) / 100;
+}
 
 export default function Checkout() {
   const {
@@ -73,7 +187,8 @@ export default function Checkout() {
 
   const [store, setStore] = useState({
     upi_id: "ambajogai@upi",
-    upi_name: "Ambajogai Grocery Store",
+    upi_name:
+      "Ambajogai Grocery Store",
     whatsapp: "+918237214975",
     upi_qr: "/assets/upi-qr.jpeg",
   });
@@ -84,11 +199,14 @@ export default function Checkout() {
   |--------------------------------------------------------------------------
   */
 
-  const [payment, setPayment] = useState("UPI");
+  const [payment, setPayment] =
+    useState("UPI");
 
-  const [submitting, setSubmitting] = useState(false);
+  const [submitting, setSubmitting] =
+    useState(false);
 
-  const [placed, setPlaced] = useState(false);
+  const [placed, setPlaced] =
+    useState(false);
 
   /*
   |--------------------------------------------------------------------------
@@ -96,11 +214,14 @@ export default function Checkout() {
   |--------------------------------------------------------------------------
   */
 
-  const [couponInput, setCouponInput] = useState("");
+  const [couponInput, setCouponInput] =
+    useState("");
 
-  const [coupon, setCoupon] = useState(null);
+  const [coupon, setCoupon] =
+    useState(null);
 
-  const [couponBusy, setCouponBusy] = useState(false);
+  const [couponBusy, setCouponBusy] =
+    useState(false);
 
   /*
   |--------------------------------------------------------------------------
@@ -109,8 +230,10 @@ export default function Checkout() {
   */
 
   const [form, setForm] = useState({
-    full_name: user?.name || "",
-    phone: user?.phone || "",
+    full_name:
+      user?.name || "",
+    phone:
+      user?.phone || "",
     line1: "",
     landmark: "",
     area: "",
@@ -124,12 +247,15 @@ export default function Checkout() {
   |--------------------------------------------------------------------------
   */
 
-  const [location, setLocation] = useState({
-    latitude: null,
-    longitude: null,
-  });
+  const [location, setLocation] =
+    useState({
+      latitude: null,
+      longitude: null,
+      accuracy: null,
+    });
 
-  const [locating, setLocating] = useState(false);
+  const [locating, setLocating] =
+    useState(false);
 
   /*
   |--------------------------------------------------------------------------
@@ -179,18 +305,28 @@ export default function Checkout() {
   const update = (key) => (event) => {
     setForm((current) => ({
       ...current,
-      [key]: event.target.value,
+      [key]:
+        event.target.value,
     }));
   };
 
   /*
   |--------------------------------------------------------------------------
-  | GPS Location
+  | GET CURRENT LOCATION
   |--------------------------------------------------------------------------
+  |
+  | Uses browser GPS.
+  |
+  | Important:
+  | The browser's GPS is the customer's location.
+  | The store coordinates above are fixed to Ambajogai.
+  |
   */
 
   const getCurrentLocation = () => {
-    if (!navigator.geolocation) {
+    if (
+      !navigator.geolocation
+    ) {
       toast.error(
         "Location is not supported by your browser."
       );
@@ -202,14 +338,75 @@ export default function Checkout() {
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const latitude =
-          position.coords.latitude;
+          Number(
+            position.coords.latitude
+          );
 
         const longitude =
-          position.coords.longitude;
+          Number(
+            position.coords.longitude
+          );
+
+        const accuracy =
+          Number(
+            position.coords.accuracy || 0
+          );
+
+        /*
+         * Debug information.
+         * Useful if browser gives wrong location.
+         */
+
+        console.log(
+          "CUSTOMER GPS:",
+          {
+            latitude,
+            longitude,
+            accuracy,
+          }
+        );
+
+        if (
+          !Number.isFinite(
+            latitude
+          ) ||
+          !Number.isFinite(
+            longitude
+          )
+        ) {
+          setLocating(false);
+
+          toast.error(
+            "Invalid location received. Please try again."
+          );
+
+          return;
+        }
+
+        /*
+         * Reject obviously impossible
+         * coordinates.
+         */
+
+        if (
+          latitude < -90 ||
+          latitude > 90 ||
+          longitude < -180 ||
+          longitude > 180
+        ) {
+          setLocating(false);
+
+          toast.error(
+            "Invalid GPS coordinates received."
+          );
+
+          return;
+        }
 
         setLocation({
           latitude,
           longitude,
+          accuracy,
         });
 
         toast.success(
@@ -221,6 +418,11 @@ export default function Checkout() {
 
       (error) => {
         setLocating(false);
+
+        console.error(
+          "GPS ERROR:",
+          error
+        );
 
         if (
           error.code ===
@@ -237,10 +439,11 @@ export default function Checkout() {
             "Unable to detect your location."
           );
         } else if (
-          error.code === error.TIMEOUT
+          error.code ===
+          error.TIMEOUT
         ) {
           toast.error(
-            "Location request timed out."
+            "Location request timed out. Please try again."
           );
         } else {
           toast.error(
@@ -251,7 +454,7 @@ export default function Checkout() {
 
       {
         enableHighAccuracy: true,
-        timeout: 10000,
+        timeout: 15000,
         maximumAge: 0,
       }
     );
@@ -259,106 +462,60 @@ export default function Checkout() {
 
   /*
   |--------------------------------------------------------------------------
-  | Calculate distance
+  | Estimated distance
   |--------------------------------------------------------------------------
   */
 
-  const calculateDistanceKm = (
-    lat1,
-    lon1,
-    lat2,
-    lon2
-  ) => {
-    const earthRadius = 6371;
+  const estimatedDistance =
+    useMemo(() => {
+      if (
+        location.latitude ===
+          null ||
+        location.longitude ===
+          null
+      ) {
+        return null;
+      }
 
-    const dLat =
-      ((lat2 - lat1) * Math.PI) / 180;
-
-    const dLon =
-      ((lon2 - lon1) * Math.PI) / 180;
-
-    const lat1Rad =
-      (lat1 * Math.PI) / 180;
-
-    const lat2Rad =
-      (lat2 * Math.PI) / 180;
-
-    const a =
-      Math.sin(dLat / 2) ** 2 +
-      Math.cos(lat1Rad) *
-        Math.cos(lat2Rad) *
-        Math.sin(dLon / 2) ** 2;
-
-    const c =
-      2 *
-      Math.atan2(
-        Math.sqrt(a),
-        Math.sqrt(1 - a)
+      return calculateDistanceKm(
+        STORE_LATITUDE,
+        STORE_LONGITUDE,
+        location.latitude,
+        location.longitude
       );
-
-    return Math.round(
-      earthRadius * c * 100
-    ) / 100;
-  };
+    }, [location]);
 
   /*
   |--------------------------------------------------------------------------
-  | Estimated Distance
+  | Estimated delivery fee
   |--------------------------------------------------------------------------
   */
 
-  const estimatedDistance = useMemo(() => {
-    if (
-      location.latitude === null ||
-      location.longitude === null
-    ) {
-      return null;
-    }
+  const estimatedDeliveryFee =
+    useMemo(() => {
+      if (
+        estimatedDistance ===
+          null
+      ) {
+        return 0;
+      }
 
-    return calculateDistanceKm(
-      STORE_LATITUDE,
-      STORE_LONGITUDE,
-      Number(location.latitude),
-      Number(location.longitude)
-    );
-  }, [location]);
-
-  /*
-  |--------------------------------------------------------------------------
-  | Delivery Fee
-  |--------------------------------------------------------------------------
-  */
-
-  const estimatedDeliveryFee = useMemo(() => {
-    if (
-      estimatedDistance === null ||
-      estimatedDistance <= 0
-    ) {
-      return 0;
-    }
-
-    if (estimatedDistance <= 1.5) {
-      return (
-        Math.round(
-          estimatedDistance *
-            DELIVERY_RATE_PER_KM *
-            100
-        ) / 100
+      return calculateDeliveryFee(
+        estimatedDistance,
+        Number(subtotal || 0) -
+          Number(
+            coupon?.discount || 0
+          )
       );
-    }
-
-    return (
-      Math.round(
-        estimatedDistance *
-          DELIVERY_RATE_ABOVE_1_5_KM *
-          100
-      ) / 100
-    );
-  }, [estimatedDistance]);
+    }, [
+      estimatedDistance,
+      subtotal,
+      coupon,
+    ]);
 
   /*
   |--------------------------------------------------------------------------
-  | Coupon Discount
+  | Coupon discount
   |--------------------------------------------------------------------------
   */
 
@@ -368,7 +525,7 @@ export default function Checkout() {
 
   /*
   |--------------------------------------------------------------------------
-  | Discounted Subtotal
+  | Discounted subtotal
   |--------------------------------------------------------------------------
   */
 
@@ -381,7 +538,7 @@ export default function Checkout() {
 
   /*
   |--------------------------------------------------------------------------
-  | Platform Fee
+  | Platform fee
   |--------------------------------------------------------------------------
   */
 
@@ -392,14 +549,7 @@ export default function Checkout() {
 
   /*
   |--------------------------------------------------------------------------
-  | Taxable Amount
-  |--------------------------------------------------------------------------
-  |
-  | Product subtotal
-  | - Coupon discount
-  | + Platform fee
-  | + Delivery
-  |
+  | Taxable amount
   |--------------------------------------------------------------------------
   */
 
@@ -449,7 +599,7 @@ export default function Checkout() {
 
   /*
   |--------------------------------------------------------------------------
-  | Final Estimated Total
+  | Final estimated total
   |--------------------------------------------------------------------------
   */
 
@@ -516,8 +666,10 @@ export default function Checkout() {
     }
 
     if (
-      location.latitude === null ||
-      location.longitude === null
+      location.latitude ===
+        null ||
+      location.longitude ===
+        null
     ) {
       return "Please allow location access so delivery charges can be calculated.";
     }
@@ -531,12 +683,13 @@ export default function Checkout() {
 
   /*
   |--------------------------------------------------------------------------
-  | Place Order
+  | Place order
   |--------------------------------------------------------------------------
   */
 
   const submit = async () => {
-    const error = validate();
+    const error =
+      validate();
 
     if (error) {
       toast.error(error);
@@ -546,89 +699,95 @@ export default function Checkout() {
     setSubmitting(true);
 
     try {
-      /*
-       * IMPORTANT:
-       *
-       * The selected variant is already stored in the cart.
-       *
-       * Example:
-       *
-       * Tomato 500g → price ₹20
-       * Tomato 1kg  → price ₹30
-       *
-       * Therefore Checkout uses item.price directly.
-       */
-
       const orderPayload = {
-        items: items.map((item) => ({
-          product_id:
-            item.product_id,
+        items: items.map(
+          (item) => ({
+            product_id:
+              item.product_id,
 
-          name: item.name,
+            name: item.name,
 
-          price: Number(
-            item.price || 0
-          ),
+            price: Number(
+              item.price || 0
+            ),
 
-          quantity: Number(
-            item.quantity || 1
-          ),
+            quantity: Number(
+              item.quantity || 1
+            ),
 
-          image: item.image,
+            image: item.image,
 
-          unit:
-            item.unit || null,
+            unit:
+              item.unit || null,
 
-          variant_label:
-            item.variant_label ||
-            null,
+            variant_label:
+              item.variant_label ||
+              null,
 
-          /*
-           * ProductDetail no longer
-           * sends custom notes.
-           */
+            note: null,
 
-          note: null,
+            vendor_id:
+              item.vendor_id ||
+              null,
 
-          vendor_id:
-            item.vendor_id ||
-            null,
-
-          vendor_name:
-            item.vendor_name ||
-            null,
-        })),
+            vendor_name:
+              item.vendor_name ||
+              null,
+          })
+        ),
 
         /*
-         * Address
+         * Customer address + EXACT
+         * GPS coordinates.
          */
 
         address: {
           full_name:
             form.full_name,
 
-          phone: form.phone,
+          phone:
+            form.phone,
 
-          line1: form.line1,
+          line1:
+            form.line1,
 
           landmark:
             form.landmark,
 
-          area: form.area,
+          area:
+            form.area,
 
-          city: "Ambajogai",
+          city:
+            "Ambajogai",
 
           pincode:
             form.pincode,
 
-          latitude: Number(
+          latitude:
+            Number(
+              location.latitude
+            ),
+
+          longitude:
+            Number(
+              location.longitude
+            ),
+        },
+
+        /*
+         * Also send GPS at top level.
+         * Backend supports both forms.
+         */
+
+        latitude:
+          Number(
             location.latitude
           ),
 
-          longitude: Number(
+        longitude:
+          Number(
             location.longitude
           ),
-        },
 
         payment_method:
           payment,
@@ -641,7 +800,7 @@ export default function Checkout() {
       };
 
       /*
-       * Send order to backend.
+       * Send order.
        */
 
       const { data } =
@@ -704,8 +863,7 @@ export default function Checkout() {
         );
 
       /*
-       * Clear cart only after successful
-       * backend order creation.
+       * Clear cart after successful order.
        */
 
       clearCart();
@@ -715,10 +873,8 @@ export default function Checkout() {
       );
 
       /*
-      |--------------------------------------------------------------------------
-      | WhatsApp Store Message
-      |--------------------------------------------------------------------------
-      */
+       * WhatsApp store notification.
+       */
 
       const storeNumber =
         String(
@@ -727,10 +883,6 @@ export default function Checkout() {
           /[^\d]/g,
           ""
         );
-
-      /*
-       * Build order items.
-       */
 
       const itemsBlock = (
         data.items || items
@@ -765,19 +917,12 @@ export default function Checkout() {
         })
         .join("\n");
 
-      /*
-       * Order ID
-       */
-
-      const orderId = data.id
-        ? String(data.id)
-            .slice(-6)
-            .toUpperCase()
-        : "NEW";
-
-      /*
-       * Store WhatsApp message.
-       */
+      const orderId =
+        data.id
+          ? String(data.id)
+              .slice(-6)
+              .toUpperCase()
+          : "NEW";
 
       const storeMessage =
         encodeURIComponent(
@@ -853,7 +998,14 @@ https://www.google.com/maps?q=${
             location.latitude
           },${
             location.longitude
-          }`
+          }
+
+Distance from Ambajogai Grocery:
+${
+  data.delivery_distance_km ??
+  estimatedDistance ??
+  0
+} km`
         );
 
       if (storeNumber) {
@@ -864,10 +1016,8 @@ https://www.google.com/maps?q=${
       }
 
       /*
-      |--------------------------------------------------------------------------
-      | Customer WhatsApp Notification
-      |--------------------------------------------------------------------------
-      */
+       * Customer WhatsApp notification.
+       */
 
       try {
         const {
@@ -875,9 +1025,10 @@ https://www.google.com/maps?q=${
         } = await api.post(
           "/notify/order-whatsapp",
           {
-            order_id: data.id,
-
-            event: "placed",
+            order_id:
+              data.id,
+            event:
+              "placed",
           }
         );
 
@@ -893,16 +1044,9 @@ https://www.google.com/maps?q=${
         }
       } catch {
         /*
-         * WhatsApp notification is
-         * non-blocking.
+         * Non-blocking.
          */
       }
-
-      /*
-      |--------------------------------------------------------------------------
-      | Order Page
-      |--------------------------------------------------------------------------
-      */
 
       navigate(
         `/orders/${data.id}`
@@ -918,7 +1062,7 @@ https://www.google.com/maps?q=${
 
   /*
   |--------------------------------------------------------------------------
-  | Apply Coupon
+  | Apply coupon
   |--------------------------------------------------------------------------
   */
 
@@ -965,13 +1109,12 @@ https://www.google.com/maps?q=${
 
   /*
   |--------------------------------------------------------------------------
-  | Remove Coupon
+  | Remove coupon
   |--------------------------------------------------------------------------
   */
 
   const removeCoupon = () => {
     setCoupon(null);
-
     setCouponInput("");
   };
 
@@ -981,15 +1124,16 @@ https://www.google.com/maps?q=${
   |--------------------------------------------------------------------------
   */
 
-  const upiUrl = `upi://pay?pa=${encodeURIComponent(
-    store.upi_id || ""
-  )}&pn=${encodeURIComponent(
-    store.upi_name || ""
-  )}&am=${estimatedTotal.toFixed(
-    2
-  )}&cu=INR&tn=${encodeURIComponent(
-    "Ambajogai Grocery Order"
-  )}`;
+  const upiUrl =
+    `upi://pay?pa=${encodeURIComponent(
+      store.upi_id || ""
+    )}&pn=${encodeURIComponent(
+      store.upi_name || ""
+    )}&am=${estimatedTotal.toFixed(
+      2
+    )}&cu=INR&tn=${encodeURIComponent(
+      "Ambajogai Grocery Order"
+    )}`;
 
   const qrSrc =
     store.upi_qr ||
@@ -1017,11 +1161,10 @@ https://www.google.com/maps?q=${
       </p>
 
       <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_380px]">
-        {/* =====================================================
-            LEFT SIDE
-        ====================================================== */}
+        {/* LEFT */}
 
         <div className="space-y-6">
+
           {/* DELIVERY ADDRESS */}
 
           <section className="card-base p-6">
@@ -1034,6 +1177,7 @@ https://www.google.com/maps?q=${
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
+
               <Field
                 label="Full name"
                 value={
@@ -1047,7 +1191,9 @@ https://www.google.com/maps?q=${
 
               <Field
                 label="Phone"
-                value={form.phone}
+                value={
+                  form.phone
+                }
                 onChange={update(
                   "phone"
                 )}
@@ -1058,7 +1204,9 @@ https://www.google.com/maps?q=${
               <div className="sm:col-span-2">
                 <Field
                   label="Address line"
-                  value={form.line1}
+                  value={
+                    form.line1
+                  }
                   onChange={update(
                     "line1"
                   )}
@@ -1080,7 +1228,9 @@ https://www.google.com/maps?q=${
 
               <Field
                 label="Area / Locality"
-                value={form.area}
+                value={
+                  form.area
+                }
                 onChange={update(
                   "area"
                 )}
@@ -1118,6 +1268,7 @@ https://www.google.com/maps?q=${
 
             <div className="mt-5 rounded-xl border border-[#8BA888]/30 bg-[#8BA888]/10 p-4">
               <div className="flex items-start gap-3">
+
                 <Navigation className="mt-0.5 h-5 w-5 text-[#1B4332]" />
 
                 <div className="flex-1">
@@ -1140,15 +1291,28 @@ https://www.google.com/maps?q=${
 
                   {estimatedDistance !==
                     null && (
-                    <div className="mt-2 text-xs text-[#4A4A4A]">
-                      Estimated distance:{" "}
-                      <strong>
-                        {estimatedDistance.toFixed(
-                          2
-                        )}{" "}
-                        km
-                      </strong>
-                    </div>
+                    <>
+                      <div className="mt-2 text-xs text-[#4A4A4A]">
+                        Estimated distance:{" "}
+                        <strong>
+                          {estimatedDistance.toFixed(
+                            2
+                          )}{" "}
+                          km
+                        </strong>
+                      </div>
+
+                      {location.accuracy !==
+                        null && (
+                        <div className="mt-1 text-xs text-[#4A4A4A]">
+                          GPS accuracy:{" "}
+                          {Math.round(
+                            location.accuracy
+                          )}{" "}
+                          m
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
 
@@ -1157,7 +1321,9 @@ https://www.google.com/maps?q=${
                   onClick={
                     getCurrentLocation
                   }
-                  disabled={locating}
+                  disabled={
+                    locating
+                  }
                   className="inline-flex items-center gap-1.5 rounded-full bg-[#1B4332] px-4 py-2 text-xs font-semibold text-white hover:bg-[#2D6A4F] disabled:opacity-50"
                   data-testid="get-location-btn"
                 >
@@ -1222,7 +1388,9 @@ https://www.google.com/maps?q=${
               <div className="flex items-center justify-between rounded-xl bg-[#8BA888]/10 p-4">
                 <div>
                   <div className="font-semibold text-[#1B4332]">
-                    {coupon.code}
+                    {
+                      coupon.code
+                    }
                   </div>
 
                   <div className="text-xs text-[#4A4A4A]">
@@ -1259,6 +1427,7 @@ https://www.google.com/maps?q=${
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
+
               <PayOption
                 selected={
                   payment === "UPI"
@@ -1286,9 +1455,8 @@ https://www.google.com/maps?q=${
                 sub="Pay when your order arrives"
                 testid="payment-cod"
               />
-            </div>
 
-            {/* UPI */}
+            </div>
 
             {payment ===
               "UPI" && (
@@ -1327,8 +1495,6 @@ https://www.google.com/maps?q=${
               </div>
             )}
 
-            {/* COD */}
-
             {payment ===
               "COD" && (
               <div className="mt-6 flex items-start gap-2 rounded-xl bg-[#8BA888]/10 p-4 text-sm text-[#1B4332]">
@@ -1342,9 +1508,7 @@ https://www.google.com/maps?q=${
           </section>
         </div>
 
-        {/* =====================================================
-            RIGHT SIDE
-        ====================================================== */}
+        {/* RIGHT */}
 
         <aside
           className="card-base sticky top-24 h-fit p-6"
@@ -1354,8 +1518,6 @@ https://www.google.com/maps?q=${
             Order summary
           </h2>
 
-          {/* ITEMS */}
-
           <div className="mt-4 max-h-64 space-y-3 overflow-auto pr-1">
             {items.map(
               (item) => (
@@ -1364,7 +1526,9 @@ https://www.google.com/maps?q=${
                   className="flex gap-3"
                 >
                   <img
-                    src={item.image}
+                    src={
+                      item.image
+                    }
                     alt=""
                     className="h-12 w-12 rounded-lg object-cover"
                   />
@@ -1375,8 +1539,6 @@ https://www.google.com/maps?q=${
                         item.name
                       }
                     </div>
-
-                    {/* SELECTED WEIGHT */}
 
                     {item.variant_label && (
                       <div className="mt-0.5 text-xs font-bold text-[#1B4332]">
@@ -1419,9 +1581,8 @@ https://www.google.com/maps?q=${
             )}
           </div>
 
-          {/* PRICE */}
-
           <div className="mt-4 space-y-2 border-t border-dashed pt-4 text-sm">
+
             <Row
               label="Subtotal"
               value={formatINR(
@@ -1450,9 +1611,9 @@ https://www.google.com/maps?q=${
               label="Delivery"
               value={
                 location.latitude ===
-                  null ||
+                    null ||
                 location.longitude ===
-                  null
+                    null
                   ? "Location required"
                   : formatINR(
                       estimatedDeliveryFee
@@ -1463,8 +1624,12 @@ https://www.google.com/maps?q=${
             {estimatedDistance !==
               null && (
               <div className="rounded-lg bg-[#8BA888]/10 px-3 py-2 text-xs text-[#1B4332]">
-                {estimatedDistance <=
-                1.5
+                {Number(
+                  discountedSubtotal
+                ) >= 499
+                  ? "FREE delivery"
+                  : estimatedDistance <=
+                    1.5
                   ? `₹${DELIVERY_RATE_PER_KM}/km delivery`
                   : `₹${DELIVERY_RATE_ABOVE_1_5_KM}/km delivery`}
                 {" · "}
@@ -1497,8 +1662,6 @@ https://www.google.com/maps?q=${
             />
           </div>
 
-          {/* TOTAL */}
-
           <div className="mt-3 flex items-center justify-between border-t border-dashed pt-3">
             <span className="text-sm font-semibold">
               Total
@@ -1514,11 +1677,11 @@ https://www.google.com/maps?q=${
             </span>
           </div>
 
-          {/* PLACE ORDER */}
-
           <button
             type="button"
-            onClick={submit}
+            onClick={
+              submit
+            }
             disabled={
               submitting ||
               location.latitude ===
@@ -1571,7 +1734,9 @@ function Field({
       <input
         value={value}
         onChange={onChange}
-        placeholder={placeholder}
+        placeholder={
+          placeholder
+        }
         className="input-base"
         data-testid={testid}
       />
