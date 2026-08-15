@@ -2200,38 +2200,417 @@ SEED_CATEGORIES = [
 ]
 
 SEED_PRODUCTS = [
-    # Fruits & Vegetables
-    {"name": "Fresh Tomato", "slug": "fresh-tomato", "price": 30, "mrp": 40, "unit": "1 kg", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1592924357228-91a4daadcfea?w=600&q=80", "stock": 50, "featured": True, "popular": True, "description": "Farm-fresh red tomatoes, hand-picked daily.", "variants": [{"label": "500g", "price": 20, "mrp": 25, "unit": "500g"}, {"label": "1kg", "price": 30, "mrp": 40, "unit": "1kg"}, {"label": "2kg", "price": 55, "mrp": 65, "unit": "2kg"}, {"label": "3kg", "price": 80, "mrp": 95, "unit": "3kg"}, {"label": "4kg", "price": 105, "mrp": 125, "unit": "4kg"}, {"label": "5kg", "price": 130, "mrp": 155, "unit": "5kg"}]},
-    {"name": "Onion", "slug": "onion", "price": 40, "mrp": 50, "unit": "1 kg", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1508747703725-719777637510?w=600&q=80", "stock": 80, "popular": True, "description": "Premium quality Nashik onions."},
-    {"name": "Banana", "slug": "banana", "price": 50, "mrp": 60, "unit": "1 dozen", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?w=600&q=80", "stock": 30, "featured": True, "description": "Ripe yellow bananas, rich in potassium."},
-    {"name": "Apple - Shimla", "slug": "apple-shimla", "price": 180, "mrp": 220, "unit": "1 kg", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1568702846914-96b305d2aaeb?w=600&q=80", "stock": 25, "featured": True, "popular": True, "description": "Crisp red apples straight from Himachal orchards."},
-    {"name": "Potato", "slug": "potato", "price": 25, "mrp": 30, "unit": "1 kg", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1518977676601-b53f82aba655?w=600&q=80", "stock": 100, "description": "Fresh farm potatoes."},
+    # ============================================================
+    # FRUITS & VEGETABLES
+    # ============================================================
 
-    # Dairy
-    {"name": "Amul Milk (Toned)", "slug": "amul-milk-toned", "price": 32, "mrp": 34, "unit": "500 ml", "category_slug": "dairy-bakery", "image": "https://images.unsplash.com/photo-1550583724-b2692b85b150?w=600&q=80", "stock": 60, "featured": True, "popular": True, "description": "Amul toned milk pouch, farm fresh."},
-    {"name": "Paneer", "slug": "paneer", "price": 90, "mrp": 100, "unit": "200 g", "category_slug": "dairy-bakery", "image": "https://images.unsplash.com/photo-1631452180519-c014fe946bc7?w=600&q=80", "stock": 20, "popular": True, "description": "Soft, fresh paneer perfect for curries."},
-    {"name": "Amul Butter", "slug": "amul-butter", "price": 55, "mrp": 60, "unit": "100 g", "category_slug": "dairy-bakery", "image": "https://images.unsplash.com/photo-1589985270826-4b7bb135bc9d?w=600&q=80", "stock": 40, "description": "Classic Amul butter for your daily needs."},
-    {"name": "Whole Wheat Bread", "slug": "whole-wheat-bread", "price": 45, "mrp": 50, "unit": "400 g", "category_slug": "dairy-bakery", "image": "https://images.unsplash.com/photo-1509440159596-0249088772ff?w=600&q=80", "stock": 35, "description": "Freshly baked whole wheat bread."},
+    {
+        "name": "Fresh Tomato",
+        "slug": "fresh-tomato",
+        "price": 30,
+        "mrp": 40,
+        "unit": "1 kg",
+        "category_slug": "fruits-vegetables",
+        "image": "https://images.unsplash.com/photo-1592924357228-91a4daadcfea?w=600&q=80",
+        "stock": 50,
+        "featured": True,
+        "popular": True,
+        "description": "Farm-fresh red tomatoes, hand-picked daily.",
+        "variants": [
+            {"label": "500g", "price": 20, "mrp": 25, "unit": "500g"},
+            {"label": "1kg", "price": 30, "mrp": 40, "unit": "1kg"},
+            {"label": "2kg", "price": 55, "mrp": 65, "unit": "2kg"},
+            {"label": "3kg", "price": 80, "mrp": 95, "unit": "3kg"},
+            {"label": "4kg", "price": 105, "mrp": 125, "unit": "4kg"},
+            {"label": "5kg", "price": 130, "mrp": 155, "unit": "5kg"},
+        ],
+    },
 
-    # Staples
-    {"name": "Basmati Rice", "slug": "basmati-rice", "price": 320, "mrp": 380, "unit": "5 kg", "category_slug": "staples-grains", "image": "https://images.unsplash.com/photo-1586201375761-83865001e31c?w=600&q=80", "stock": 15, "featured": True, "popular": True, "description": "Premium long-grain basmati rice."},
-    {"name": "Toor Dal", "slug": "toor-dal", "price": 165, "mrp": 190, "unit": "1 kg", "category_slug": "staples-grains", "image": "https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=600&q=80", "stock": 25, "popular": True, "description": "Fresh, unpolished toor dal."},
-    {"name": "Aashirvaad Atta", "slug": "aashirvaad-atta", "price": 340, "mrp": 400, "unit": "5 kg", "category_slug": "staples-grains", "image": "https://images.unsplash.com/photo-1568254183919-78a4f43a2877?w=600&q=80", "stock": 30, "featured": True, "description": "100% whole wheat atta for soft rotis."},
-    {"name": "Sunflower Oil", "slug": "sunflower-oil", "price": 210, "mrp": 240, "unit": "1 L", "category_slug": "staples-grains", "image": "https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=600&q=80", "stock": 40, "description": "Refined sunflower cooking oil."},
+    {
+        "name": "Onion",
+        "slug": "onion",
+        "price": 40,
+        "mrp": 50,
+        "unit": "1 kg",
+        "category_slug": "fruits-vegetables",
+        "image": "https://images.unsplash.com/photo-1508747703725-719777637510?w=600&q=80",
+        "stock": 80,
+        "popular": True,
+        "description": "Premium quality Nashik onions.",
+        "variants": [
+            {"label": "500g", "price": 20, "mrp": 25, "unit": "500g"},
+            {"label": "1kg", "price": 40, "mrp": 50, "unit": "1kg"},
+            {"label": "2kg", "price": 75, "mrp": 90, "unit": "2kg"},
+            {"label": "3kg", "price": 110, "mrp": 130, "unit": "3kg"},
+            {"label": "5kg", "price": 175, "mrp": 210, "unit": "5kg"},
+        ],
+    },
 
-    # Spices
-    {"name": "Turmeric Powder", "slug": "turmeric-powder", "price": 65, "mrp": 80, "unit": "200 g", "category_slug": "spices-masala", "image": "https://images.unsplash.com/photo-1615485500704-8e990f9900f7?w=600&q=80", "stock": 50, "description": "Pure haldi powder, ground fresh."},
-    {"name": "Red Chilli Powder", "slug": "red-chilli-powder", "price": 85, "mrp": 100, "unit": "200 g", "category_slug": "spices-masala", "image": "https://images.unsplash.com/photo-1509358271058-acd22cc93898?w=600&q=80", "stock": 40, "popular": True, "description": "Spicy red chilli powder."},
-    {"name": "Garam Masala", "slug": "garam-masala", "price": 95, "mrp": 110, "unit": "100 g", "category_slug": "spices-masala", "image": "https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=600&q=80", "stock": 30, "featured": True, "description": "Aromatic blend of ground whole spices."},
+    {
+        "name": "Banana",
+        "slug": "banana",
+        "price": 50,
+        "mrp": 60,
+        "unit": "1 dozen",
+        "category_slug": "fruits-vegetables",
+        "image": "https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?w=600&q=80",
+        "stock": 30,
+        "featured": True,
+        "description": "Ripe yellow bananas, rich in potassium.",
+        "variants": [
+            {"label": "6 pcs", "price": 25, "mrp": 30, "unit": "6 pcs"},
+            {"label": "12 pcs", "price": 50, "mrp": 60, "unit": "12 pcs"},
+            {"label": "24 pcs", "price": 95, "mrp": 115, "unit": "24 pcs"},
+        ],
+    },
 
-    # Snacks
-    {"name": "Parle-G Biscuits", "slug": "parle-g", "price": 10, "mrp": 12, "unit": "80 g", "category_slug": "snacks-beverages", "image": "https://images.unsplash.com/photo-1558961363-fa8fdf82db35?w=600&q=80", "stock": 200, "popular": True, "description": "The classic glucose biscuit."},
-    {"name": "Lay's Classic Salted", "slug": "lays-classic", "price": 20, "mrp": 20, "unit": "52 g", "category_slug": "snacks-beverages", "image": "https://images.unsplash.com/photo-1621939514649-280e2ee25f60?w=600&q=80", "stock": 100, "description": "Crispy potato chips."},
-    {"name": "Tata Tea Gold", "slug": "tata-tea-gold", "price": 275, "mrp": 310, "unit": "500 g", "category_slug": "snacks-beverages", "image": "https://images.unsplash.com/photo-1594631252845-29fc4cc8cde9?w=600&q=80", "stock": 25, "featured": True, "description": "Rich aroma and taste of premium tea."},
+    {
+        "name": "Apple - Shimla",
+        "slug": "apple-shimla",
+        "price": 180,
+        "mrp": 220,
+        "unit": "1 kg",
+        "category_slug": "fruits-vegetables",
+        "image": "https://images.unsplash.com/photo-1568702846914-96b305d2aaeb?w=600&q=80",
+        "stock": 25,
+        "featured": True,
+        "popular": True,
+        "description": "Crisp red apples straight from Himachal orchards.",
+        "variants": [
+            {"label": "500g", "price": 90, "mrp": 110, "unit": "500g"},
+            {"label": "1kg", "price": 180, "mrp": 220, "unit": "1kg"},
+            {"label": "2kg", "price": 350, "mrp": 420, "unit": "2kg"},
+        ],
+    },
 
-    # Personal care
-    {"name": "Dettol Soap", "slug": "dettol-soap", "price": 40, "mrp": 45, "unit": "125 g", "category_slug": "personal-care", "image": "https://images.unsplash.com/photo-1600857544200-b2f666a9a2ec?w=600&q=80", "stock": 60, "description": "Antibacterial protection soap."},
-    {"name": "Colgate Toothpaste", "slug": "colgate-toothpaste", "price": 95, "mrp": 110, "unit": "150 g", "category_slug": "personal-care", "image": "https://images.unsplash.com/photo-1607613009820-a29f7bb81c04?w=600&q=80", "stock": 45, "popular": True, "description": "Cavity protection for strong teeth."},
+    {
+        "name": "Potato",
+        "slug": "potato",
+        "price": 25,
+        "mrp": 30,
+        "unit": "1 kg",
+        "category_slug": "fruits-vegetables",
+        "image": "https://images.unsplash.com/photo-1518977676601-b53f82aba655?w=600&q=80",
+        "stock": 100,
+        "description": "Fresh farm potatoes.",
+        "variants": [
+            {"label": "500g", "price": 13, "mrp": 16, "unit": "500g"},
+            {"label": "1kg", "price": 25, "mrp": 30, "unit": "1kg"},
+            {"label": "2kg", "price": 48, "mrp": 58, "unit": "2kg"},
+            {"label": "5kg", "price": 115, "mrp": 140, "unit": "5kg"},
+        ],
+    },
+
+    # ============================================================
+    # DAIRY & BAKERY
+    # ============================================================
+
+    {
+        "name": "Amul Milk (Toned)",
+        "slug": "amul-milk-toned",
+        "price": 32,
+        "mrp": 34,
+        "unit": "500 ml",
+        "category_slug": "dairy-bakery",
+        "image": "https://images.unsplash.com/photo-1550583724-b2692b85b150?w=600&q=80",
+        "stock": 60,
+        "featured": True,
+        "popular": True,
+        "description": "Amul toned milk pouch, farm fresh.",
+        "variants": [
+            {"label": "500ml", "price": 32, "mrp": 34, "unit": "500ml"},
+            {"label": "1L", "price": 64, "mrp": 68, "unit": "1L"},
+            {"label": "2L", "price": 126, "mrp": 136, "unit": "2L"},
+        ],
+    },
+
+    {
+        "name": "Paneer",
+        "slug": "paneer",
+        "price": 90,
+        "mrp": 100,
+        "unit": "200 g",
+        "category_slug": "dairy-bakery",
+        "image": "https://images.unsplash.com/photo-1631452180519-c014fe946bc7?w=600&q=80",
+        "stock": 20,
+        "popular": True,
+        "description": "Soft, fresh paneer perfect for curries.",
+        "variants": [
+            {"label": "200g", "price": 90, "mrp": 100, "unit": "200g"},
+            {"label": "500g", "price": 220, "mrp": 250, "unit": "500g"},
+            {"label": "1kg", "price": 420, "mrp": 480, "unit": "1kg"},
+        ],
+    },
+
+    {
+        "name": "Amul Butter",
+        "slug": "amul-butter",
+        "price": 55,
+        "mrp": 60,
+        "unit": "100 g",
+        "category_slug": "dairy-bakery",
+        "image": "https://images.unsplash.com/photo-1589985270826-4b7bb135bc9d?w=600&q=80",
+        "stock": 40,
+        "description": "Classic Amul butter for your daily needs.",
+        "variants": [
+            {"label": "100g", "price": 55, "mrp": 60, "unit": "100g"},
+            {"label": "200g", "price": 105, "mrp": 120, "unit": "200g"},
+            {"label": "500g", "price": 255, "mrp": 290, "unit": "500g"},
+        ],
+    },
+
+    {
+        "name": "Whole Wheat Bread",
+        "slug": "whole-wheat-bread",
+        "price": 45,
+        "mrp": 50,
+        "unit": "400 g",
+        "category_slug": "dairy-bakery",
+        "image": "https://images.unsplash.com/photo-1509440159596-0249088772ff?w=600&q=80",
+        "stock": 35,
+        "description": "Freshly baked whole wheat bread.",
+        "variants": [
+            {"label": "400g", "price": 45, "mrp": 50, "unit": "400g"},
+            {"label": "800g", "price": 85, "mrp": 100, "unit": "800g"},
+        ],
+    },
+
+    # ============================================================
+    # STAPLES & GRAINS
+    # ============================================================
+
+    {
+        "name": "Basmati Rice",
+        "slug": "basmati-rice",
+        "price": 320,
+        "mrp": 380,
+        "unit": "5 kg",
+        "category_slug": "staples-grains",
+        "image": "https://images.unsplash.com/photo-1586201375761-83865001e31c?w=600&q=80",
+        "stock": 15,
+        "featured": True,
+        "popular": True,
+        "description": "Premium long-grain basmati rice.",
+        "variants": [
+            {"label": "1kg", "price": 70, "mrp": 85, "unit": "1kg"},
+            {"label": "5kg", "price": 320, "mrp": 380, "unit": "5kg"},
+            {"label": "10kg", "price": 620, "mrp": 740, "unit": "10kg"},
+        ],
+    },
+
+    {
+        "name": "Toor Dal",
+        "slug": "toor-dal",
+        "price": 165,
+        "mrp": 190,
+        "unit": "1 kg",
+        "category_slug": "staples-grains",
+        "image": "https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=600&q=80",
+        "stock": 25,
+        "popular": True,
+        "description": "Fresh, unpolished toor dal.",
+        "variants": [
+            {"label": "500g", "price": 85, "mrp": 100, "unit": "500g"},
+            {"label": "1kg", "price": 165, "mrp": 190, "unit": "1kg"},
+            {"label": "2kg", "price": 320, "mrp": 370, "unit": "2kg"},
+            {"label": "5kg", "price": 790, "mrp": 900, "unit": "5kg"},
+        ],
+    },
+
+    {
+        "name": "Aashirvaad Atta",
+        "slug": "aashirvaad-atta",
+        "price": 340,
+        "mrp": 400,
+        "unit": "5 kg",
+        "category_slug": "staples-grains",
+        "image": "https://images.unsplash.com/photo-1568254183919-78a4f43a2877?w=600&q=80",
+        "stock": 30,
+        "featured": True,
+        "description": "100% whole wheat atta for soft rotis.",
+        "variants": [
+            {"label": "1kg", "price": 75, "mrp": 90, "unit": "1kg"},
+            {"label": "5kg", "price": 340, "mrp": 400, "unit": "5kg"},
+            {"label": "10kg", "price": 660, "mrp": 780, "unit": "10kg"},
+        ],
+    },
+
+    {
+        "name": "Sunflower Oil",
+        "slug": "sunflower-oil",
+        "price": 210,
+        "mrp": 240,
+        "unit": "1 L",
+        "category_slug": "staples-grains",
+        "image": "https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=600&q=80",
+        "stock": 40,
+        "description": "Refined sunflower cooking oil.",
+        "variants": [
+            {"label": "500ml", "price": 110, "mrp": 125, "unit": "500ml"},
+            {"label": "1L", "price": 210, "mrp": 240, "unit": "1L"},
+            {"label": "2L", "price": 410, "mrp": 460, "unit": "2L"},
+            {"label": "5L", "price": 990, "mrp": 1150, "unit": "5L"},
+        ],
+    },
+
+    # ============================================================
+    # SPICES & MASALA
+    # ============================================================
+
+    {
+        "name": "Turmeric Powder",
+        "slug": "turmeric-powder",
+        "price": 65,
+        "mrp": 80,
+        "unit": "200 g",
+        "category_slug": "spices-masala",
+        "image": "https://images.unsplash.com/photo-1615485500704-8e990f9900f7?w=600&q=80",
+        "stock": 50,
+        "description": "Pure haldi powder, ground fresh.",
+        "variants": [
+            {"label": "100g", "price": 35, "mrp": 42, "unit": "100g"},
+            {"label": "200g", "price": 65, "mrp": 80, "unit": "200g"},
+            {"label": "500g", "price": 150, "mrp": 180, "unit": "500g"},
+            {"label": "1kg", "price": 285, "mrp": 340, "unit": "1kg"},
+        ],
+    },
+
+    {
+        "name": "Red Chilli Powder",
+        "slug": "red-chilli-powder",
+        "price": 85,
+        "mrp": 100,
+        "unit": "200 g",
+        "category_slug": "spices-masala",
+        "image": "https://images.unsplash.com/photo-1509358271058-acd22cc93898?w=600&q=80",
+        "stock": 40,
+        "popular": True,
+        "description": "Spicy red chilli powder.",
+        "variants": [
+            {"label": "100g", "price": 45, "mrp": 55, "unit": "100g"},
+            {"label": "200g", "price": 85, "mrp": 100, "unit": "200g"},
+            {"label": "500g", "price": 200, "mrp": 240, "unit": "500g"},
+            {"label": "1kg", "price": 380, "mrp": 450, "unit": "1kg"},
+        ],
+    },
+
+    {
+        "name": "Garam Masala",
+        "slug": "garam-masala",
+        "price": 95,
+        "mrp": 110,
+        "unit": "100 g",
+        "category_slug": "spices-masala",
+        "image": "https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=600&q=80",
+        "stock": 30,
+        "featured": True,
+        "description": "Aromatic blend of ground whole spices.",
+        "variants": [
+            {"label": "50g", "price": 50, "mrp": 60, "unit": "50g"},
+            {"label": "100g", "price": 95, "mrp": 110, "unit": "100g"},
+            {"label": "200g", "price": 180, "mrp": 215, "unit": "200g"},
+            {"label": "500g", "price": 420, "mrp": 500, "unit": "500g"},
+        ],
+    },
+
+    # ============================================================
+    # SNACKS & BEVERAGES
+    # ============================================================
+
+    {
+        "name": "Parle-G Biscuits",
+        "slug": "parle-g",
+        "price": 10,
+        "mrp": 12,
+        "unit": "80 g",
+        "category_slug": "snacks-beverages",
+        "image": "https://images.unsplash.com/photo-1558961363-fa8fdf82db35?w=600&q=80",
+        "stock": 200,
+        "popular": True,
+        "description": "The classic glucose biscuit.",
+        "variants": [
+            {"label": "50g", "price": 5, "mrp": 6, "unit": "50g"},
+            {"label": "80g", "price": 10, "mrp": 12, "unit": "80g"},
+            {"label": "200g", "price": 25, "mrp": 30, "unit": "200g"},
+            {"label": "800g", "price": 90, "mrp": 105, "unit": "800g"},
+        ],
+    },
+
+    {
+        "name": "Lay's Classic Salted",
+        "slug": "lays-classic",
+        "price": 20,
+        "mrp": 20,
+        "unit": "52 g",
+        "category_slug": "snacks-beverages",
+        "image": "https://images.unsplash.com/photo-1621939514649-280e2ee25f60?w=600&q=80",
+        "stock": 100,
+        "description": "Crispy potato chips.",
+        "variants": [
+            {"label": "26g", "price": 10, "mrp": 10, "unit": "26g"},
+            {"label": "52g", "price": 20, "mrp": 20, "unit": "52g"},
+            {"label": "95g", "price": 35, "mrp": 40, "unit": "95g"},
+        ],
+    },
+
+    {
+        "name": "Tata Tea Gold",
+        "slug": "tata-tea-gold",
+        "price": 275,
+        "mrp": 310,
+        "unit": "500 g",
+        "category_slug": "snacks-beverages",
+        "image": "https://images.unsplash.com/photo-1594631252845-29fc4cc8cde9?w=600&q=80",
+        "stock": 25,
+        "featured": True,
+        "description": "Rich aroma and taste of premium tea.",
+        "variants": [
+            {"label": "100g", "price": 60, "mrp": 70, "unit": "100g"},
+            {"label": "250g", "price": 145, "mrp": 165, "unit": "250g"},
+            {"label": "500g", "price": 275, "mrp": 310, "unit": "500g"},
+            {"label": "1kg", "price": 530, "mrp": 600, "unit": "1kg"},
+        ],
+    },
+
+    # ============================================================
+    # PERSONAL CARE
+    # ============================================================
+
+    {
+        "name": "Dettol Soap",
+        "slug": "dettol-soap",
+        "price": 40,
+        "mrp": 45,
+        "unit": "125 g",
+        "category_slug": "personal-care",
+        "image": "https://images.unsplash.com/photo-1600857544200-b2f666a9a2ec?w=600&q=80",
+        "stock": 60,
+        "description": "Antibacterial protection soap.",
+        "variants": [
+            {"label": "75g", "price": 28, "mrp": 32, "unit": "75g"},
+            {"label": "125g", "price": 40, "mrp": 45, "unit": "125g"},
+            {"label": "4 x 125g", "price": 150, "mrp": 180, "unit": "4 x 125g"},
+        ],
+    },
+
+    {
+        "name": "Colgate Toothpaste",
+        "slug": "colgate-toothpaste",
+        "price": 95,
+        "mrp": 110,
+        "unit": "150 g",
+        "category_slug": "personal-care",
+        "image": "https://images.unsplash.com/photo-1607613009820-a29f7bb81c04?w=600&q=80",
+        "stock": 45,
+        "popular": True,
+        "description": "Cavity protection for strong teeth.",
+        "variants": [
+            {"label": "50g", "price": 35, "mrp": 40, "unit": "50g"},
+            {"label": "100g", "price": 65, "mrp": 75, "unit": "100g"},
+            {"label": "150g", "price": 95, "mrp": 110, "unit": "150g"},
+            {"label": "300g", "price": 180, "mrp": 210, "unit": "300g"},
+        ],
+    },
 ]
 
 
