@@ -1,5 +1,13 @@
-﻿import { useEffect, useState } from "react";
-import { useParams, useNavigate, Link } from "react-router-dom";
+import {
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import {
+  useParams,
+  useNavigate,
+  Link,
+} from "react-router-dom";
 import { api, formatINR } from "@/lib/api";
 import { useCart } from "@/context/CartContext";
 import {
@@ -9,203 +17,436 @@ import {
   Minus,
   ShieldCheck,
   Truck,
+  Loader2,
 } from "lucide-react";
-import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 export default function ProductDetail() {
   const { slug } = useParams();
   const navigate = useNavigate();
+
   const { addItem } = useCart();
 
   const [product, setProduct] = useState(null);
   const [related, setRelated] = useState([]);
   const [loading, setLoading] = useState(true);
+
   const [qty, setQty] = useState(1);
 
-  // Selected weight/variant
-  const [selectedVariant, setSelectedVariant] = useState(null);
+  /*
+  |--------------------------------------------------------------------------
+  | Selected Variant
+  |--------------------------------------------------------------------------
+  |
+  | NULL means customer is buying the normal/base product.
+  |
+  | Variant is OPTIONAL.
+  |--------------------------------------------------------------------------
+  */
+
+  const [selectedVariant, setSelectedVariant] =
+    useState(null);
+
+  /*
+  |--------------------------------------------------------------------------
+  | Load Product
+  |--------------------------------------------------------------------------
+  */
 
   useEffect(() => {
+    let mounted = true;
+
     setLoading(true);
+    setProduct(null);
+    setRelated([]);
     setSelectedVariant(null);
     setQty(1);
 
     api
       .get(`/products/${slug}`)
       .then(async ({ data }) => {
+        if (!mounted) return;
+
         setProduct(data);
 
-        const { data: rel } = await api.get(
-          `/products?category=${data.category_slug}&limit=8`
-        );
+        try {
+          if (data?.category_slug) {
+            const { data: rel } =
+              await api.get(
+                `/products?category=${data.category_slug}&limit=8`
+              );
 
-        setRelated(
-          rel.filter((r) => r.slug !== slug).slice(0, 4)
-        );
+            if (!mounted) return;
+
+            const relatedProducts =
+              Array.isArray(rel)
+                ? rel
+                : Array.isArray(rel?.products)
+                ? rel.products
+                : [];
+
+            setRelated(
+              relatedProducts
+                .filter(
+                  (item) =>
+                    item.slug !== slug
+                )
+                .slice(0, 4)
+            );
+          }
+        } catch {
+          if (mounted) {
+            setRelated([]);
+          }
+        }
       })
-      .catch(() => setProduct(null))
-      .finally(() => setLoading(false));
+      .catch(() => {
+        if (mounted) {
+          setProduct(null);
+        }
+      })
+      .finally(() => {
+        if (mounted) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      mounted = false;
+    };
   }, [slug]);
 
   /*
-   * ============================================================
-   * VARIANT PRICING
-   * ============================================================
-   *
-   * These are the fixed prices discussed:
-   *
-   * 500g = â‚¹20
-   * 1kg  = â‚¹30
-   * 2kg  = â‚¹55
-   * 3kg  = â‚¹80
-   * 4kg  = â‚¹105
-   * 5kg  = â‚¹130
-   *
-   * Backend variants will be used when available.
-   * For Fresh Tomato, these prices are also supported here
-   * so the UI immediately shows the correct price.
-   */
+  |--------------------------------------------------------------------------
+  | Normalize Variants
+  |--------------------------------------------------------------------------
+  |
+  | Supports both:
+  |
+  | variants
+  | varients
+  |
+  | because older backend data may contain the typo.
+  |--------------------------------------------------------------------------
+  */
 
-  const DEFAULT_VARIANT_PRICES = {
-    "500g": 20,
-    "500gm": 20,
-    "0.5kg": 20,
-    "1kg": 30,
-    "1 Kg": 30,
-    "2kg": 55,
-    "2 Kg": 55,
-    "3kg": 80,
-    "3 Kg": 80,
-    "4kg": 105,
-    "4 Kg": 105,
-    "5kg": 130,
-    "5 Kg": 130,
-  };
+  const variants = useMemo(() => {
+    if (!product) {
+      return [];
+    }
 
-  /*
-   * Normalize backend variant data.
-   *
-   * If backend already contains:
-   * { label: "500g", price: 20 }
-   * we use it directly.
-   *
-   * Otherwise the predefined pricing above is used.
-   */
-  const getVariants = () => {
-    if (!product) return [];
+    const rawVariants =
+      Array.isArray(product.variants)
+        ? product.variants
+        : Array.isArray(product.varients)
+        ? product.varients
+        : [];
 
-    if (
-      Array.isArray(product.variants) &&
-      product.variants.length > 0
-    ) {
-      return product.variants.map((variant) => {
+    if (rawVariants.length === 0) {
+      return [];
+    }
+
+    return rawVariants
+      .map((variant, index) => {
+        /*
+        |--------------------------------------------------------------------------
+        | Backend may return object
+        |--------------------------------------------------------------------------
+        */
+
+        if (
+          typeof variant === "string"
+        ) {
+          return {
+            id: `${variant}-${index}`,
+            label: variant,
+            price: Number(
+              product.price || 0
+            ),
+            unit: variant,
+          };
+        }
+
         const label = String(
-          variant.label ||
-            variant.unit ||
-            variant.name ||
+          variant?.label ||
+            variant?.unit ||
+            variant?.name ||
             ""
         ).trim();
 
-        const normalizedPrice =
-          variant.price !== undefined &&
-          variant.price !== null
-            ? Number(variant.price)
-            : DEFAULT_VARIANT_PRICES[label];
+        const price = Number(
+          variant?.price ??
+            variant?.selling_price ??
+            variant?.amount ??
+            product.price ??
+            0
+        );
+
+        const unit =
+          variant?.unit ||
+          label ||
+          product.unit ||
+          "1 pc";
 
         return {
           ...variant,
+
+          id:
+            variant?.id ||
+            variant?._id ||
+            `${label}-${index}`,
+
           label,
-          price: Number.isFinite(normalizedPrice)
-            ? normalizedPrice
-            : Number(product.price || 0),
-          unit: variant.unit || label || product.unit,
+
+          price:
+            Number.isFinite(price) &&
+            price >= 0
+              ? price
+              : Number(
+                  product.price || 0
+                ),
+
+          unit,
         };
-      });
-    }
-
-    /*
-     * If the product has no variants yet, create the
-     * requested standard weight options.
-     *
-     * The product's 1kg price is used only as a fallback
-     * for products other than Fresh Tomato.
-     */
-    const basePrice = Number(product.price || 0);
-
-    return [
-      {
-        label: "500g",
-        price:
-          product.slug === "fresh-tomato"
-            ? 20
-            : Math.round(basePrice * 0.67),
-        unit: "500g",
-      },
-      {
-        label: "1kg",
-        price: basePrice,
-        unit: "1kg",
-      },
-      {
-        label: "2kg",
-        price:
-          product.slug === "fresh-tomato"
-            ? 55
-            : Math.round(basePrice * 1.83),
-        unit: "2kg",
-      },
-      {
-        label: "3kg",
-        price:
-          product.slug === "fresh-tomato"
-            ? 80
-            : Math.round(basePrice * 2.67),
-        unit: "3kg",
-      },
-      {
-        label: "4kg",
-        price:
-          product.slug === "fresh-tomato"
-            ? 105
-            : Math.round(basePrice * 3.5),
-        unit: "4kg",
-      },
-      {
-        label: "5kg",
-        price:
-          product.slug === "fresh-tomato"
-            ? 130
-            : Math.round(basePrice * 4.33),
-        unit: "5kg",
-      },
-    ];
-  };
-
-  const variants = getVariants();
+      })
+      .filter(
+        (variant) =>
+          variant.label
+      );
+  }, [product]);
 
   /*
-   * Automatically select 1kg if available.
-   * Otherwise select the first variant.
-   */
-  useEffect(() => {
-    if (!product) return;
+  |--------------------------------------------------------------------------
+  | Current Price
+  |--------------------------------------------------------------------------
+  |
+  | No variant selected:
+  |     product.price
+  |
+  | Variant selected:
+  |     variant.price
+  |--------------------------------------------------------------------------
+  */
 
-    const availableVariants = variants;
+  const displayPrice =
+    selectedVariant
+      ? Number(
+          selectedVariant.price || 0
+        )
+      : Number(
+          product?.price || 0
+        );
 
-    if (availableVariants.length === 0) {
-      setSelectedVariant(null);
+  /*
+  |--------------------------------------------------------------------------
+  | Current Unit
+  |--------------------------------------------------------------------------
+  */
+
+  const displayUnit =
+    selectedVariant?.unit ||
+    selectedVariant?.label ||
+    product?.unit ||
+    "1 pc";
+
+  /*
+  |--------------------------------------------------------------------------
+  | MRP
+  |--------------------------------------------------------------------------
+  */
+
+  const displayMrp =
+    selectedVariant?.mrp ??
+    selectedVariant?.compare_at_price ??
+    product?.mrp ??
+    null;
+
+  /*
+  |--------------------------------------------------------------------------
+  | Discount
+  |--------------------------------------------------------------------------
+  */
+
+  const discount =
+    displayMrp &&
+    Number(displayMrp) >
+      Number(displayPrice)
+      ? Math.round(
+          (
+            (
+              Number(displayMrp) -
+              Number(displayPrice)
+            ) /
+            Number(displayMrp)
+          ) *
+            100
+        )
+      : 0;
+
+  /*
+  |--------------------------------------------------------------------------
+  | Add To Cart
+  |--------------------------------------------------------------------------
+  */
+
+  const handleAddToCart = () => {
+    if (!product) {
       return;
     }
 
-    const oneKg =
-      availableVariants.find(
-        (variant) =>
-          String(variant.label).toLowerCase() === "1kg"
-      ) || availableVariants[0];
+    if (
+      Number(product.stock || 0) <= 0
+    ) {
+      toast.error(
+        "This product is currently out of stock."
+      );
+      return;
+    }
 
-    setSelectedVariant(oneKg);
-  }, [product, variants]);
+    /*
+    |--------------------------------------------------------------------------
+    | IMPORTANT:
+    | Variant is OPTIONAL.
+    |--------------------------------------------------------------------------
+    */
+
+    if (selectedVariant) {
+      addItem(
+        {
+          ...product,
+
+          price:
+            selectedVariant.price,
+
+          unit:
+            selectedVariant.unit ||
+            selectedVariant.label ||
+            product.unit,
+        },
+
+        qty,
+
+        null,
+
+        selectedVariant.label,
+
+        selectedVariant.price,
+
+        selectedVariant.unit ||
+          selectedVariant.label ||
+          product.unit
+      );
+
+      return;
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Normal product without variant
+    |--------------------------------------------------------------------------
+    */
+
+    addItem(
+      {
+        ...product,
+
+        price: Number(
+          product.price || 0
+        ),
+
+        unit:
+          product.unit ||
+          "1 pc",
+      },
+
+      qty
+    );
+  };
+
+  /*
+  |--------------------------------------------------------------------------
+  | Buy Now
+  |--------------------------------------------------------------------------
+  */
+
+  const handleBuyNow = () => {
+    if (!product) {
+      return;
+    }
+
+    if (
+      Number(product.stock || 0) <= 0
+    ) {
+      toast.error(
+        "This product is currently out of stock."
+      );
+      return;
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Variant selected
+    |--------------------------------------------------------------------------
+    */
+
+    if (selectedVariant) {
+      addItem(
+        {
+          ...product,
+
+          price:
+            selectedVariant.price,
+
+          unit:
+            selectedVariant.unit ||
+            selectedVariant.label ||
+            product.unit,
+        },
+
+        qty,
+
+        null,
+
+        selectedVariant.label,
+
+        selectedVariant.price,
+
+        selectedVariant.unit ||
+          selectedVariant.label ||
+          product.unit
+      );
+    } else {
+      /*
+      |--------------------------------------------------------------------------
+      | Normal product
+      |--------------------------------------------------------------------------
+      */
+
+      addItem(
+        {
+          ...product,
+
+          price: Number(
+            product.price || 0
+          ),
+
+          unit:
+            product.unit ||
+            "1 pc",
+        },
+
+        qty
+      );
+    }
+
+    navigate("/checkout");
+  };
+
+  /*
+  |--------------------------------------------------------------------------
+  | Loading
+  |--------------------------------------------------------------------------
+  */
 
   if (loading) {
     return (
@@ -214,6 +455,12 @@ export default function ProductDetail() {
       </div>
     );
   }
+
+  /*
+  |--------------------------------------------------------------------------
+  | Product Not Found
+  |--------------------------------------------------------------------------
+  */
 
   if (!product) {
     return (
@@ -232,127 +479,6 @@ export default function ProductDetail() {
     );
   }
 
-  const displayPrice =
-    selectedVariant?.price ?? Number(product.price || 0);
-
-  const displayUnit =
-    selectedVariant?.unit ||
-    selectedVariant?.label ||
-    product.unit ||
-    "1kg";
-
-  /*
-   * MRP is shown only when the selected variant does not
-   * have its own MRP.
-   */
-  const displayMrp = selectedVariant
-    ? null
-    : product.mrp;
-
-  const off =
-    product.mrp &&
-    product.mrp > product.price
-      ? Math.round(
-          ((product.mrp - product.price) /
-            product.mrp) *
-            100
-        )
-      : 0;
-
-  /*
-   * ============================================================
-   * ADD TO CART
-   * ============================================================
-   */
-  const handleAddToCart = () => {
-    if (!selectedVariant) {
-      toast.error("Please select a weight.");
-      return;
-    }
-
-    if (product.stock <= 0) {
-      toast.error("This product is currently out of stock.");
-      return;
-    }
-
-    addItem(
-      {
-        ...product,
-
-        /*
-         * IMPORTANT:
-         * Selected variant price is passed explicitly.
-         */
-        price: selectedVariant.price,
-
-        unit:
-          selectedVariant.unit ||
-          selectedVariant.label ||
-          product.unit,
-
-        variant_label: selectedVariant.label,
-      },
-
-      qty,
-
-      /*
-       * No custom note.
-       */
-      null,
-
-      selectedVariant.label,
-
-      selectedVariant.price,
-
-      selectedVariant.unit ||
-        selectedVariant.label ||
-        product.unit
-    );
-  };
-
-  /*
-   * ============================================================
-   * BUY NOW
-   * ============================================================
-   */
-  const handleBuyNow = () => {
-    if (!selectedVariant) {
-      toast.error("Please select a weight.");
-      return;
-    }
-
-    if (product.stock <= 0) {
-      toast.error("This product is currently out of stock.");
-      return;
-    }
-
-    addItem(
-      {
-        ...product,
-        price: selectedVariant.price,
-        unit:
-          selectedVariant.unit ||
-          selectedVariant.label ||
-          product.unit,
-        variant_label: selectedVariant.label,
-      },
-
-      qty,
-
-      null,
-
-      selectedVariant.label,
-
-      selectedVariant.price,
-
-      selectedVariant.unit ||
-        selectedVariant.label ||
-        product.unit
-    );
-
-    navigate("/checkout");
-  };
-
   return (
     <div
       className="container-app py-8"
@@ -361,6 +487,7 @@ export default function ProductDetail() {
       {/* BACK */}
 
       <button
+        type="button"
         onClick={() => navigate(-1)}
         className="mb-6 inline-flex items-center gap-1.5 text-sm text-[#4A4A4A] hover:text-[#1B4332]"
       >
@@ -376,7 +503,10 @@ export default function ProductDetail() {
         <div className="card-base overflow-hidden">
           <div className="aspect-square overflow-hidden bg-gray-50">
             <img
-              src={product.image}
+              src={
+                product.image ||
+                "/placeholder-product.png"
+              }
               alt={product.name}
               className="h-full w-full object-cover"
             />
@@ -429,15 +559,20 @@ export default function ProductDetail() {
             </div>
 
             {displayMrp &&
-              displayMrp > displayPrice && (
+              Number(displayMrp) >
+                Number(displayPrice) && (
                 <>
                   <div className="text-lg text-gray-400 line-through">
-                    {formatINR(displayMrp)}
+                    {formatINR(
+                      displayMrp
+                    )}
                   </div>
 
-                  <span className="rounded-full bg-[#E07A5F]/10 px-2.5 py-0.5 text-sm font-semibold text-[#E07A5F]">
-                    {off}% off
-                  </span>
+                  {discount > 0 && (
+                    <span className="rounded-full bg-[#E07A5F]/10 px-2.5 py-0.5 text-sm font-semibold text-[#E07A5F]">
+                      {discount}% off
+                    </span>
+                  )}
                 </>
               )}
           </div>
@@ -446,7 +581,8 @@ export default function ProductDetail() {
               STOCK
           ==================================================== */}
 
-          {product.stock > 0 ? (
+          {Number(product.stock || 0) >
+          0 ? (
             <div className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-green-50 px-3 py-1 text-xs font-medium text-green-700">
               In stock ({product.stock})
             </div>
@@ -464,66 +600,76 @@ export default function ProductDetail() {
           </p>
 
           {/* ===================================================
-              REQUIRED WEIGHT SELECTOR
+              OPTIONAL VARIANT SELECTOR
           ==================================================== */}
 
-          <div
-            className="mt-6"
-            data-testid="variant-picker"
-          >
-            <div className="mb-3 text-sm font-semibold text-[#1A1A1A]">
-              Select Weight{" "}
-              <span className="text-red-500">*</span>
-            </div>
+          {variants.length > 0 && (
+            <div
+              className="mt-6"
+              data-testid="variant-picker"
+            >
+              <div className="mb-3 text-sm font-semibold text-[#1A1A1A]">
+                Select Weight / Variant{" "}
+                <span className="font-normal text-gray-400">
+                  (Optional)
+                </span>
+              </div>
 
-            <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-              {variants.map((variant) => {
-                const active =
-                  selectedVariant?.label ===
-                  variant.label;
+              <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+                {variants.map(
+                  (variant) => {
+                    const active =
+                      selectedVariant?.id ===
+                      variant.id;
 
-                return (
-                  <button
-                    key={variant.label}
-                    type="button"
-                    onClick={() =>
-                      setSelectedVariant(variant)
-                    }
-                    className={`rounded-xl border px-3 py-3 text-center transition-all ${
-                      active
-                        ? "border-[#1B4332] bg-[#1B4332] text-white shadow-sm"
-                        : "border-[#E5E5E5] bg-white text-[#1A1A1A] hover:border-[#1B4332]"
-                    }`}
-                    data-testid={`variant-${variant.label}`}
-                  >
-                    <div className="text-sm font-bold">
-                      {variant.label}
-                    </div>
+                    return (
+                      <button
+                        key={variant.id}
+                        type="button"
+                        onClick={() =>
+                          setSelectedVariant(
+                            active
+                              ? null
+                              : variant
+                          )
+                        }
+                        className={`rounded-xl border px-3 py-3 text-center transition-all ${
+                          active
+                            ? "border-[#1B4332] bg-[#1B4332] text-white shadow-sm"
+                            : "border-[#E5E5E5] bg-white text-[#1A1A1A] hover:border-[#1B4332]"
+                        }`}
+                        data-testid={`variant-${variant.label}`}
+                      >
+                        <div className="text-sm font-bold">
+                          {variant.label}
+                        </div>
 
-                    <div
-                      className={`mt-1 text-xs ${
-                        active
-                          ? "text-white/90"
-                          : "text-[#4A4A4A]"
-                      }`}
-                    >
-                      {formatINR(variant.price)}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
+                        <div
+                          className={`mt-1 text-xs ${
+                            active
+                              ? "text-white/90"
+                              : "text-[#4A4A4A]"
+                          }`}
+                        >
+                          {formatINR(
+                            variant.price
+                          )}
+                        </div>
+                      </button>
+                    );
+                  }
+                )}
+              </div>
 
-            {!selectedVariant && (
-              <p className="mt-2 text-xs font-medium text-red-500">
-                Please select a weight before adding this
-                product to cart.
+              <p className="mt-2 text-xs text-gray-500">
+                You can buy the normal product price
+                without selecting a variant.
               </p>
-            )}
-          </div>
+            </div>
+          )}
 
           {/* ===================================================
-              SELECTED VARIANT PRICE
+              SELECTED VARIANT
           ==================================================== */}
 
           {selectedVariant && (
@@ -544,7 +690,9 @@ export default function ProductDetail() {
                 </span>
 
                 <span className="text-lg font-bold text-[#1B4332]">
-                  {formatINR(selectedVariant.price)}
+                  {formatINR(
+                    selectedVariant.price
+                  )}
                 </span>
               </div>
             </div>
@@ -559,7 +707,12 @@ export default function ProductDetail() {
               <button
                 type="button"
                 onClick={() =>
-                  setQty((v) => Math.max(1, v - 1))
+                  setQty((value) =>
+                    Math.max(
+                      1,
+                      value - 1
+                    )
+                  )
                 }
                 className="grid h-9 w-9 place-items-center rounded-full text-[#1B4332] hover:bg-[#1B4332]/10"
                 data-testid="qty-decrement"
@@ -577,7 +730,10 @@ export default function ProductDetail() {
               <button
                 type="button"
                 onClick={() =>
-                  setQty((v) => v + 1)
+                  setQty(
+                    (value) =>
+                      value + 1
+                  )
                 }
                 className="grid h-9 w-9 place-items-center rounded-full text-[#1B4332] hover:bg-[#1B4332]/10"
                 data-testid="qty-increment"
@@ -593,17 +749,20 @@ export default function ProductDetail() {
             <button
               type="button"
               disabled={
-                product.stock <= 0 ||
-                !selectedVariant
+                Number(
+                  product.stock || 0
+                ) <= 0
               }
-              onClick={handleAddToCart}
+              onClick={
+                handleAddToCart
+              }
               className="btn-primary flex-1 sm:flex-initial disabled:cursor-not-allowed disabled:opacity-50"
               data-testid="add-to-cart-btn"
             >
               <ShoppingCart className="h-4 w-4" />
 
-              {!selectedVariant
-                ? "Select Weight"
+              {selectedVariant
+                ? `Add ${selectedVariant.label}`
                 : "Add to Cart"}
             </button>
 
@@ -614,8 +773,9 @@ export default function ProductDetail() {
             <button
               type="button"
               disabled={
-                product.stock <= 0 ||
-                !selectedVariant
+                Number(
+                  product.stock || 0
+                ) <= 0
               }
               onClick={handleBuyNow}
               className="btn-accent flex-1 sm:flex-initial disabled:cursor-not-allowed disabled:opacity-50"
@@ -639,7 +799,8 @@ export default function ProductDetail() {
                 </div>
 
                 <div className="text-xs text-[#4A4A4A]">
-                  Within 30â€“45 minutes in Ambajogai
+                  Within 30–45 minutes in
+                  Ambajogai
                 </div>
               </div>
             </div>
@@ -653,7 +814,8 @@ export default function ProductDetail() {
                 </div>
 
                 <div className="text-xs text-[#4A4A4A]">
-                  100% quality assured or refund
+                  100% quality assured or
+                  refund
                 </div>
               </div>
             </div>
@@ -672,17 +834,24 @@ export default function ProductDetail() {
           </h2>
 
           <div className="mt-6 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
-            {related.map((p) => (
+            {related.map((item) => (
               <Link
-                key={p.id}
-                to={`/products/${p.slug}`}
+                key={
+                  item.id ||
+                  item._id ||
+                  item.slug
+                }
+                to={`/products/${item.slug}`}
                 className="card-base group overflow-hidden"
-                data-testid={`related-${p.slug}`}
+                data-testid={`related-${item.slug}`}
               >
                 <div className="aspect-square overflow-hidden bg-gray-50">
                   <img
-                    src={p.image}
-                    alt={p.name}
+                    src={
+                      item.image ||
+                      "/placeholder-product.png"
+                    }
+                    alt={item.name}
                     loading="lazy"
                     className="h-full w-full object-cover transition-transform group-hover:scale-105"
                   />
@@ -690,15 +859,18 @@ export default function ProductDetail() {
 
                 <div className="p-3">
                   <div className="text-xs text-gray-500">
-                    {p.unit}
+                    {item.unit ||
+                      "1 pc"}
                   </div>
 
                   <div className="mt-1 line-clamp-2 text-sm font-semibold">
-                    {p.name}
+                    {item.name}
                   </div>
 
                   <div className="mt-1 font-bold text-[#1B4332]">
-                    {formatINR(p.price)}
+                    {formatINR(
+                      item.price
+                    )}
                   </div>
                 </div>
               </Link>
@@ -709,4 +881,3 @@ export default function ProductDetail() {
     </div>
   );
 }
-

@@ -1,4 +1,4 @@
-import { Link, NavLink, useNavigate } from "react-router-dom";
+﻿import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { ShoppingCart, User, Search, Menu, X, LogOut, LayoutDashboard, Package, Leaf, Store, Truck } from "lucide-react";
 import { api } from "@/lib/api";
@@ -98,7 +98,7 @@ export default function Header() {
         <div className="text-left">
           <div className="font-medium">{item.name}</div>
           <div className="text-sm text-gray-500">
-            ₹{item.price}
+            â‚¹{item.price}
           </div>
         </div>
       </button>
@@ -110,7 +110,7 @@ export default function Header() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search for rice, dal, milk, snacks…"
+              placeholder="Search for rice, dal, milk, snacksâ€¦"
               className="input-base pl-12"
               data-testid="header-search-input"
             />
@@ -161,7 +161,7 @@ export default function Header() {
                   data-testid="user-menu-trigger"
                 >
                   <User className="h-4 w-4" />
-                  <span className="max-w-[100px] truncate">{user.name.split(" ")[0]}</span>
+                  <span className="max-w-[100px] truncate">{(user.name || user.email || "User").split(" ")[0]}</span>
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
@@ -241,7 +241,7 @@ export default function Header() {
                 <input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search products…"
+                  placeholder="Search productsâ€¦"
                   className="input-base pl-11"
                   data-testid="mobile-search-input"
                 />
@@ -310,3 +310,4 @@ export default function Header() {
     </header>
   );
 }
+

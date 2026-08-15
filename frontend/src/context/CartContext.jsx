@@ -15,28 +15,6 @@ const STORAGE_KEY = "ambajogai_cart";
 |--------------------------------------------------------------------------
 | Pricing Configuration
 |--------------------------------------------------------------------------
-|
-| Product price comes from the selected variant.
-|
-| Example:
-|
-| Tomato
-| 500g = ₹20
-| 1kg  = ₹30
-| 2kg  = ₹55
-| 3kg  = ₹80
-| 4kg  = ₹105
-| 5kg  = ₹130
-|
-| Platform fee = ₹10
-|
-| Tax:
-| CGST = 2.5%
-| SGST = 2.5%
-| Total GST = 5%
-|
-| Delivery is calculated separately during checkout.
-|--------------------------------------------------------------------------
 */
 
 const PLATFORM_FEE = 10;
@@ -50,14 +28,15 @@ const SGST_RATE = 0.025;
 | Cart Line Key
 |--------------------------------------------------------------------------
 |
-| Different variants of the same product must remain separate.
+| Same product + same variant = same cart line.
 |
 | Example:
 |
+| Tomato + no variant
 | Tomato + 500g
 | Tomato + 1kg
 |
-| These are two different cart lines.
+| These remain separate lines.
 |--------------------------------------------------------------------------
 */
 
@@ -65,10 +44,16 @@ function lineKey(item) {
   return `${item.product_id}::${item.variant_label || ""}`;
 }
 
+/*
+|--------------------------------------------------------------------------
+| Cart Provider
+|--------------------------------------------------------------------------
+*/
+
 export function CartProvider({ children }) {
   /*
   |--------------------------------------------------------------------------
-  | Load cart from localStorage
+  | Load cart
   |--------------------------------------------------------------------------
   */
 
@@ -109,6 +94,16 @@ export function CartProvider({ children }) {
   |--------------------------------------------------------------------------
   | Add Item
   |--------------------------------------------------------------------------
+  |
+  | IMPORTANT:
+  | Variant/weight is OPTIONAL.
+  |
+  | If variant is selected:
+  |   selected variant price is used.
+  |
+  | If variant is NOT selected:
+  |   product base price is used.
+  |--------------------------------------------------------------------------
   */
 
   const addItem = (
@@ -120,23 +115,46 @@ export function CartProvider({ children }) {
     variant_unit = null
   ) => {
     /*
-     * --------------------------------------------------------------
-     * Validate quantity
-     * --------------------------------------------------------------
-     */
+    |--------------------------------------------------------------------------
+    | Validate product
+    |--------------------------------------------------------------------------
+    */
 
-    const safeQty = Math.max(
-      1,
-      Number(qty || 1)
-    );
+    if (!product || !product.id) {
+      toast.error("Invalid product.");
+      return;
+    }
 
     /*
-     * --------------------------------------------------------------
-     * Determine selected variant price
-     * --------------------------------------------------------------
-     */
+    |--------------------------------------------------------------------------
+    | Validate quantity
+    |--------------------------------------------------------------------------
+    */
+
+    const numericQty = Number(qty);
+
+    const safeQty =
+      Number.isFinite(numericQty) && numericQty > 0
+        ? numericQty
+        : 1;
+
+    /*
+    |--------------------------------------------------------------------------
+    | Determine price
+    |--------------------------------------------------------------------------
+    |
+    | Variant price is used ONLY when a variant was actually selected.
+    | Otherwise product.price is used.
+    |--------------------------------------------------------------------------
+    */
+
+    const hasVariant =
+      variant_label !== null &&
+      variant_label !== undefined &&
+      String(variant_label).trim() !== "";
 
     const selectedPrice =
+      hasVariant &&
       variant_price !== null &&
       variant_price !== undefined &&
       variant_price !== ""
@@ -144,103 +162,97 @@ export function CartProvider({ children }) {
         : Number(product.price || 0);
 
     /*
-     * --------------------------------------------------------------
-     * Determine selected variant unit
-     * --------------------------------------------------------------
-     */
+    |--------------------------------------------------------------------------
+    | Determine unit
+    |--------------------------------------------------------------------------
+    */
 
     const selectedUnit =
-      variant_unit ||
-      variant_label ||
-      product.unit ||
-      "1 pc";
+      hasVariant && variant_unit
+        ? variant_unit
+        : product.unit || "1 pc";
 
     /*
-     * --------------------------------------------------------------
-     * Basic price validation
-     * --------------------------------------------------------------
-     */
+    |--------------------------------------------------------------------------
+    | Validate price
+    |--------------------------------------------------------------------------
+    */
 
     if (
       !Number.isFinite(selectedPrice) ||
       selectedPrice < 0
     ) {
-      toast.error(
-        "Invalid product price."
-      );
-
+      toast.error("Invalid product price.");
       return;
     }
 
     /*
-     * --------------------------------------------------------------
-     * Variant is compulsory
-     * --------------------------------------------------------------
-     */
-
-    if (!variant_label) {
-      toast.error(
-        "Please select a weight before adding the product."
-      );
-
-      return;
-    }
-
-    /*
-     * --------------------------------------------------------------
-     * Add / merge item
-     * --------------------------------------------------------------
-     */
+    |--------------------------------------------------------------------------
+    | Add / Merge Cart Item
+    |--------------------------------------------------------------------------
+    */
 
     setItems((prev) => {
       const idx = prev.findIndex(
-        (p) =>
-          p.product_id === product.id &&
-          (p.variant_label || null) ===
-            (variant_label || null)
+        (item) =>
+          item.product_id === product.id &&
+          (item.variant_label || null) ===
+            (hasVariant
+              ? String(variant_label)
+              : null)
       );
 
       /*
-       * Existing same product + same variant
-       * => increase quantity.
-       */
+      |--------------------------------------------------------------------------
+      | Existing product + same variant
+      |--------------------------------------------------------------------------
+      */
 
       if (idx >= 0) {
         const next = [...prev];
 
+        const existing = next[idx];
+
         next[idx] = {
-          ...next[idx],
+          ...existing,
 
           quantity:
-            Number(next[idx].quantity || 0) +
+            Number(existing.quantity || 0) +
             safeQty,
-
-          /*
-           * Always keep the latest selected
-           * variant price/unit.
-           */
 
           price: selectedPrice,
 
           unit: selectedUnit,
 
-          variant_label:
-            variant_label || null,
-
-          /*
-           * Custom note is no longer used by
-           * ProductDetail.
-           */
+          variant_label: hasVariant
+            ? String(variant_label)
+            : null,
 
           note: null,
+
+          /*
+           * Keep latest vendor information if available.
+           */
+
+          vendor_id:
+            product.vendor_id ||
+            existing.vendor_id ||
+            null,
+
+          vendor_name:
+            product.vendor_name ||
+            existing.vendor_name ||
+            null,
         };
 
         return next;
       }
 
       /*
-       * New cart line.
-       */
+      |--------------------------------------------------------------------------
+      | New cart item
+      |--------------------------------------------------------------------------
+      */
 
       return [
         ...prev,
@@ -250,21 +262,17 @@ export function CartProvider({ children }) {
 
           name: product.name,
 
-          /*
-           * IMPORTANT:
-           * This is the selected variant price.
-           */
-
           price: selectedPrice,
 
-          image: product.image,
+          image: product.image || null,
 
           unit: selectedUnit,
 
           quantity: safeQty,
 
-          variant_label:
-            variant_label || null,
+          variant_label: hasVariant
+            ? String(variant_label)
+            : null,
 
           note: null,
 
@@ -277,9 +285,21 @@ export function CartProvider({ children }) {
       ];
     });
 
-    toast.success(
-      `${product.name} (${variant_label}) added to cart`
-    );
+    /*
+    |--------------------------------------------------------------------------
+    | Success message
+    |--------------------------------------------------------------------------
+    */
+
+    if (hasVariant) {
+      toast.success(
+        `${product.name} (${variant_label}) added to cart`
+      );
+    } else {
+      toast.success(
+        `${product.name} added to cart`
+      );
+    }
   };
 
   /*
@@ -291,7 +311,7 @@ export function CartProvider({ children }) {
   const removeItem = (key) => {
     setItems((prev) =>
       prev.filter(
-        (p) => lineKey(p) !== key
+        (item) => lineKey(item) !== key
       )
     );
   };
@@ -306,24 +326,26 @@ export function CartProvider({ children }) {
     key,
     quantity
   ) => {
-    const safeQuantity = Math.max(
-      0,
-      Number(quantity || 0)
-    );
+    const numericQuantity = Number(quantity);
+
+    const safeQuantity =
+      Number.isFinite(numericQuantity)
+        ? Math.max(0, numericQuantity)
+        : 0;
 
     setItems((prev) =>
       prev
-        .map((p) =>
-          lineKey(p) === key
+        .map((item) =>
+          lineKey(item) === key
             ? {
-                ...p,
+                ...item,
                 quantity: safeQuantity,
               }
-            : p
+            : item
         )
         .filter(
-          (p) =>
-            Number(p.quantity || 0) > 0
+          (item) =>
+            Number(item.quantity || 0) > 0
         )
     );
   };
@@ -340,39 +362,35 @@ export function CartProvider({ children }) {
 
   /*
   |--------------------------------------------------------------------------
-  | Subtotal
+  | Subtotal + Count
   |--------------------------------------------------------------------------
   */
 
   const { subtotal, count } = useMemo(() => {
-    const calculatedSubtotal =
-      items.reduce(
-        (sum, item) => {
-          const price = Number(
-            item.price || 0
-          );
+    const calculatedSubtotal = items.reduce(
+      (sum, item) => {
+        const price = Number(
+          item.price || 0
+        );
 
-          const quantity = Number(
-            item.quantity || 0
-          );
+        const quantity = Number(
+          item.quantity || 0
+        );
 
-          return (
-            sum +
-            price * quantity
-          );
-        },
-        0
-      );
-
-    const calculatedCount =
-      items.reduce(
-        (sum, item) =>
+        return (
           sum +
-          Number(
-            item.quantity || 0
-          ),
-        0
-      );
+          price * quantity
+        );
+      },
+      0
+    );
+
+    const calculatedCount = items.reduce(
+      (sum, item) =>
+        sum +
+        Number(item.quantity || 0),
+      0
+    );
 
     return {
       subtotal:
@@ -397,12 +415,7 @@ export function CartProvider({ children }) {
 
   /*
   |--------------------------------------------------------------------------
-  | Tax Base
-  |--------------------------------------------------------------------------
-  |
-  | Product subtotal + platform fee.
-  |
-  | Delivery is calculated at checkout.
+  | Taxable Amount
   |--------------------------------------------------------------------------
   */
 
@@ -456,10 +469,8 @@ export function CartProvider({ children }) {
   | Delivery
   |--------------------------------------------------------------------------
   |
-  | Actual delivery fee is calculated by Checkout.jsx
-  | using the customer's GPS location.
-  |
-  | CartContext keeps it at 0 until checkout.
+  | Delivery is calculated separately in Checkout.jsx
+  | using customer location.
   |--------------------------------------------------------------------------
   */
 
@@ -467,10 +478,7 @@ export function CartProvider({ children }) {
 
   /*
   |--------------------------------------------------------------------------
-  | Cart Total
-  |--------------------------------------------------------------------------
-  |
-  | This is the cart-side total before actual GPS delivery.
+  | Total
   |--------------------------------------------------------------------------
   */
 
@@ -496,8 +504,10 @@ export function CartProvider({ children }) {
     <CartContext.Provider
       value={{
         /*
-         * Cart
-         */
+        |--------------------------------------------------------------------------
+        | Cart
+        |--------------------------------------------------------------------------
+        */
 
         items,
 
@@ -510,8 +520,10 @@ export function CartProvider({ children }) {
         clearCart,
 
         /*
-         * Pricing
-         */
+        |--------------------------------------------------------------------------
+        | Pricing
+        |--------------------------------------------------------------------------
+        */
 
         subtotal,
 
@@ -532,8 +544,10 @@ export function CartProvider({ children }) {
         count,
 
         /*
-         * Rates
-         */
+        |--------------------------------------------------------------------------
+        | Rates
+        |--------------------------------------------------------------------------
+        */
 
         GST_RATE,
 
@@ -542,8 +556,10 @@ export function CartProvider({ children }) {
         SGST_RATE,
 
         /*
-         * Configuration
-         */
+        |--------------------------------------------------------------------------
+        | Configuration
+        |--------------------------------------------------------------------------
+        */
 
         PLATFORM_FEE,
       }}
