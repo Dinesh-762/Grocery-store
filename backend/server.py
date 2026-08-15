@@ -265,6 +265,121 @@ class ReviewIn(BaseModel):
     comment: str
     author_name: str
 
+# ---------------------------------------------------------------------------
+# ORDER NOTIFICATION HELPERS
+# ---------------------------------------------------------------------------
+
+async def create_order_notification(
+    user_id: str,
+    order_id: str,
+    title: str,
+    message: str,
+    notification_type: str = "order",
+):
+    """
+    Store an in-app notification for a user.
+    """
+
+    notification = {
+        "user_id": user_id,
+        "order_id": str(order_id),
+        "title": title,
+        "message": message,
+        "type": notification_type,
+        "read": False,
+        "created_at": iso_now(),
+    }
+
+    await db.notifications.insert_one(notification)
+
+
+async def notify_order_users(
+    order: dict,
+    title: str,
+    message: str,
+    notification_type: str = "order",
+):
+    """
+    Notify customer + vendor owners + assigned delivery boy.
+    """
+
+    order_id = str(order["_id"])
+
+    notified_users = set()
+
+    # ---------------------------------------------------------
+    # CUSTOMER
+    # ---------------------------------------------------------
+    customer_id = order.get("user_id")
+
+    if customer_id:
+        notified_users.add(customer_id)
+
+        await create_order_notification(
+            user_id=customer_id,
+            order_id=order_id,
+            title=title,
+            message=message,
+            notification_type=notification_type,
+        )
+
+    # ---------------------------------------------------------
+    # VENDORS
+    # ---------------------------------------------------------
+    vendor_ids = set()# Helpers
+    # --------------------------------------------------------------------------
+
+    for item in order.get("items", []):
+        vendor_id = item.get("vendor_id")
+
+        if vendor_id:
+            vendor_ids.add(vendor_id)
+
+    for vendor_id in vendor_ids:
+
+        vendor = await db.vendors.find_one({
+            "id": vendor_id
+        })
+
+        if not vendor:
+            try:
+                vendor = await db.vendors.find_one({
+                    "_id": safe_object_id(vendor_id)
+                })
+            except Exception:
+                vendor = None
+
+        if not vendor:
+            continue
+
+        owner_id = vendor.get("owner_id")
+
+        if owner_id and owner_id not in notified_users:
+
+            notified_users.add(owner_id)
+
+            await create_order_notification(
+                user_id=owner_id,
+                order_id=order_id,
+                title=title,
+                message=message,
+                notification_type=notification_type,
+            )
+
+    # ---------------------------------------------------------
+    # DELIVERY BOY
+    # ---------------------------------------------------------
+    delivery_partner_id = order.get("delivery_partner_id")
+
+    if delivery_partner_id and delivery_partner_id not in notified_users:
+
+        await create_order_notification(
+            user_id=delivery_partner_id,
+            order_id=order_id,
+            title=title,
+            message=message,
+            notification_type=notification_type,
+        )
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -994,7 +1109,30 @@ async def update_order_status(order_id: str, payload: OrderStatusUpdate, _: dict
     await db.orders.update_one(
         {"_id": oid},
         {"$set": {"status": payload.status, "status_history": history}},
-    )
+      )
+      # ---------------------------------------------------------
+      # CUSTOMER NOTIFICATIONS
+      # ---------------------------------------------------------
+
+    if payload.status == "Accepted":
+
+          await create_order_notification(
+              user_id=doc["user_id"],
+              order_id=str(doc["_id"]),
+              title="Order Accepted",
+              message="Your order has been successfully accepted and is being prepared.",
+              notification_type="order_accepted",
+          )
+
+    elif payload.status == "Delivered":
+
+          await create_order_notification(
+              user_id=doc["user_id"],
+              order_id=str(doc["_id"]),
+              title="Order Delivered",
+              message="Your order has been delivered successfully. Thank you for shopping with us!",
+              notification_type="order_delivered",
+          )
     doc["status"] = payload.status
     doc["status_history"] = history
     return order_to_out(doc)
@@ -1757,6 +1895,79 @@ async def delivery_me(user: dict = Depends(require_delivery)):
     u = await db.users.find_one({"_id": ObjectId(user["id"])})
     return dp_to_out(u)
 
+# ---------------------------------------------------------------------------
+# NOTIFICATIONS
+# ---------------------------------------------------------------------------
+
+@api.get("/notifications")
+async def get_notifications(
+    user: dict = Depends(get_current_user)
+):
+    docs = await db.notifications.find({
+        "user_id": user["id"]
+    }).sort("created_at", -1).limit(50).to_list(50)
+
+    result = []
+
+    for n in docs:
+        result.append({
+            "id": str(n["_id"]),
+            "order_id": n.get("order_id"),
+            "title": n.get("title", ""),
+            "message": n.get("message", ""),
+            "type": n.get("type", "order"),
+            "read": n.get("read", False),
+            "created_at": n.get("created_at"),
+        })
+
+    return result
+
+
+@api.patch("/notifications/{notification_id}/read")
+async def mark_notification_read(
+    notification_id: str,
+    user: dict = Depends(get_current_user)
+):
+    oid = safe_object_id(notification_id)
+
+    result = await db.notifications.update_one(
+        {
+            "_id": oid,
+            "user_id": user["id"],
+        },
+        {
+            "$set": {
+                "read": True
+            }
+        }
+    )
+
+    if result.matched_count == 0:
+        raise HTTPException(
+            status_code=404,
+            detail="Notification not found"
+        )
+
+    return {"ok": True}
+
+
+@api.patch("/notifications/read-all")
+async def mark_all_notifications_read(
+    user: dict = Depends(get_current_user)
+):
+    await db.notifications.update_many(
+        {
+            "user_id": user["id"],
+            "read": False,
+        },
+        {
+            "$set": {
+                "read": True
+            }
+        }
+    )
+
+    return {"ok": True}
 
 @api.get("/delivery/orders")
 async def delivery_my_orders(user: dict = Depends(require_delivery)):
@@ -1791,14 +2002,30 @@ async def delivery_update_status(order_id: str, payload: OrderStatusUpdate, user
     for i in items:
         if i.get("line_status") not in ("Cancelled", "Delivered"):
             i["line_status"] = payload.status
-    await db.orders.update_one(
+        await db.orders.update_one(
         {"_id": oid},
         {"$set": {"status": payload.status, "status_history": history, "items": items}},
     )
+
+    # ---------------------------------------------------------
+    # CUSTOMER NOTIFICATION - ORDER DELIVERED
+    # ---------------------------------------------------------
+
+    if payload.status == "Delivered" and o.get("status") != "Delivered":
+
+        await create_order_notification(
+            user_id=o["user_id"],
+            order_id=str(o["_id"]),
+            title="Order Delivered",
+            message="Your order has been delivered successfully. Thank you for shopping with us!",
+            notification_type="order_delivered",
+        )
+
     o["status"] = payload.status
     o["status_history"] = history
     o["items"] = items
     return order_to_out(o)
+
 
 
 @api.get("/delivery/earnings")

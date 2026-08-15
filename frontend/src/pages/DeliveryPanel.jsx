@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { NavLink, Routes, Route, Navigate } from "react-router-dom";
 import { api, formatINR, formatApiError } from "@/lib/api";
 import { toast } from "sonner";
@@ -206,47 +206,153 @@ function AssignedOrders() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const { data } = await api.get("/delivery/orders");
-    setOrders(data);
-    setLoading(false);
+  // Keeps track of orders already seen by this delivery partner.
+  const knownOrdersRef = useRef(new Set());
+
+  // Audio instance for new-order ringtone.
+  const audioRef = useRef(null);
+
+  const playNewOrderSound = useCallback(() => {
+    try {
+      if (!audioRef.current) {
+        audioRef.current = new Audio(
+          "https://actions.google.com/sounds/v1/alarms/beep_short.ogg"
+        );
+
+        audioRef.current.volume = 1.0;
+        audioRef.current.preload = "auto";
+      }
+
+      audioRef.current.currentTime = 0;
+
+      const playPromise = audioRef.current.play();
+
+      if (playPromise !== undefined) {
+        playPromise.catch(() => {
+          // Browser may block autoplay until the delivery partner
+          // interacts with the page.
+        });
+      }
+    } catch (error) {
+      console.error("New order ringtone error:", error);
+    }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  const load = useCallback(async () => {
+    try {
+      setLoading(true);
+
+      const { data } = await api.get("/delivery/orders");
+
+      setOrders(Array.isArray(data) ? data : []);
+    } catch (error) {
+      toast.error(formatApiError(error));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Initial load.
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // ---------------------------------------------------------
+  // NEW ORDER DETECTION + RINGTONE
+  // ---------------------------------------------------------
+  useEffect(() => {
+    let mounted = true;
+
+    const checkForNewOrders = async () => {
+      try {
+        const { data } = await api.get("/delivery/orders");
+
+        if (!mounted || !Array.isArray(data)) return;
+
+        const currentOrderIds = new Set(
+          data.map((order) => String(order.id))
+        );
+
+        // First polling request:
+        // remember existing orders but DO NOT play ringtone.
+        if (knownOrdersRef.current.size === 0) {
+          knownOrdersRef.current = currentOrderIds;
+          setOrders(data);
+          return;
+        }
+
+        let newOrderFound = false;
+
+        for (const order of data) {
+          const orderId = String(order.id);
+
+          if (!knownOrdersRef.current.has(orderId)) {
+            newOrderFound = true;
+
+            toast.success("🔔 New order assigned!", {
+              description: `Order #${orderId.slice(-6).toUpperCase()}`,
+              duration: 6000,
+            });
+          }
+        }
+
+        if (newOrderFound) {
+          playNewOrderSound();
+        }
+
+        knownOrdersRef.current = currentOrderIds;
+        setOrders(data);
+      } catch (error) {
+        // Don't show an error toast every 5 seconds if polling fails.
+        console.error("Delivery order polling error:", error);
+      }
+    };
+
+    // Check every 5 seconds.
+    const interval = setInterval(checkForNewOrders, 5000);
+
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, [playNewOrderSound]);
 
   const setStatus = async (id, status) => {
     try {
       await api.patch(`/delivery/orders/${id}/status`, { status });
+
       toast.success(`Marked ${status}`);
+
+      // Refresh immediately after status change.
       load();
-    } catch (e) { toast.error(formatApiError(e)); }
+    } catch (e) {
+      toast.error(formatApiError(e));
+    }
   };
 
-  if (loading) return <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#1B4332]" />;
-  if (orders.length === 0) return <div className="rounded-2xl border border-dashed border-[#E5E5E5] p-10 text-center text-[#4A4A4A]">No active assignments right now.</div>;
+  if (loading) {
+    return (
+      <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#1B4332]" />
+    );
+  }
+
+  if (orders.length === 0) {
+    return (
+      <div className="rounded-2xl border border-dashed border-[#E5E5E5] p-10 text-center text-[#4A4A4A]">
+        No active assignments right now.
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4" data-testid="delivery-orders">
-      {orders.map((o) => <OrderCard key={o.id} o={o} onStatus={setStatus} />)}
-    </div>
-  );
-}
-
-function HistoryList() {
-  const [orders, setOrders] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    api.get("/delivery/history").then(({ data }) => setOrders(data)).finally(() => setLoading(false));
-  }, []);
-
-  if (loading) return <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#1B4332]" />;
-  if (orders.length === 0) return <div className="rounded-2xl border border-dashed border-[#E5E5E5] p-10 text-center text-[#4A4A4A]">No delivery history yet.</div>;
-
-  return (
-    <div className="space-y-4" data-testid="delivery-history">
-      {orders.map((o) => <OrderCard key={o.id} o={o} onStatus={() => {}} showActions={false} />)}
+      {orders.map((o) => (
+        <OrderCard
+          key={o.id}
+          o={o}
+          onStatus={setStatus}
+        />
+      ))}
     </div>
   );
 }

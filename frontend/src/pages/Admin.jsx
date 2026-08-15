@@ -573,14 +573,16 @@ function OrdersAdmin() {
   }, [load]);
 
   const setStatus = async (id, status) => {
-    try {
-      await api.patch(`/admin/orders/${id}/status`, { status });
-      toast.success(`Marked ${status}`);
-      load();
-    } catch (e) {
-      toast.error(formatApiError(e));
-    }
-  };
+  try {
+    await api.patch(`/admin/orders/${id}/status`, { status });
+
+    toast.success(`Marked ${status}`);
+
+    load();
+  } catch (e) {
+    toast.error(formatApiError(e));
+  }
+};
 
   const assignDp = async (id, dpId) => {
     if (!dpId) return;

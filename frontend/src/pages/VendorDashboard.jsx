@@ -1,6 +1,6 @@
 import Dashboard from "@/pages/Dashboard";
 import VendorBottomNav from "@/components/VendorBottomNav";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { NavLink, Routes, Route, Navigate } from "react-router-dom";
 import { api, formatINR, formatApiError } from "@/lib/api";
 import { toast } from "sonner";
@@ -955,6 +955,26 @@ function FF({
 function VOrders() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+    const knownOrdersRef = useRef(new Set());
+  const audioRef = useRef(null);
+
+  const playNewOrderSound = useCallback(() => {
+    try {
+      if (!audioRef.current) {
+        audioRef.current = new Audio(
+          "https://actions.google.com/sounds/v1/alarms/beep_short.ogg"
+        );
+        audioRef.current.volume = 1;
+      }
+
+      audioRef.current.currentTime = 0;
+      audioRef.current.play().catch(() => {
+        // Browser may block autoplay until user interacts with the page.
+      });
+    } catch (e) {
+      console.error("Order ringtone error:", e);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -971,9 +991,63 @@ function VOrders() {
     }
   }, []);
 
-  useEffect(() => {
+    useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const checkNewOrders = async () => {
+      try {
+        const { data } = await api.get("/vendor/orders");
+
+        if (!mounted || !Array.isArray(data)) return;
+
+        const currentIds = new Set(
+          data.map((order) => String(order.id))
+        );
+
+        // First load: only remember existing orders.
+        // Do NOT play ringtone for old orders.
+        if (knownOrdersRef.current.size === 0) {
+          knownOrdersRef.current = currentIds;
+          return;
+        }
+
+        let newOrderFound = false;
+
+        for (const order of data) {
+          const id = String(order.id);
+
+          if (!knownOrdersRef.current.has(id)) {
+            newOrderFound = true;
+
+            toast.success("🔔 New order received!", {
+              description: `Order #${id.slice(-6).toUpperCase()}`,
+              duration: 5000,
+            });
+          }
+        }
+
+        if (newOrderFound) {
+          playNewOrderSound();
+        }
+
+        knownOrdersRef.current = currentIds;
+        setOrders(data);
+      } catch (error) {
+        // Silent polling error.
+      }
+    };
+
+    const interval = setInterval(checkNewOrders, 5000);
+
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, [playNewOrderSound]);
 
   const setStatus = async (
     id,
