@@ -21,6 +21,10 @@ import {
 |--------------------------------------------------------------------------
 */
 
+const MINIMUM_ORDER_VALUE = 100;
+const FREE_ORDER_LIMIT = 249;
+const FREE_ORDER_REQUIRED_ORDERS = 13;
+
 const PLATFORM_FEE = 10;
 
 const CGST_RATE = 0.025;
@@ -34,9 +38,6 @@ const DELIVERY_RATE_ABOVE_1_5_KM = 20;
 |--------------------------------------------------------------------------
 | EXACT AMBAJOGAI STORE LOCATION
 |--------------------------------------------------------------------------
-|
-| Google Maps location supplied:
-| Ambajogai, Maharashtra
 |
 | Latitude  : 18.7271336
 | Longitude : 76.3810922
@@ -60,17 +61,10 @@ function calculateDistanceKm(
 ) {
   const earthRadiusKm = 6371;
 
-  const latitude1 =
-    Number(lat1);
-
-  const longitude1 =
-    Number(lon1);
-
-  const latitude2 =
-    Number(lat2);
-
-  const longitude2 =
-    Number(lon2);
+  const latitude1 = Number(lat1);
+  const longitude1 = Number(lon1);
+  const latitude2 = Number(lat2);
+  const longitude2 = Number(lon2);
 
   if (
     !Number.isFinite(latitude1) ||
@@ -82,13 +76,11 @@ function calculateDistanceKm(
   }
 
   const dLat =
-    ((latitude2 - latitude1) *
-      Math.PI) /
+    ((latitude2 - latitude1) * Math.PI) /
     180;
 
   const dLon =
-    ((longitude2 - longitude1) *
-      Math.PI) /
+    ((longitude2 - longitude1) * Math.PI) /
     180;
 
   const lat1Rad =
@@ -140,8 +132,7 @@ function calculateDeliveryFee(
   }
 
   /*
-   * Keep the existing backend rule:
-   * Orders >= ₹499 are free delivery.
+   * Orders >= ₹499 get free delivery.
    *
    * Backend remains authoritative.
    */
@@ -155,18 +146,22 @@ function calculateDeliveryFee(
   if (
     distanceKm <= 1.5
   ) {
-    return Math.round(
-      distanceKm *
-        DELIVERY_RATE_PER_KM *
-        100
-    ) / 100;
+    return (
+      Math.round(
+        distanceKm *
+          DELIVERY_RATE_PER_KM *
+          100
+      ) / 100
+    );
   }
 
-  return Math.round(
-    distanceKm *
-      DELIVERY_RATE_ABOVE_1_5_KM *
-      100
-  ) / 100;
+  return (
+    Math.round(
+      distanceKm *
+        DELIVERY_RATE_ABOVE_1_5_KM *
+        100
+    ) / 100
+  );
 }
 
 export default function Checkout() {
@@ -314,13 +309,6 @@ export default function Checkout() {
   |--------------------------------------------------------------------------
   | GET CURRENT LOCATION
   |--------------------------------------------------------------------------
-  |
-  | Uses browser GPS.
-  |
-  | Important:
-  | The browser's GPS is the customer's location.
-  | The store coordinates above are fixed to Ambajogai.
-  |
   */
 
   const getCurrentLocation = () => {
@@ -352,11 +340,6 @@ export default function Checkout() {
             position.coords.accuracy || 0
           );
 
-        /*
-         * Debug information.
-         * Useful if browser gives wrong location.
-         */
-
         console.log(
           "CUSTOMER GPS:",
           {
@@ -382,11 +365,6 @@ export default function Checkout() {
 
           return;
         }
-
-        /*
-         * Reject obviously impossible
-         * coordinates.
-         */
 
         if (
           latitude < -90 ||
@@ -469,10 +447,8 @@ export default function Checkout() {
   const estimatedDistance =
     useMemo(() => {
       if (
-        location.latitude ===
-          null ||
-        location.longitude ===
-          null
+        location.latitude === null ||
+        location.longitude === null
       ) {
         return null;
       }
@@ -484,34 +460,6 @@ export default function Checkout() {
         location.longitude
       );
     }, [location]);
-
-  /*
-  |--------------------------------------------------------------------------
-  | Estimated delivery fee
-  |--------------------------------------------------------------------------
-  */
-
-  const estimatedDeliveryFee =
-    useMemo(() => {
-      if (
-        estimatedDistance ===
-          null
-      ) {
-        return 0;
-      }
-
-      return calculateDeliveryFee(
-        estimatedDistance,
-        Number(subtotal || 0) -
-          Number(
-            coupon?.discount || 0
-          )
-      );
-    }, [
-      estimatedDistance,
-      subtotal,
-      coupon,
-    ]);
 
   /*
   |--------------------------------------------------------------------------
@@ -535,6 +483,35 @@ export default function Checkout() {
       Number(subtotal || 0) -
         discount
     );
+
+  /*
+  |--------------------------------------------------------------------------
+  | Estimated delivery fee
+  |--------------------------------------------------------------------------
+  */
+
+  const estimatedDeliveryFee =
+    useMemo(() => {
+      if (
+        estimatedDistance === null
+      ) {
+        return 0;
+      }
+
+      return calculateDeliveryFee(
+        estimatedDistance,
+        Number(
+          subtotal || 0
+        ) -
+          Number(
+            coupon?.discount || 0
+          )
+      );
+    }, [
+      estimatedDistance,
+      subtotal,
+      coupon,
+    ]);
 
   /*
   |--------------------------------------------------------------------------
@@ -630,7 +607,9 @@ export default function Checkout() {
       "pincode",
     ];
 
-    for (const key of requiredFields) {
+    for (
+      const key of requiredFields
+    ) {
       if (
         !String(
           form[key] || ""
@@ -657,6 +636,22 @@ export default function Checkout() {
       return "Enter a valid phone number";
     }
 
+    /*
+     * -------------------------------------------------------
+     * MINIMUM ORDER VALUE
+     * -------------------------------------------------------
+     *
+     * Customer must have at least ₹100
+     * worth of products in cart.
+     */
+
+    if (
+      Number(subtotal || 0) <
+      MINIMUM_ORDER_VALUE
+    ) {
+      return `Minimum order value is ₹${MINIMUM_ORDER_VALUE}. Please add more items to your cart.`;
+    }
+
     if (
       !/^\d{6}$/.test(
         form.pincode
@@ -666,15 +661,15 @@ export default function Checkout() {
     }
 
     if (
-      location.latitude ===
-        null ||
-      location.longitude ===
-        null
+      location.latitude === null ||
+      location.longitude === null
     ) {
       return "Please allow location access so delivery charges can be calculated.";
     }
 
-    if (items.length === 0) {
+    if (
+      items.length === 0
+    ) {
       return "Your cart is empty.";
     }
 
@@ -736,11 +731,6 @@ export default function Checkout() {
           })
         ),
 
-        /*
-         * Customer address + EXACT
-         * GPS coordinates.
-         */
-
         address: {
           full_name:
             form.full_name,
@@ -773,11 +763,6 @@ export default function Checkout() {
               location.longitude
             ),
         },
-
-        /*
-         * Also send GPS at top level.
-         * Backend supports both forms.
-         */
 
         latitude:
           Number(
@@ -1161,6 +1146,7 @@ ${
       </p>
 
       <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_380px]">
+
         {/* LEFT */}
 
         <div className="space-y-6">
@@ -1272,6 +1258,7 @@ ${
                 <Navigation className="mt-0.5 h-5 w-5 text-[#1B4332]" />
 
                 <div className="flex-1">
+
                   <div className="font-semibold text-[#1B4332]">
                     Delivery location
                   </div>
@@ -1314,6 +1301,7 @@ ${
                       )}
                     </>
                   )}
+
                 </div>
 
                 <button
@@ -1337,6 +1325,7 @@ ${
                     ? "Locating..."
                     : "Use my location"}
                 </button>
+
               </div>
             </div>
           </section>
@@ -1344,6 +1333,7 @@ ${
           {/* COUPON */}
 
           <section className="card-base p-6">
+
             <div className="mb-4 flex items-center gap-2">
               <Tag className="h-5 w-5 text-[#1B4332]" />
 
@@ -1354,6 +1344,7 @@ ${
 
             {!coupon ? (
               <div className="flex gap-2">
+
                 <input
                   value={
                     couponInput
@@ -1383,10 +1374,13 @@ ${
                     ? "Checking..."
                     : "Apply"}
                 </button>
+
               </div>
             ) : (
               <div className="flex items-center justify-between rounded-xl bg-[#8BA888]/10 p-4">
+
                 <div>
+
                   <div className="font-semibold text-[#1B4332]">
                     {
                       coupon.code
@@ -1399,6 +1393,7 @@ ${
                       discount
                     )}
                   </div>
+
                 </div>
 
                 <button
@@ -1411,6 +1406,7 @@ ${
                 >
                   <X className="h-4 w-4" />
                 </button>
+
               </div>
             )}
           </section>
@@ -1418,6 +1414,7 @@ ${
           {/* PAYMENT */}
 
           <section className="card-base p-6">
+
             <div className="mb-4 flex items-center gap-2">
               <CreditCard className="h-5 w-5 text-[#1B4332]" />
 
@@ -1461,6 +1458,7 @@ ${
             {payment ===
               "UPI" && (
               <div className="mt-6 rounded-xl bg-[#8BA888]/10 p-5 text-center">
+
                 <img
                   src={qrSrc}
                   alt="UPI QR"
@@ -1492,19 +1490,23 @@ ${
                 <div className="mt-2 text-xs text-[#4A4A4A]">
                   After payment, place the order. We&apos;ll confirm it via WhatsApp.
                 </div>
+
               </div>
             )}
 
             {payment ===
               "COD" && (
               <div className="mt-6 flex items-start gap-2 rounded-xl bg-[#8BA888]/10 p-4 text-sm text-[#1B4332]">
+
                 <Truck className="mt-0.5 h-4 w-4" />
 
                 <span>
                   Please keep exact change ready. Cash on Delivery is available across Ambajogai.
                 </span>
+
               </div>
             )}
+
           </section>
         </div>
 
@@ -1514,17 +1516,20 @@ ${
           className="card-base sticky top-24 h-fit p-6"
           data-testid="checkout-summary"
         >
+
           <h2 className="font-heading text-lg font-semibold">
             Order summary
           </h2>
 
           <div className="mt-4 max-h-64 space-y-3 overflow-auto pr-1">
+
             {items.map(
               (item) => (
                 <div
                   key={`${item.product_id}-${item.variant_label || ""}`}
                   className="flex gap-3"
                 >
+
                   <img
                     src={
                       item.image
@@ -1534,6 +1539,7 @@ ${
                   />
 
                   <div className="flex-1 text-sm">
+
                     <div className="font-medium">
                       {
                         item.name
@@ -1562,6 +1568,7 @@ ${
                         )
                       )}
                     </div>
+
                   </div>
 
                   <div className="text-sm font-semibold">
@@ -1576,9 +1583,11 @@ ${
                         )
                     )}
                   </div>
+
                 </div>
               )
             )}
+
           </div>
 
           <div className="mt-4 space-y-2 border-t border-dashed pt-4 text-sm">
@@ -1624,6 +1633,7 @@ ${
             {estimatedDistance !==
               null && (
               <div className="rounded-lg bg-[#8BA888]/10 px-3 py-2 text-xs text-[#1B4332]">
+
                 {Number(
                   discountedSubtotal
                 ) >= 499
@@ -1632,11 +1642,14 @@ ${
                     1.5
                   ? `₹${DELIVERY_RATE_PER_KM}/km delivery`
                   : `₹${DELIVERY_RATE_ABOVE_1_5_KM}/km delivery`}
+
                 {" · "}
+
                 {estimatedDistance.toFixed(
                   2
                 )}{" "}
                 km
+
               </div>
             )}
 
@@ -1660,9 +1673,11 @@ ${
                 gst
               )}
             />
+
           </div>
 
           <div className="mt-3 flex items-center justify-between border-t border-dashed pt-3">
+
             <span className="text-sm font-semibold">
               Total
             </span>
@@ -1675,7 +1690,31 @@ ${
                 estimatedTotal
               )}
             </span>
+
           </div>
+
+          {/* MINIMUM ORDER MESSAGE */}
+
+          {Number(subtotal || 0) <
+            MINIMUM_ORDER_VALUE && (
+            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-center text-sm text-red-700">
+              Minimum order value is{" "}
+              <strong>
+                ₹{MINIMUM_ORDER_VALUE}
+              </strong>
+              . Please add{" "}
+              <strong>
+                ₹
+                {(
+                  MINIMUM_ORDER_VALUE -
+                  Number(
+                    subtotal || 0
+                  )
+                ).toFixed(2)}
+              </strong>{" "}
+              more to place your order.
+            </div>
+          )}
 
           <button
             type="button"
@@ -1687,11 +1726,14 @@ ${
               location.latitude ===
                 null ||
               location.longitude ===
-                null
+                null ||
+              Number(subtotal || 0) <
+                MINIMUM_ORDER_VALUE
             }
             className="btn-primary mt-6 w-full disabled:cursor-not-allowed disabled:opacity-50"
             data-testid="place-order-btn"
           >
+
             {submitting ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
@@ -1700,12 +1742,19 @@ ${
 
             {submitting
               ? "Placing order..."
+              : Number(
+                  subtotal || 0
+                ) <
+                MINIMUM_ORDER_VALUE
+              ? `Minimum ₹${MINIMUM_ORDER_VALUE} required`
               : "Place order"}
+
           </button>
 
           <p className="mt-3 text-center text-xs text-[#4A4A4A]">
             We&apos;ll send order confirmation via WhatsApp.
           </p>
+
         </aside>
       </div>
     </div>
@@ -1727,6 +1776,7 @@ function Field({
 }) {
   return (
     <div>
+
       <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">
         {label}
       </label>
@@ -1740,6 +1790,7 @@ function Field({
         className="input-base"
         data-testid={testid}
       />
+
     </div>
   );
 }
@@ -1756,6 +1807,7 @@ function Row({
 }) {
   return (
     <div className="flex items-center justify-between">
+
       <span className="text-[#4A4A4A]">
         {label}
       </span>
@@ -1763,6 +1815,7 @@ function Row({
       <span className="font-semibold">
         {value}
       </span>
+
     </div>
   );
 }
@@ -1791,6 +1844,7 @@ function PayOption({
       }`}
       data-testid={testid}
     >
+
       <div className="font-semibold text-[#1A1A1A]">
         {title}
       </div>
@@ -1798,6 +1852,7 @@ function PayOption({
       <div className="mt-1 text-xs text-[#4A4A4A]">
         {sub}
       </div>
+
     </button>
   );
 }

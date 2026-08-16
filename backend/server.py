@@ -764,6 +764,13 @@ async def delete_product(prod_id: str, _: dict = Depends(require_admin)):
 DELIVERY_RATE_PER_KM = 13.0
 DELIVERY_RATE_ABOVE_1_5_KM = 20.0
 FREE_DELIVERY_THRESHOLD = 499.0
+MINIMUM_ORDER_VALUE = 100.0
+FREE_ORDER_LIMIT = 249.0
+FREE_ORDER_REQUIRED_ORDERS = 13
+PLATFORM_FEE = 10.0
+CGST_RATE = 0.025
+SGST_RATE = 0.025
+GST_RATE = 0.05
 
 
 def calculate_distance_km(
@@ -889,6 +896,13 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
 
     subtotal = round(sum(i["price"] * i["quantity"] for i in verified_items), 2)
 
+     # Enforce minimum order value
+    if subtotal < MINIMUM_ORDER_VALUE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Minimum order value is ₹{MINIMUM_ORDER_VALUE}. Please add ₹{MINIMUM_ORDER_VALUE - subtotal:.2f} more to your cart."
+        )
+
     # ---------------------------------------------------------------
     # Delivery distance
     # ---------------------------------------------------------------
@@ -987,7 +1001,27 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         discount = round(subtotal * (coupon["discount_pct"] / 100.0), 2)
         coupon_applied = {"code": coupon["code"], "discount_pct": coupon["discount_pct"], "discount": discount}
 
-    total = round(max(0, subtotal + delivery_fee - discount), 2)
+    discounted_subtotal = max(0.0, subtotal - discount)
+
+    platform_fee = PLATFORM_FEE if discounted_subtotal > 0 else 0.0
+
+    taxable_amount = (
+        discounted_subtotal
+        + platform_fee
+        + delivery_fee
+    )
+
+    cgst = round(taxable_amount * CGST_RATE, 2)
+    sgst = round(taxable_amount * SGST_RATE, 2)
+    gst = round(cgst + sgst, 2)
+
+    total = round(
+        discounted_subtotal
+        + platform_fee
+        + delivery_fee
+        + gst,
+        2
+    )
     status_history = [{"status": "Pending", "at": iso_now()}]
     doc = {
         "user_id": user["id"],
@@ -1002,6 +1036,10 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         "delivery_distance_km": distance_km,
         "discount": discount,
         "coupon": coupon_applied,
+        "platform_fee": platform_fee,
+        "cgst": cgst,
+        "sgst": sgst,
+        "gst": gst,
         "total": total,
         "status": "Pending",
         "status_history": status_history,
@@ -2020,6 +2058,20 @@ async def delivery_update_status(order_id: str, payload: OrderStatusUpdate, user
             message="Your order has been delivered successfully. Thank you for shopping with us!",
             notification_type="order_delivered",
         )
+            # ---------------------------------------------------------
+        # CUSTOMER REWARD PROGRESS
+        # ---------------------------------------------------------
+        # A qualifying order is a Delivered order with subtotal >= ₹249.
+        # Count is maintained on the customer document.
+        if float(o.get("subtotal", 0) or 0) >= FREE_ORDER_LIMIT: 
+            await db.users.update_one(
+                {"id": o["user_id"]},
+                {
+                    "$inc": {
+                        "qualifying_order_count": 1
+                    }
+                },
+            )    
 
     o["status"] = payload.status
     o["status_history"] = history
