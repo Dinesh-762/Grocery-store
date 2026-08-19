@@ -19,9 +19,9 @@ const STORAGE_KEY = "ambajogai_cart";
 
 const PLATFORM_FEE = 10;
 
-const GST_RATE = 0.05;
-const CGST_RATE = 0.025;
-const SGST_RATE = 0.025;
+const GST_RATE = 0.10;
+const CGST_RATE = 0.05;
+const SGST_RATE = 0.05;
 
 /*
 |--------------------------------------------------------------------------
@@ -30,13 +30,13 @@ const SGST_RATE = 0.025;
 |
 | Same product + same variant = same cart line.
 |
-| Example:
+| Examples:
 |
 | Tomato + no variant
 | Tomato + 500g
 | Tomato + 1kg
 |
-| These remain separate lines.
+| These remain separate cart lines.
 |--------------------------------------------------------------------------
 */
 
@@ -53,7 +53,7 @@ function lineKey(item) {
 export function CartProvider({ children }) {
   /*
   |--------------------------------------------------------------------------
-  | Load cart
+  | Load Cart
   |--------------------------------------------------------------------------
   */
 
@@ -75,7 +75,7 @@ export function CartProvider({ children }) {
 
   /*
   |--------------------------------------------------------------------------
-  | Save cart
+  | Save Cart
   |--------------------------------------------------------------------------
   */
 
@@ -95,14 +95,8 @@ export function CartProvider({ children }) {
   | Add Item
   |--------------------------------------------------------------------------
   |
-  | IMPORTANT:
-  | Variant/weight is OPTIONAL.
-  |
-  | If variant is selected:
-  |   selected variant price is used.
-  |
-  | If variant is NOT selected:
-  |   product base price is used.
+  | Variant price is used when a variant is selected.
+  | Otherwise product base price is used.
   |--------------------------------------------------------------------------
   */
 
@@ -116,7 +110,7 @@ export function CartProvider({ children }) {
   ) => {
     /*
     |--------------------------------------------------------------------------
-    | Validate product
+    | Validate Product
     |--------------------------------------------------------------------------
     */
 
@@ -127,7 +121,7 @@ export function CartProvider({ children }) {
 
     /*
     |--------------------------------------------------------------------------
-    | Validate quantity
+    | Validate Quantity
     |--------------------------------------------------------------------------
     */
 
@@ -140,11 +134,7 @@ export function CartProvider({ children }) {
 
     /*
     |--------------------------------------------------------------------------
-    | Determine price
-    |--------------------------------------------------------------------------
-    |
-    | Variant price is used ONLY when a variant was actually selected.
-    | Otherwise product.price is used.
+    | Determine Variant
     |--------------------------------------------------------------------------
     */
 
@@ -153,17 +143,28 @@ export function CartProvider({ children }) {
       variant_label !== undefined &&
       String(variant_label).trim() !== "";
 
-    const selectedPrice =
+    /*
+    |--------------------------------------------------------------------------
+    | Determine Price
+    |--------------------------------------------------------------------------
+    */
+
+    let selectedPrice;
+
+    if (
       hasVariant &&
       variant_price !== null &&
       variant_price !== undefined &&
       variant_price !== ""
-        ? Number(variant_price)
-        : Number(product.price || 0);
+    ) {
+      selectedPrice = Number(variant_price);
+    } else {
+      selectedPrice = Number(product.price || 0);
+    }
 
     /*
     |--------------------------------------------------------------------------
-    | Determine unit
+    | Determine Unit
     |--------------------------------------------------------------------------
     */
 
@@ -174,7 +175,7 @@ export function CartProvider({ children }) {
 
     /*
     |--------------------------------------------------------------------------
-    | Validate price
+    | Validate Price
     |--------------------------------------------------------------------------
     */
 
@@ -188,6 +189,16 @@ export function CartProvider({ children }) {
 
     /*
     |--------------------------------------------------------------------------
+    | Normalized Variant Label
+    |--------------------------------------------------------------------------
+    */
+
+    const normalizedVariantLabel = hasVariant
+      ? String(variant_label).trim()
+      : null;
+
+    /*
+    |--------------------------------------------------------------------------
     | Add / Merge Cart Item
     |--------------------------------------------------------------------------
     */
@@ -197,14 +208,12 @@ export function CartProvider({ children }) {
         (item) =>
           item.product_id === product.id &&
           (item.variant_label || null) ===
-            (hasVariant
-              ? String(variant_label)
-              : null)
+            normalizedVariantLabel
       );
 
       /*
       |--------------------------------------------------------------------------
-      | Existing product + same variant
+      | Existing Product + Same Variant
       |--------------------------------------------------------------------------
       */
 
@@ -220,18 +229,27 @@ export function CartProvider({ children }) {
             Number(existing.quantity || 0) +
             safeQty,
 
+          /*
+           * Always keep the latest selected price.
+           */
+
           price: selectedPrice,
 
           unit: selectedUnit,
 
-          variant_label: hasVariant
-            ? String(variant_label)
-            : null,
-
-          note: null,
+          variant_label:
+            normalizedVariantLabel,
 
           /*
-           * Keep latest vendor information if available.
+           * Keep note behavior compatible
+           * with existing cart implementation.
+           */
+
+          note: note || existing.note || null,
+
+          /*
+           * Preserve latest vendor information
+           * when available.
            */
 
           vendor_id:
@@ -243,6 +261,19 @@ export function CartProvider({ children }) {
             product.vendor_name ||
             existing.vendor_name ||
             null,
+
+          /*
+           * Preserve product metadata.
+           */
+
+          image:
+            product.image ||
+            existing.image ||
+            null,
+
+          name:
+            product.name ||
+            existing.name,
         };
 
         return next;
@@ -250,7 +281,7 @@ export function CartProvider({ children }) {
 
       /*
       |--------------------------------------------------------------------------
-      | New cart item
+      | New Cart Item
       |--------------------------------------------------------------------------
       */
 
@@ -270,11 +301,10 @@ export function CartProvider({ children }) {
 
           quantity: safeQty,
 
-          variant_label: hasVariant
-            ? String(variant_label)
-            : null,
+          variant_label:
+            normalizedVariantLabel,
 
-          note: null,
+          note: note || null,
 
           vendor_id:
             product.vendor_id || null,
@@ -287,13 +317,13 @@ export function CartProvider({ children }) {
 
     /*
     |--------------------------------------------------------------------------
-    | Success message
+    | Success Message
     |--------------------------------------------------------------------------
     */
 
     if (hasVariant) {
       toast.success(
-        `${product.name} (${variant_label}) added to cart`
+        `${product.name} (${normalizedVariantLabel}) added to cart`
       );
     } else {
       toast.success(
@@ -377,6 +407,13 @@ export function CartProvider({ children }) {
           item.quantity || 0
         );
 
+        if (
+          !Number.isFinite(price) ||
+          !Number.isFinite(quantity)
+        ) {
+          return sum;
+        }
+
         return (
           sum +
           price * quantity
@@ -386,9 +423,20 @@ export function CartProvider({ children }) {
     );
 
     const calculatedCount = items.reduce(
-      (sum, item) =>
-        sum +
-        Number(item.quantity || 0),
+      (sum, item) => {
+        const quantity = Number(
+          item.quantity || 0
+        );
+
+        return (
+          sum +
+          (
+            Number.isFinite(quantity)
+              ? quantity
+              : 0
+          )
+        );
+      },
       0
     );
 
@@ -416,6 +464,11 @@ export function CartProvider({ children }) {
   /*
   |--------------------------------------------------------------------------
   | Taxable Amount
+  |--------------------------------------------------------------------------
+  |
+  | Existing project logic:
+  |
+  | taxable amount = subtotal + platform fee
   |--------------------------------------------------------------------------
   */
 
@@ -466,11 +519,18 @@ export function CartProvider({ children }) {
 
   /*
   |--------------------------------------------------------------------------
-  | Delivery
+  | Delivery Fee
   |--------------------------------------------------------------------------
   |
-  | Delivery is calculated separately in Checkout.jsx
-  | using customer location.
+  | Delivery is calculated separately inside Checkout.jsx
+  | because it depends on the customer's delivery location.
+  |
+  | Current delivery logic:
+  |
+  | 0 - 1.5 km  -> ₹16 fixed
+  | Above 1.5km -> ₹16 + ₹12 per additional km
+  |
+  | ₹499+ free-delivery rule is handled by Checkout.jsx.
   |--------------------------------------------------------------------------
   */
 
@@ -496,7 +556,7 @@ export function CartProvider({ children }) {
 
   /*
   |--------------------------------------------------------------------------
-  | Context
+  | Context Value
   |--------------------------------------------------------------------------
   */
 

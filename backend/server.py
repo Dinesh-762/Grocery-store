@@ -247,7 +247,7 @@ class OrderIn(BaseModel):
     payment_method: str  # "UPI" or "COD"
     notes: Optional[str] = ""
     coupon_code: Optional[str] = None
-    # Checkout also sends GPS at the top level. Keep both forms supported.
+    # Checkout may send GPS either at the top level or inside address.
     latitude: Optional[float] = None
     longitude: Optional[float] = None
 
@@ -265,121 +265,6 @@ class ReviewIn(BaseModel):
     comment: str
     author_name: str
 
-# ---------------------------------------------------------------------------
-# ORDER NOTIFICATION HELPERS
-# ---------------------------------------------------------------------------
-
-async def create_order_notification(
-    user_id: str,
-    order_id: str,
-    title: str,
-    message: str,
-    notification_type: str = "order",
-):
-    """
-    Store an in-app notification for a user.
-    """
-
-    notification = {
-        "user_id": user_id,
-        "order_id": str(order_id),
-        "title": title,
-        "message": message,
-        "type": notification_type,
-        "read": False,
-        "created_at": iso_now(),
-    }
-
-    await db.notifications.insert_one(notification)
-
-
-async def notify_order_users(
-    order: dict,
-    title: str,
-    message: str,
-    notification_type: str = "order",
-):
-    """
-    Notify customer + vendor owners + assigned delivery boy.
-    """
-
-    order_id = str(order["_id"])
-
-    notified_users = set()
-
-    # ---------------------------------------------------------
-    # CUSTOMER
-    # ---------------------------------------------------------
-    customer_id = order.get("user_id")
-
-    if customer_id:
-        notified_users.add(customer_id)
-
-        await create_order_notification(
-            user_id=customer_id,
-            order_id=order_id,
-            title=title,
-            message=message,
-            notification_type=notification_type,
-        )
-
-    # ---------------------------------------------------------
-    # VENDORS
-    # ---------------------------------------------------------
-    vendor_ids = set()# Helpers
-    # --------------------------------------------------------------------------
-
-    for item in order.get("items", []):
-        vendor_id = item.get("vendor_id")
-
-        if vendor_id:
-            vendor_ids.add(vendor_id)
-
-    for vendor_id in vendor_ids:
-
-        vendor = await db.vendors.find_one({
-            "id": vendor_id
-        })
-
-        if not vendor:
-            try:
-                vendor = await db.vendors.find_one({
-                    "_id": safe_object_id(vendor_id)
-                })
-            except Exception:
-                vendor = None
-
-        if not vendor:
-            continue
-
-        owner_id = vendor.get("owner_id")
-
-        if owner_id and owner_id not in notified_users:
-
-            notified_users.add(owner_id)
-
-            await create_order_notification(
-                user_id=owner_id,
-                order_id=order_id,
-                title=title,
-                message=message,
-                notification_type=notification_type,
-            )
-
-    # ---------------------------------------------------------
-    # DELIVERY BOY
-    # ---------------------------------------------------------
-    delivery_partner_id = order.get("delivery_partner_id")
-
-    if delivery_partner_id and delivery_partner_id not in notified_users:
-
-        await create_order_notification(
-            user_id=delivery_partner_id,
-            order_id=order_id,
-            title=title,
-            message=message,
-            notification_type=notification_type,
-        )
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -440,7 +325,7 @@ def order_to_out(o: dict) -> dict:
         "notes": o.get("notes", ""),
         "subtotal": o["subtotal"],
         "delivery_fee": o["delivery_fee"],
-        "delivery_distance_km": o.get("delivery_distance_km"),
+        "delivery_distance_km": o.get("delivery_distance_km", 0),
         "discount": o.get("discount", 0),
         "coupon": o.get("coupon"),
         "total": o["total"],
@@ -757,20 +642,19 @@ async def delete_product(prod_id: str, _: dict = Depends(require_admin)):
 # Orders / Delivery Pricing
 # ---------------------------------------------------------------------------
 
-# Delivery pricing requested for the grocery store:
-# <= 1.5 km  -> ₹13 per km
-# > 1.5 km   -> ₹20 per km
-# Orders >= ₹499 keep the existing free-delivery rule.
+# Delivery pricing:
+#   <= 1.5 km  -> ₹13 per km
+#   > 1.5 km   -> ₹20 per km
+#   subtotal >= ₹499 -> FREE delivery
+#
+# The store/customer coordinates are read from environment variables so the
+# production location can be changed without modifying code.
 DELIVERY_RATE_PER_KM = 13.0
 DELIVERY_RATE_ABOVE_1_5_KM = 20.0
 FREE_DELIVERY_THRESHOLD = 499.0
-MINIMUM_ORDER_VALUE = 100.0
-FREE_ORDER_LIMIT = 249.0
-FREE_ORDER_REQUIRED_ORDERS = 13
-PLATFORM_FEE = 10.0
-CGST_RATE = 0.025
-SGST_RATE = 0.025
-GST_RATE = 0.05
+MAX_DELIVERY_DISTANCE_KM = float(os.environ.get("MAX_DELIVERY_DISTANCE_KM", "12.0"))
+STORE_LATITUDE = float(os.environ.get("STORE_LATITUDE", "18.73"))
+STORE_LONGITUDE = float(os.environ.get("STORE_LONGITUDE", "76.38"))
 
 
 def calculate_distance_km(
@@ -779,14 +663,14 @@ def calculate_distance_km(
     lat2: float,
     lon2: float,
 ) -> float:
-    """Return great-circle distance between two GPS coordinates in km."""
+    """Calculate great-circle distance between two GPS coordinates in km."""
     import math
 
     earth_radius_km = 6371.0
-    lat1_rad = math.radians(lat1)
-    lat2_rad = math.radians(lat2)
-    delta_lat = math.radians(lat2 - lat1)
-    delta_lon = math.radians(lon2 - lon1)
+    lat1_rad = math.radians(float(lat1))
+    lat2_rad = math.radians(float(lat2))
+    delta_lat = math.radians(float(lat2) - float(lat1))
+    delta_lon = math.radians(float(lon2) - float(lon1))
 
     a = (
         math.sin(delta_lat / 2) ** 2
@@ -800,11 +684,17 @@ def calculate_distance_km(
 
 
 def calculate_delivery_fee(distance_km: float, subtotal: float = 0.0) -> float:
-    """Calculate delivery fee using the configured distance bands."""
+    """Calculate delivery fee from distance and subtotal."""
+    distance_km = max(0.0, float(distance_km))
+    subtotal = max(0.0, float(subtotal))
+
+    # Free delivery for eligible orders or a zero-distance calculation.
     if subtotal >= FREE_DELIVERY_THRESHOLD or distance_km <= 0:
         return 0.0
+
     if distance_km <= 1.5:
         return round(distance_km * DELIVERY_RATE_PER_KM, 2)
+
     return round(distance_km * DELIVERY_RATE_ABOVE_1_5_KM, 2)
 
 
@@ -896,20 +786,13 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
 
     subtotal = round(sum(i["price"] * i["quantity"] for i in verified_items), 2)
 
-     # Enforce minimum order value
-    if subtotal < MINIMUM_ORDER_VALUE:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Minimum order value is ₹{MINIMUM_ORDER_VALUE}. Please add ₹{MINIMUM_ORDER_VALUE - subtotal:.2f} more to your cart."
-        )
-
-    # ---------------------------------------------------------------
-    # Delivery distance
-    # ---------------------------------------------------------------
-    # Checkout currently sends GPS at the top level, while AddressIn also
-    # supports latitude/longitude. Accept either form for compatibility.
+    # -----------------------------------------------------------------------
+    # Delivery distance + delivery fee
+    # -----------------------------------------------------------------------
+    # Checkout may send GPS at the top level or inside AddressIn.
     customer_lat = payload.latitude
     customer_lon = payload.longitude
+
     if customer_lat is None:
         customer_lat = payload.address.latitude
     if customer_lon is None:
@@ -918,73 +801,43 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
     if customer_lat is None or customer_lon is None:
         raise HTTPException(
             status_code=400,
-            detail="Please allow location access so delivery charges can be calculated.",
+            detail="Please allow location access so delivery distance and charges can be calculated.",
         )
 
-    # Determine the delivery distance from every vendor represented in the
-    # order. For legacy/admin products without a vendor, use the main store
-    # coordinates. For a multi-vendor order, the farthest vendor determines
-    # the delivery charge so the customer is never undercharged.
-    store_lat = float(
-        os.environ.get(
-            "STORE_LATITUDE",
-            "18.7271336"
-       )
-   )
+    try:
+        customer_lat = float(customer_lat)
+        customer_lon = float(customer_lon)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid latitude or longitude.")
 
-    store_lon = float(
-        os.environ.get(
-            "STORE_LONGITUDE",
-            "76.3810922"
-       )
-   )
-    vendor_locations = {}
+    if not (-90 <= customer_lat <= 90 and -180 <= customer_lon <= 180):
+        raise HTTPException(status_code=400, detail="Invalid latitude or longitude.")
 
-    for item in verified_items:
-        vendor_id = item.get("vendor_id")
+    # Calculate the customer-to-store distance using the Haversine formula.
+    distance_km = calculate_distance_km(
+        STORE_LATITUDE,
+        STORE_LONGITUDE,
+        customer_lat,
+        customer_lon,
+    )
 
-        if not vendor_id:
-            vendor_locations["__store__"] = (store_lat, store_lon)
-            continue
+    # Backend is the source of truth for the delivery zone.
+    if distance_km > MAX_DELIVERY_DISTANCE_KM:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Sorry! Fatafat currently delivers only within "
+                f"{MAX_DELIVERY_DISTANCE_KM:g} km of the store. "
+                f"Your location is approximately {distance_km:.2f} km away."
+            ),
+        )
 
-        if vendor_id in vendor_locations:
-            continue
-
-        try:
-            vendor = await db.vendors.find_one({"_id": ObjectId(vendor_id)})
-        except Exception:
-            vendor = None
-
-        if not vendor:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Vendor not found for {item.get('name', 'this product')}."
-            )
-
-        vendor_lat = vendor.get("latitude")
-        vendor_lon = vendor.get("longitude")
-
-        # Keep old vendor records working: if a vendor has not configured
-        # GPS yet, fall back to the main store coordinates instead of making
-        # every existing product impossible to order.
-        if vendor_lat is None or vendor_lon is None:
-            vendor_locations[vendor_id] = (store_lat, store_lon)
-        else:
-            vendor_locations[vendor_id] = (float(vendor_lat), float(vendor_lon))
-
-    distances = [
-        calculate_distance_km(v_lat, v_lon, float(customer_lat), float(customer_lon))
-        for v_lat, v_lon in vendor_locations.values()
-    ]
-
-    distance_km = max(distances) if distances else 0.0
     delivery_fee = calculate_delivery_fee(distance_km, subtotal)
 
-    # Store the coordinates actually used for this order so the admin/vendor
-    # panels and future delivery tracking have the original location data.
+    # Keep the exact GPS coordinates used for the order.
     order_address = payload.address.model_dump()
-    order_address["latitude"] = float(customer_lat)
-    order_address["longitude"] = float(customer_lon)
+    order_address["latitude"] = customer_lat
+    order_address["longitude"] = customer_lon
 
     # Apply coupon if provided
     discount = 0.0
@@ -1001,27 +854,7 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         discount = round(subtotal * (coupon["discount_pct"] / 100.0), 2)
         coupon_applied = {"code": coupon["code"], "discount_pct": coupon["discount_pct"], "discount": discount}
 
-    discounted_subtotal = max(0.0, subtotal - discount)
-
-    platform_fee = PLATFORM_FEE if discounted_subtotal > 0 else 0.0
-
-    taxable_amount = (
-        discounted_subtotal
-        + platform_fee
-        + delivery_fee
-    )
-
-    cgst = round(taxable_amount * CGST_RATE, 2)
-    sgst = round(taxable_amount * SGST_RATE, 2)
-    gst = round(cgst + sgst, 2)
-
-    total = round(
-        discounted_subtotal
-        + platform_fee
-        + delivery_fee
-        + gst,
-        2
-    )
+    total = round(max(0, subtotal + delivery_fee - discount), 2)
     status_history = [{"status": "Pending", "at": iso_now()}]
     doc = {
         "user_id": user["id"],
@@ -1036,10 +869,6 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         "delivery_distance_km": distance_km,
         "discount": discount,
         "coupon": coupon_applied,
-        "platform_fee": platform_fee,
-        "cgst": cgst,
-        "sgst": sgst,
-        "gst": gst,
         "total": total,
         "status": "Pending",
         "status_history": status_history,
@@ -1147,30 +976,7 @@ async def update_order_status(order_id: str, payload: OrderStatusUpdate, _: dict
     await db.orders.update_one(
         {"_id": oid},
         {"$set": {"status": payload.status, "status_history": history}},
-      )
-      # ---------------------------------------------------------
-      # CUSTOMER NOTIFICATIONS
-      # ---------------------------------------------------------
-
-    if payload.status == "Accepted":
-
-          await create_order_notification(
-              user_id=doc["user_id"],
-              order_id=str(doc["_id"]),
-              title="Order Accepted",
-              message="Your order has been successfully accepted and is being prepared.",
-              notification_type="order_accepted",
-          )
-
-    elif payload.status == "Delivered":
-
-          await create_order_notification(
-              user_id=doc["user_id"],
-              order_id=str(doc["_id"]),
-              title="Order Delivered",
-              message="Your order has been delivered successfully. Thank you for shopping with us!",
-              notification_type="order_delivered",
-          )
+    )
     doc["status"] = payload.status
     doc["status_history"] = history
     return order_to_out(doc)
@@ -1292,8 +1098,6 @@ class VendorRegisterIn(BaseModel):
     business_description: str = ""
     business_address: str
     business_pincode: str
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
     docs: VendorDocs = VendorDocs()
 
 
@@ -1317,8 +1121,6 @@ class VendorSettingsIn(BaseModel):
     business_description: Optional[str] = None
     business_address: Optional[str] = None
     business_pincode: Optional[str] = None
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
     shop_phone: Optional[str] = None
     shop_whatsapp: Optional[str] = None
     shop_logo: Optional[str] = None
@@ -1344,8 +1146,6 @@ def vendor_to_out(v: dict) -> dict:
         "business_description": v.get("business_description", ""),
         "business_address": v.get("business_address", ""),
         "business_pincode": v.get("business_pincode", ""),
-        "latitude": v.get("latitude"),
-        "longitude": v.get("longitude"),
         "docs": v.get("docs", {}),
         "status": v.get("status", "Pending"),
         "rejection_reason": v.get("rejection_reason", ""),
@@ -1933,79 +1733,6 @@ async def delivery_me(user: dict = Depends(require_delivery)):
     u = await db.users.find_one({"_id": ObjectId(user["id"])})
     return dp_to_out(u)
 
-# ---------------------------------------------------------------------------
-# NOTIFICATIONS
-# ---------------------------------------------------------------------------
-
-@api.get("/notifications")
-async def get_notifications(
-    user: dict = Depends(get_current_user)
-):
-    docs = await db.notifications.find({
-        "user_id": user["id"]
-    }).sort("created_at", -1).limit(50).to_list(50)
-
-    result = []
-
-    for n in docs:
-        result.append({
-            "id": str(n["_id"]),
-            "order_id": n.get("order_id"),
-            "title": n.get("title", ""),
-            "message": n.get("message", ""),
-            "type": n.get("type", "order"),
-            "read": n.get("read", False),
-            "created_at": n.get("created_at"),
-        })
-
-    return result
-
-
-@api.patch("/notifications/{notification_id}/read")
-async def mark_notification_read(
-    notification_id: str,
-    user: dict = Depends(get_current_user)
-):
-    oid = safe_object_id(notification_id)
-
-    result = await db.notifications.update_one(
-        {
-            "_id": oid,
-            "user_id": user["id"],
-        },
-        {
-            "$set": {
-                "read": True
-            }
-        }
-    )
-
-    if result.matched_count == 0:
-        raise HTTPException(
-            status_code=404,
-            detail="Notification not found"
-        )
-
-    return {"ok": True}
-
-
-@api.patch("/notifications/read-all")
-async def mark_all_notifications_read(
-    user: dict = Depends(get_current_user)
-):
-    await db.notifications.update_many(
-        {
-            "user_id": user["id"],
-            "read": False,
-        },
-        {
-            "$set": {
-                "read": True
-            }
-        }
-    )
-
-    return {"ok": True}
 
 @api.get("/delivery/orders")
 async def delivery_my_orders(user: dict = Depends(require_delivery)):
@@ -2040,44 +1767,14 @@ async def delivery_update_status(order_id: str, payload: OrderStatusUpdate, user
     for i in items:
         if i.get("line_status") not in ("Cancelled", "Delivered"):
             i["line_status"] = payload.status
-        await db.orders.update_one(
+    await db.orders.update_one(
         {"_id": oid},
         {"$set": {"status": payload.status, "status_history": history, "items": items}},
     )
-
-    # ---------------------------------------------------------
-    # CUSTOMER NOTIFICATION - ORDER DELIVERED
-    # ---------------------------------------------------------
-
-    if payload.status == "Delivered" and o.get("status") != "Delivered":
-
-        await create_order_notification(
-            user_id=o["user_id"],
-            order_id=str(o["_id"]),
-            title="Order Delivered",
-            message="Your order has been delivered successfully. Thank you for shopping with us!",
-            notification_type="order_delivered",
-        )
-            # ---------------------------------------------------------
-        # CUSTOMER REWARD PROGRESS
-        # ---------------------------------------------------------
-        # A qualifying order is a Delivered order with subtotal >= ₹249.
-        # Count is maintained on the customer document.
-        if float(o.get("subtotal", 0) or 0) >= FREE_ORDER_LIMIT: 
-            await db.users.update_one(
-                {"id": o["user_id"]},
-                {
-                    "$inc": {
-                        "qualifying_order_count": 1
-                    }
-                },
-            )    
-
     o["status"] = payload.status
     o["status_history"] = history
     o["items"] = items
     return order_to_out(o)
-
 
 
 @api.get("/delivery/earnings")
@@ -2465,8 +2162,6 @@ async def store_info():
         "upi_name": os.environ.get("STORE_UPI_NAME", "Ambajogai Grocery Store"),
         "upi_qr": os.environ.get("STORE_UPI_QR", ""),
         "address": "Main Road, Ambajogai, Maharashtra 431517",
-        "latitude": float(os.environ.get("STORE_LATITUDE", "18.73")),
-        "longitude": float(os.environ.get("STORE_LONGITUDE", "76.38")),
         "email": os.environ.get("STORE_EMAIL", "ambajogaigrocerystores@gmail.com"),
     }
 
@@ -2490,417 +2185,38 @@ SEED_CATEGORIES = [
 ]
 
 SEED_PRODUCTS = [
-    # ============================================================
-    # FRUITS & VEGETABLES
-    # ============================================================
+    # Fruits & Vegetables
+    {"name": "Fresh Tomato", "slug": "fresh-tomato", "price": 30, "mrp": 40, "unit": "1 kg", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1592924357228-91a4daadcfea?w=600&q=80", "stock": 50, "featured": True, "popular": True, "description": "Farm-fresh red tomatoes, hand-picked daily."},
+    {"name": "Onion", "slug": "onion", "price": 40, "mrp": 50, "unit": "1 kg", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1508747703725-719777637510?w=600&q=80", "stock": 80, "popular": True, "description": "Premium quality Nashik onions."},
+    {"name": "Banana", "slug": "banana", "price": 50, "mrp": 60, "unit": "1 dozen", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?w=600&q=80", "stock": 30, "featured": True, "description": "Ripe yellow bananas, rich in potassium."},
+    {"name": "Apple - Shimla", "slug": "apple-shimla", "price": 180, "mrp": 220, "unit": "1 kg", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1568702846914-96b305d2aaeb?w=600&q=80", "stock": 25, "featured": True, "popular": True, "description": "Crisp red apples straight from Himachal orchards."},
+    {"name": "Potato", "slug": "potato", "price": 25, "mrp": 30, "unit": "1 kg", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1518977676601-b53f82aba655?w=600&q=80", "stock": 100, "description": "Fresh farm potatoes."},
 
-    {
-        "name": "Fresh Tomato",
-        "slug": "fresh-tomato",
-        "price": 30,
-        "mrp": 40,
-        "unit": "1 kg",
-        "category_slug": "fruits-vegetables",
-        "image": "https://images.unsplash.com/photo-1592924357228-91a4daadcfea?w=600&q=80",
-        "stock": 50,
-        "featured": True,
-        "popular": True,
-        "description": "Farm-fresh red tomatoes, hand-picked daily.",
-        "variants": [
-            {"label": "500g", "price": 20, "mrp": 25, "unit": "500g"},
-            {"label": "1kg", "price": 30, "mrp": 40, "unit": "1kg"},
-            {"label": "2kg", "price": 55, "mrp": 65, "unit": "2kg"},
-            {"label": "3kg", "price": 80, "mrp": 95, "unit": "3kg"},
-            {"label": "4kg", "price": 105, "mrp": 125, "unit": "4kg"},
-            {"label": "5kg", "price": 130, "mrp": 155, "unit": "5kg"},
-        ],
-    },
+    # Dairy
+    {"name": "Amul Milk (Toned)", "slug": "amul-milk-toned", "price": 32, "mrp": 34, "unit": "500 ml", "category_slug": "dairy-bakery", "image": "https://images.unsplash.com/photo-1550583724-b2692b85b150?w=600&q=80", "stock": 60, "featured": True, "popular": True, "description": "Amul toned milk pouch, farm fresh."},
+    {"name": "Paneer", "slug": "paneer", "price": 90, "mrp": 100, "unit": "200 g", "category_slug": "dairy-bakery", "image": "https://images.unsplash.com/photo-1631452180519-c014fe946bc7?w=600&q=80", "stock": 20, "popular": True, "description": "Soft, fresh paneer perfect for curries."},
+    {"name": "Amul Butter", "slug": "amul-butter", "price": 55, "mrp": 60, "unit": "100 g", "category_slug": "dairy-bakery", "image": "https://images.unsplash.com/photo-1589985270826-4b7bb135bc9d?w=600&q=80", "stock": 40, "description": "Classic Amul butter for your daily needs."},
+    {"name": "Whole Wheat Bread", "slug": "whole-wheat-bread", "price": 45, "mrp": 50, "unit": "400 g", "category_slug": "dairy-bakery", "image": "https://images.unsplash.com/photo-1509440159596-0249088772ff?w=600&q=80", "stock": 35, "description": "Freshly baked whole wheat bread."},
 
-    {
-        "name": "Onion",
-        "slug": "onion",
-        "price": 40,
-        "mrp": 50,
-        "unit": "1 kg",
-        "category_slug": "fruits-vegetables",
-        "image": "https://images.unsplash.com/photo-1508747703725-719777637510?w=600&q=80",
-        "stock": 80,
-        "popular": True,
-        "description": "Premium quality Nashik onions.",
-        "variants": [
-            {"label": "500g", "price": 20, "mrp": 25, "unit": "500g"},
-            {"label": "1kg", "price": 40, "mrp": 50, "unit": "1kg"},
-            {"label": "2kg", "price": 75, "mrp": 90, "unit": "2kg"},
-            {"label": "3kg", "price": 110, "mrp": 130, "unit": "3kg"},
-            {"label": "5kg", "price": 175, "mrp": 210, "unit": "5kg"},
-        ],
-    },
+    # Staples
+    {"name": "Basmati Rice", "slug": "basmati-rice", "price": 320, "mrp": 380, "unit": "5 kg", "category_slug": "staples-grains", "image": "https://images.unsplash.com/photo-1586201375761-83865001e31c?w=600&q=80", "stock": 15, "featured": True, "popular": True, "description": "Premium long-grain basmati rice."},
+    {"name": "Toor Dal", "slug": "toor-dal", "price": 165, "mrp": 190, "unit": "1 kg", "category_slug": "staples-grains", "image": "https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=600&q=80", "stock": 25, "popular": True, "description": "Fresh, unpolished toor dal."},
+    {"name": "Aashirvaad Atta", "slug": "aashirvaad-atta", "price": 340, "mrp": 400, "unit": "5 kg", "category_slug": "staples-grains", "image": "https://images.unsplash.com/photo-1568254183919-78a4f43a2877?w=600&q=80", "stock": 30, "featured": True, "description": "100% whole wheat atta for soft rotis."},
+    {"name": "Sunflower Oil", "slug": "sunflower-oil", "price": 210, "mrp": 240, "unit": "1 L", "category_slug": "staples-grains", "image": "https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=600&q=80", "stock": 40, "description": "Refined sunflower cooking oil."},
 
-    {
-        "name": "Banana",
-        "slug": "banana",
-        "price": 50,
-        "mrp": 60,
-        "unit": "1 dozen",
-        "category_slug": "fruits-vegetables",
-        "image": "https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?w=600&q=80",
-        "stock": 30,
-        "featured": True,
-        "description": "Ripe yellow bananas, rich in potassium.",
-        "variants": [
-            {"label": "6 pcs", "price": 25, "mrp": 30, "unit": "6 pcs"},
-            {"label": "12 pcs", "price": 50, "mrp": 60, "unit": "12 pcs"},
-            {"label": "24 pcs", "price": 95, "mrp": 115, "unit": "24 pcs"},
-        ],
-    },
+    # Spices
+    {"name": "Turmeric Powder", "slug": "turmeric-powder", "price": 65, "mrp": 80, "unit": "200 g", "category_slug": "spices-masala", "image": "https://images.unsplash.com/photo-1615485500704-8e990f9900f7?w=600&q=80", "stock": 50, "description": "Pure haldi powder, ground fresh."},
+    {"name": "Red Chilli Powder", "slug": "red-chilli-powder", "price": 85, "mrp": 100, "unit": "200 g", "category_slug": "spices-masala", "image": "https://images.unsplash.com/photo-1509358271058-acd22cc93898?w=600&q=80", "stock": 40, "popular": True, "description": "Spicy red chilli powder."},
+    {"name": "Garam Masala", "slug": "garam-masala", "price": 95, "mrp": 110, "unit": "100 g", "category_slug": "spices-masala", "image": "https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=600&q=80", "stock": 30, "featured": True, "description": "Aromatic blend of ground whole spices."},
 
-    {
-        "name": "Apple - Shimla",
-        "slug": "apple-shimla",
-        "price": 180,
-        "mrp": 220,
-        "unit": "1 kg",
-        "category_slug": "fruits-vegetables",
-        "image": "https://images.unsplash.com/photo-1568702846914-96b305d2aaeb?w=600&q=80",
-        "stock": 25,
-        "featured": True,
-        "popular": True,
-        "description": "Crisp red apples straight from Himachal orchards.",
-        "variants": [
-            {"label": "500g", "price": 90, "mrp": 110, "unit": "500g"},
-            {"label": "1kg", "price": 180, "mrp": 220, "unit": "1kg"},
-            {"label": "2kg", "price": 350, "mrp": 420, "unit": "2kg"},
-        ],
-    },
+    # Snacks
+    {"name": "Parle-G Biscuits", "slug": "parle-g", "price": 10, "mrp": 12, "unit": "80 g", "category_slug": "snacks-beverages", "image": "https://images.unsplash.com/photo-1558961363-fa8fdf82db35?w=600&q=80", "stock": 200, "popular": True, "description": "The classic glucose biscuit."},
+    {"name": "Lay's Classic Salted", "slug": "lays-classic", "price": 20, "mrp": 20, "unit": "52 g", "category_slug": "snacks-beverages", "image": "https://images.unsplash.com/photo-1621939514649-280e2ee25f60?w=600&q=80", "stock": 100, "description": "Crispy potato chips."},
+    {"name": "Tata Tea Gold", "slug": "tata-tea-gold", "price": 275, "mrp": 310, "unit": "500 g", "category_slug": "snacks-beverages", "image": "https://images.unsplash.com/photo-1594631252845-29fc4cc8cde9?w=600&q=80", "stock": 25, "featured": True, "description": "Rich aroma and taste of premium tea."},
 
-    {
-        "name": "Potato",
-        "slug": "potato",
-        "price": 25,
-        "mrp": 30,
-        "unit": "1 kg",
-        "category_slug": "fruits-vegetables",
-        "image": "https://images.unsplash.com/photo-1518977676601-b53f82aba655?w=600&q=80",
-        "stock": 100,
-        "description": "Fresh farm potatoes.",
-        "variants": [
-            {"label": "500g", "price": 13, "mrp": 16, "unit": "500g"},
-            {"label": "1kg", "price": 25, "mrp": 30, "unit": "1kg"},
-            {"label": "2kg", "price": 48, "mrp": 58, "unit": "2kg"},
-            {"label": "5kg", "price": 115, "mrp": 140, "unit": "5kg"},
-        ],
-    },
-
-    # ============================================================
-    # DAIRY & BAKERY
-    # ============================================================
-
-    {
-        "name": "Amul Milk (Toned)",
-        "slug": "amul-milk-toned",
-        "price": 32,
-        "mrp": 34,
-        "unit": "500 ml",
-        "category_slug": "dairy-bakery",
-        "image": "https://images.unsplash.com/photo-1550583724-b2692b85b150?w=600&q=80",
-        "stock": 60,
-        "featured": True,
-        "popular": True,
-        "description": "Amul toned milk pouch, farm fresh.",
-        "variants": [
-            {"label": "500ml", "price": 32, "mrp": 34, "unit": "500ml"},
-            {"label": "1L", "price": 64, "mrp": 68, "unit": "1L"},
-            {"label": "2L", "price": 126, "mrp": 136, "unit": "2L"},
-        ],
-    },
-
-    {
-        "name": "Paneer",
-        "slug": "paneer",
-        "price": 90,
-        "mrp": 100,
-        "unit": "200 g",
-        "category_slug": "dairy-bakery",
-        "image": "https://images.unsplash.com/photo-1631452180519-c014fe946bc7?w=600&q=80",
-        "stock": 20,
-        "popular": True,
-        "description": "Soft, fresh paneer perfect for curries.",
-        "variants": [
-            {"label": "200g", "price": 90, "mrp": 100, "unit": "200g"},
-            {"label": "500g", "price": 220, "mrp": 250, "unit": "500g"},
-            {"label": "1kg", "price": 420, "mrp": 480, "unit": "1kg"},
-        ],
-    },
-
-    {
-        "name": "Amul Butter",
-        "slug": "amul-butter",
-        "price": 55,
-        "mrp": 60,
-        "unit": "100 g",
-        "category_slug": "dairy-bakery",
-        "image": "https://images.unsplash.com/photo-1589985270826-4b7bb135bc9d?w=600&q=80",
-        "stock": 40,
-        "description": "Classic Amul butter for your daily needs.",
-        "variants": [
-            {"label": "100g", "price": 55, "mrp": 60, "unit": "100g"},
-            {"label": "200g", "price": 105, "mrp": 120, "unit": "200g"},
-            {"label": "500g", "price": 255, "mrp": 290, "unit": "500g"},
-        ],
-    },
-
-    {
-        "name": "Whole Wheat Bread",
-        "slug": "whole-wheat-bread",
-        "price": 45,
-        "mrp": 50,
-        "unit": "400 g",
-        "category_slug": "dairy-bakery",
-        "image": "https://images.unsplash.com/photo-1509440159596-0249088772ff?w=600&q=80",
-        "stock": 35,
-        "description": "Freshly baked whole wheat bread.",
-        "variants": [
-            {"label": "400g", "price": 45, "mrp": 50, "unit": "400g"},
-            {"label": "800g", "price": 85, "mrp": 100, "unit": "800g"},
-        ],
-    },
-
-    # ============================================================
-    # STAPLES & GRAINS
-    # ============================================================
-
-    {
-        "name": "Basmati Rice",
-        "slug": "basmati-rice",
-        "price": 320,
-        "mrp": 380,
-        "unit": "5 kg",
-        "category_slug": "staples-grains",
-        "image": "https://images.unsplash.com/photo-1586201375761-83865001e31c?w=600&q=80",
-        "stock": 15,
-        "featured": True,
-        "popular": True,
-        "description": "Premium long-grain basmati rice.",
-        "variants": [
-            {"label": "1kg", "price": 70, "mrp": 85, "unit": "1kg"},
-            {"label": "5kg", "price": 320, "mrp": 380, "unit": "5kg"},
-            {"label": "10kg", "price": 620, "mrp": 740, "unit": "10kg"},
-        ],
-    },
-
-    {
-        "name": "Toor Dal",
-        "slug": "toor-dal",
-        "price": 165,
-        "mrp": 190,
-        "unit": "1 kg",
-        "category_slug": "staples-grains",
-        "image": "https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=600&q=80",
-        "stock": 25,
-        "popular": True,
-        "description": "Fresh, unpolished toor dal.",
-        "variants": [
-            {"label": "500g", "price": 85, "mrp": 100, "unit": "500g"},
-            {"label": "1kg", "price": 165, "mrp": 190, "unit": "1kg"},
-            {"label": "2kg", "price": 320, "mrp": 370, "unit": "2kg"},
-            {"label": "5kg", "price": 790, "mrp": 900, "unit": "5kg"},
-        ],
-    },
-
-    {
-        "name": "Aashirvaad Atta",
-        "slug": "aashirvaad-atta",
-        "price": 340,
-        "mrp": 400,
-        "unit": "5 kg",
-        "category_slug": "staples-grains",
-        "image": "https://images.unsplash.com/photo-1568254183919-78a4f43a2877?w=600&q=80",
-        "stock": 30,
-        "featured": True,
-        "description": "100% whole wheat atta for soft rotis.",
-        "variants": [
-            {"label": "1kg", "price": 75, "mrp": 90, "unit": "1kg"},
-            {"label": "5kg", "price": 340, "mrp": 400, "unit": "5kg"},
-            {"label": "10kg", "price": 660, "mrp": 780, "unit": "10kg"},
-        ],
-    },
-
-    {
-        "name": "Sunflower Oil",
-        "slug": "sunflower-oil",
-        "price": 210,
-        "mrp": 240,
-        "unit": "1 L",
-        "category_slug": "staples-grains",
-        "image": "https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=600&q=80",
-        "stock": 40,
-        "description": "Refined sunflower cooking oil.",
-        "variants": [
-            {"label": "500ml", "price": 110, "mrp": 125, "unit": "500ml"},
-            {"label": "1L", "price": 210, "mrp": 240, "unit": "1L"},
-            {"label": "2L", "price": 410, "mrp": 460, "unit": "2L"},
-            {"label": "5L", "price": 990, "mrp": 1150, "unit": "5L"},
-        ],
-    },
-
-    # ============================================================
-    # SPICES & MASALA
-    # ============================================================
-
-    {
-        "name": "Turmeric Powder",
-        "slug": "turmeric-powder",
-        "price": 65,
-        "mrp": 80,
-        "unit": "200 g",
-        "category_slug": "spices-masala",
-        "image": "https://images.unsplash.com/photo-1615485500704-8e990f9900f7?w=600&q=80",
-        "stock": 50,
-        "description": "Pure haldi powder, ground fresh.",
-        "variants": [
-            {"label": "100g", "price": 35, "mrp": 42, "unit": "100g"},
-            {"label": "200g", "price": 65, "mrp": 80, "unit": "200g"},
-            {"label": "500g", "price": 150, "mrp": 180, "unit": "500g"},
-            {"label": "1kg", "price": 285, "mrp": 340, "unit": "1kg"},
-        ],
-    },
-
-    {
-        "name": "Red Chilli Powder",
-        "slug": "red-chilli-powder",
-        "price": 85,
-        "mrp": 100,
-        "unit": "200 g",
-        "category_slug": "spices-masala",
-        "image": "https://images.unsplash.com/photo-1509358271058-acd22cc93898?w=600&q=80",
-        "stock": 40,
-        "popular": True,
-        "description": "Spicy red chilli powder.",
-        "variants": [
-            {"label": "100g", "price": 45, "mrp": 55, "unit": "100g"},
-            {"label": "200g", "price": 85, "mrp": 100, "unit": "200g"},
-            {"label": "500g", "price": 200, "mrp": 240, "unit": "500g"},
-            {"label": "1kg", "price": 380, "mrp": 450, "unit": "1kg"},
-        ],
-    },
-
-    {
-        "name": "Garam Masala",
-        "slug": "garam-masala",
-        "price": 95,
-        "mrp": 110,
-        "unit": "100 g",
-        "category_slug": "spices-masala",
-        "image": "https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=600&q=80",
-        "stock": 30,
-        "featured": True,
-        "description": "Aromatic blend of ground whole spices.",
-        "variants": [
-            {"label": "50g", "price": 50, "mrp": 60, "unit": "50g"},
-            {"label": "100g", "price": 95, "mrp": 110, "unit": "100g"},
-            {"label": "200g", "price": 180, "mrp": 215, "unit": "200g"},
-            {"label": "500g", "price": 420, "mrp": 500, "unit": "500g"},
-        ],
-    },
-
-    # ============================================================
-    # SNACKS & BEVERAGES
-    # ============================================================
-
-    {
-        "name": "Parle-G Biscuits",
-        "slug": "parle-g",
-        "price": 10,
-        "mrp": 12,
-        "unit": "80 g",
-        "category_slug": "snacks-beverages",
-        "image": "https://images.unsplash.com/photo-1558961363-fa8fdf82db35?w=600&q=80",
-        "stock": 200,
-        "popular": True,
-        "description": "The classic glucose biscuit.",
-        "variants": [
-            {"label": "50g", "price": 5, "mrp": 6, "unit": "50g"},
-            {"label": "80g", "price": 10, "mrp": 12, "unit": "80g"},
-            {"label": "200g", "price": 25, "mrp": 30, "unit": "200g"},
-            {"label": "800g", "price": 90, "mrp": 105, "unit": "800g"},
-        ],
-    },
-
-    {
-        "name": "Lay's Classic Salted",
-        "slug": "lays-classic",
-        "price": 20,
-        "mrp": 20,
-        "unit": "52 g",
-        "category_slug": "snacks-beverages",
-        "image": "https://images.unsplash.com/photo-1621939514649-280e2ee25f60?w=600&q=80",
-        "stock": 100,
-        "description": "Crispy potato chips.",
-        "variants": [
-            {"label": "26g", "price": 10, "mrp": 10, "unit": "26g"},
-            {"label": "52g", "price": 20, "mrp": 20, "unit": "52g"},
-            {"label": "95g", "price": 35, "mrp": 40, "unit": "95g"},
-        ],
-    },
-
-    {
-        "name": "Tata Tea Gold",
-        "slug": "tata-tea-gold",
-        "price": 275,
-        "mrp": 310,
-        "unit": "500 g",
-        "category_slug": "snacks-beverages",
-        "image": "https://images.unsplash.com/photo-1594631252845-29fc4cc8cde9?w=600&q=80",
-        "stock": 25,
-        "featured": True,
-        "description": "Rich aroma and taste of premium tea.",
-        "variants": [
-            {"label": "100g", "price": 60, "mrp": 70, "unit": "100g"},
-            {"label": "250g", "price": 145, "mrp": 165, "unit": "250g"},
-            {"label": "500g", "price": 275, "mrp": 310, "unit": "500g"},
-            {"label": "1kg", "price": 530, "mrp": 600, "unit": "1kg"},
-        ],
-    },
-
-    # ============================================================
-    # PERSONAL CARE
-    # ============================================================
-
-    {
-        "name": "Dettol Soap",
-        "slug": "dettol-soap",
-        "price": 40,
-        "mrp": 45,
-        "unit": "125 g",
-        "category_slug": "personal-care",
-        "image": "https://images.unsplash.com/photo-1600857544200-b2f666a9a2ec?w=600&q=80",
-        "stock": 60,
-        "description": "Antibacterial protection soap.",
-        "variants": [
-            {"label": "75g", "price": 28, "mrp": 32, "unit": "75g"},
-            {"label": "125g", "price": 40, "mrp": 45, "unit": "125g"},
-            {"label": "4 x 125g", "price": 150, "mrp": 180, "unit": "4 x 125g"},
-        ],
-    },
-
-    {
-        "name": "Colgate Toothpaste",
-        "slug": "colgate-toothpaste",
-        "price": 95,
-        "mrp": 110,
-        "unit": "150 g",
-        "category_slug": "personal-care",
-        "image": "https://images.unsplash.com/photo-1607613009820-a29f7bb81c04?w=600&q=80",
-        "stock": 45,
-        "popular": True,
-        "description": "Cavity protection for strong teeth.",
-        "variants": [
-            {"label": "50g", "price": 35, "mrp": 40, "unit": "50g"},
-            {"label": "100g", "price": 65, "mrp": 75, "unit": "100g"},
-            {"label": "150g", "price": 95, "mrp": 110, "unit": "150g"},
-            {"label": "300g", "price": 180, "mrp": 210, "unit": "300g"},
-        ],
-    },
+    # Personal care
+    {"name": "Dettol Soap", "slug": "dettol-soap", "price": 40, "mrp": 45, "unit": "125 g", "category_slug": "personal-care", "image": "https://images.unsplash.com/photo-1600857544200-b2f666a9a2ec?w=600&q=80", "stock": 60, "description": "Antibacterial protection soap."},
+    {"name": "Colgate Toothpaste", "slug": "colgate-toothpaste", "price": 95, "mrp": 110, "unit": "150 g", "category_slug": "personal-care", "image": "https://images.unsplash.com/photo-1607613009820-a29f7bb81c04?w=600&q=80", "stock": 45, "popular": True, "description": "Cavity protection for strong teeth."},
 ]
 
 
@@ -2941,33 +2257,14 @@ async def seed_data():
 
     # Categories
     for c in SEED_CATEGORIES:
-        await db.categories.update_one(
-            {"slug": c["slug"]},
-            {"$setOnInsert": c},
-            upsert=True,
-        )
+        await db.categories.update_one({"slug": c["slug"]}, {"$setOnInsert": c}, upsert=True)
 
     # Products
     for p in SEED_PRODUCTS:
         p_doc = {**p, "created_at": iso_now()}
-
-        p_insert_doc = {**p_doc}
-        p_insert_doc.pop("variants", None)
-
-        await db.products.update_one(
-            {"slug": p["slug"]},
-            {
-                "$setOnInsert": p_insert_doc,
-                "$set": {
-                    "variants": p.get("variants", []),
-                },
-            },
-            upsert=True,
-        )
+        await db.products.update_one({"slug": p["slug"]}, {"$setOnInsert": p_doc}, upsert=True)
 
     # Reviews (seed a few if empty)
-
-
     if await db.reviews.count_documents({}) == 0:
         sample_reviews = [
             {"product_slug": None, "rating": 5, "comment": "Best grocery store in Ambajogai! Fresh vegetables delivered within 2 hours.", "author_name": "Rohit Deshmukh", "created_at": iso_now()},

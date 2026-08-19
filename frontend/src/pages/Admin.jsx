@@ -205,10 +205,18 @@ function ProductsAdmin() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [p, c] = await Promise.all([api.get("/admin/products"), api.get("/categories")]);
-    setProducts(p.data);
-    setCategories(c.data);
-    setLoading(false);
+    try {
+      const [p, c] = await Promise.all([
+        api.get("/admin/products"),
+        api.get("/categories"),
+      ]);
+      setProducts(p.data);
+      setCategories(c.data);
+    } catch (e) {
+      toast.error(formatApiError(e));
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -241,7 +249,12 @@ function ProductsAdmin() {
   return (
     <div data-testid="products-admin">
       <div className="mb-6 flex items-center justify-between">
-        <h2 className="font-heading text-2xl font-semibold">Products ({products.length})</h2>
+        <div>
+          <h2 className="font-heading text-2xl font-semibold">Products ({products.length})</h2>
+          <p className="mt-1 text-xs text-[#4A4A4A]">
+            Manage pricing, variants, MRP and product commission.
+          </p>
+        </div>
         <button
           onClick={() => {
             setEditing(null);
@@ -262,68 +275,90 @@ function ProductsAdmin() {
                 <th className="px-4 py-3">Product</th>
                 <th className="px-4 py-3">Vendor</th>
                 <th className="px-4 py-3">Price</th>
+                <th className="px-4 py-3">Commission</th>
                 <th className="px-4 py-3">Stock</th>
                 <th className="px-4 py-3">Approval</th>
                 <th className="px-4 py-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {products.map((p) => (
-                <tr key={p.id} className="border-t border-[#E5E5E5]">
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-3">
-                      <img src={p.image} alt="" className="h-10 w-10 rounded-lg object-cover" />
-                      <div>
-                        <div className="font-semibold">{p.name}</div>
-                        <div className="text-xs text-[#4A4A4A]">{p.unit} · {p.category_slug}</div>
+              {products.map((p) => {
+                const commissionType = String(p.commission_type || "MRP").toUpperCase();
+                const commissionValue = Number(p.commission_value || 0);
+
+                return (
+                  <tr key={p.id} className="border-t border-[#E5E5E5]">
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <img src={p.image} alt="" className="h-10 w-10 rounded-lg object-cover" />
+                        <div>
+                          <div className="font-semibold">{p.name}</div>
+                          <div className="text-xs text-[#4A4A4A]">
+                            {p.unit} · {p.category_slug}
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-[#4A4A4A]">
-                    {p.vendor_name || <span className="italic text-gray-400">Store</span>}
-                  </td>
-                  <td className="px-4 py-3 font-semibold">{formatINR(p.price)}</td>
-                  <td className="px-4 py-3">
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${p.stock <= 5 ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"}`}>
-                      {p.stock}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
-                      p.approval_status === "approved" ? "bg-green-100 text-green-700" :
-                      p.approval_status === "rejected" ? "bg-red-100 text-red-700" : "bg-yellow-100 text-yellow-700"
-                    }`}>
-                      {p.approval_status || "approved"}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    {(p.approval_status || "approved") !== "approved" && (
-                      <button
-                        onClick={() => setApproval(p.id, "approved")}
-                        className="mr-1 inline-flex items-center gap-1 rounded-full bg-green-600 px-2 py-1 text-xs font-semibold text-white hover:bg-green-700"
-                        data-testid={`approve-product-${p.slug}`}
-                      >
-                        <Check className="h-3 w-3" /> Approve
+                    </td>
+                    <td className="px-4 py-3 text-[#4A4A4A]">
+                      {p.vendor_name || <span className="italic text-gray-400">Store</span>}
+                    </td>
+                    <td className="px-4 py-3 font-semibold">{formatINR(p.price)}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-col items-start gap-1">
+                        <span className="rounded-full bg-[#E8F3EC] px-2.5 py-1 text-xs font-semibold text-[#1B4332]">
+                          {commissionType === "CUSTOM"
+                            ? `Custom ${formatINR(commissionValue)}`
+                            : `${commissionValue}% of MRP`}
+                        </span>
+                        {Array.isArray(p.variants) && p.variants.length > 0 && (
+                          <span className="text-[11px] text-[#4A4A4A]">
+                            {p.variants.length} variant{p.variants.length === 1 ? "" : "s"}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${p.stock <= 5 ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"}`}>
+                        {p.stock}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                        p.approval_status === "approved" ? "bg-green-100 text-green-700" :
+                        p.approval_status === "rejected" ? "bg-red-100 text-red-700" : "bg-yellow-100 text-yellow-700"
+                      }`}>
+                        {p.approval_status || "approved"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {(p.approval_status || "approved") !== "approved" && (
+                        <button
+                          onClick={() => setApproval(p.id, "approved")}
+                          className="mr-1 inline-flex items-center gap-1 rounded-full bg-green-600 px-2 py-1 text-xs font-semibold text-white hover:bg-green-700"
+                          data-testid={`approve-product-${p.slug}`}
+                        >
+                          <Check className="h-3 w-3" /> Approve
+                        </button>
+                      )}
+                      {(p.approval_status || "approved") !== "rejected" && (
+                        <button
+                          onClick={() => setApproval(p.id, "rejected")}
+                          className="mr-1 inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-200"
+                          data-testid={`reject-product-${p.slug}`}
+                        >
+                          <Ban className="h-3 w-3" /> Reject
+                        </button>
+                      )}
+                      <button onClick={() => { setEditing(p); setShowForm(true); }} className="inline-grid h-8 w-8 place-items-center rounded-full text-[#1B4332] hover:bg-gray-100" data-testid={`edit-${p.slug}`}>
+                        <Pencil className="h-4 w-4" />
                       </button>
-                    )}
-                    {(p.approval_status || "approved") !== "rejected" && (
-                      <button
-                        onClick={() => setApproval(p.id, "rejected")}
-                        className="mr-1 inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-200"
-                        data-testid={`reject-product-${p.slug}`}
-                      >
-                        <Ban className="h-3 w-3" /> Reject
+                      <button onClick={() => del(p.id)} className="inline-grid h-8 w-8 place-items-center rounded-full text-red-600 hover:bg-red-50" data-testid={`delete-${p.slug}`}>
+                        <Trash2 className="h-4 w-4" />
                       </button>
-                    )}
-                    <button onClick={() => { setEditing(p); setShowForm(true); }} className="inline-grid h-8 w-8 place-items-center rounded-full text-[#1B4332] hover:bg-gray-100" data-testid={`edit-${p.slug}`}>
-                      <Pencil className="h-4 w-4" />
-                    </button>
-                    <button onClick={() => del(p.id)} className="inline-grid h-8 w-8 place-items-center rounded-full text-red-600 hover:bg-red-50" data-testid={`delete-${p.slug}`}>
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -358,29 +393,85 @@ function ProductForm({ initial, categories, onClose, onSaved }) {
       stock: 0,
       featured: false,
       popular: false,
+      commission_type: "MRP",
+      commission_value: 0,
     }
   );
 
-  const [variants, setVariants] = useState(initial?.variants || []);
+  const [variants, setVariants] = useState(
+    (initial?.variants || []).map((v) => ({
+      label: v.label || "",
+      price: Number(v.price || 0),
+      mrp: v.mrp === null || v.mrp === undefined ? "" : Number(v.mrp),
+      unit: v.unit || "",
+      stock: Number(v.stock || 0),
+    }))
+  );
   const [saving, setSaving] = useState(false);
 
   const update = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
+  const updateVariant = (index, key, value) => {
+    setVariants((current) =>
+      current.map((variant, i) =>
+        i === index ? { ...variant, [key]: value } : variant
+      )
+    );
+  };
+
+  const addVariant = () => {
+    setVariants((current) => [
+      ...current,
+      { label: "", price: 0, mrp: "", unit: "", stock: 0 },
+    ]);
+  };
+
+  const removeVariant = (index) => {
+    setVariants((current) => current.filter((_, i) => i !== index));
+  };
+
   const save = async (e) => {
     e.preventDefault();
+
+    const commissionType = String(form.commission_type || "MRP").toUpperCase();
+    const commissionValue = Number(form.commission_value || 0);
+
+    if (!Number.isFinite(commissionValue) || commissionValue < 0) {
+      toast.error("Commission value cannot be negative.");
+      return;
+    }
+
+    if (commissionType === "MRP" && commissionValue > 100) {
+      toast.error("MRP commission cannot exceed 100%.");
+      return;
+    }
+
     setSaving(true);
     try {
       const payload = {
         ...form,
         slug: form.slug || slugify(form.name),
         price: Number(form.price),
-        mrp: form.mrp ? Number(form.mrp) : null,
+        mrp: form.mrp === "" || form.mrp === null ? null : Number(form.mrp),
         stock: Number(form.stock),
-        variants: variants,
+        commission_type: commissionType,
+        commission_value: commissionValue,
+        variants: variants.map((v) => ({
+          label: String(v.label || "").trim(),
+          price: Number(v.price || 0),
+          mrp: v.mrp === "" || v.mrp === null ? null : Number(v.mrp),
+          unit: String(v.unit || "").trim(),
+          stock: Number(v.stock || 0),
+        })),
       };
-      if (initial) await api.put(`/products/${initial.id}`, payload);
-      else await api.post("/products", payload);
-      toast.success("Saved");
+
+      if (initial) {
+        await api.put(`/products/${initial.id}`, payload);
+      } else {
+        await api.post("/products", payload);
+      }
+
+      toast.success("Product saved");
       onSaved();
     } catch (e) {
       toast.error(formatApiError(e));
@@ -391,23 +482,30 @@ function ProductForm({ initial, categories, onClose, onSaved }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" data-testid="product-form-modal">
-      <div className="card-base max-h-[90vh] w-full max-w-2xl overflow-auto p-6">
+      <div className="card-base max-h-[90vh] w-full max-w-3xl overflow-auto p-6">
         <div className="mb-4 flex items-center justify-between">
-          <h3 className="font-heading text-xl font-semibold">{initial ? "Edit product" : "New product"}</h3>
+          <div>
+            <h3 className="font-heading text-xl font-semibold">{initial ? "Edit product" : "New product"}</h3>
+            <p className="mt-1 text-xs text-[#4A4A4A]">Configure pricing, variants and commission.</p>
+          </div>
           <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-full hover:bg-gray-100">
             <X className="h-4 w-4" />
           </button>
         </div>
+
         <form onSubmit={save} className="grid gap-4 sm:grid-cols-2">
           <FField label="Name" value={form.name} onChange={(v) => update("name", v)} required data-testid="product-name" />
           <FField label="Slug" value={form.slug} onChange={(v) => update("slug", v)} placeholder="auto from name" data-testid="product-slug" />
+
           <div className="sm:col-span-2">
             <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Description</label>
             <textarea value={form.description} onChange={(e) => update("description", e.target.value)} rows={2} className="input-base resize-none" data-testid="product-description" />
           </div>
-          <FField label="Price (₹)" type="number" value={form.price} onChange={(v) => update("price", v)} required data-testid="product-price" />
-          <FField label="MRP (₹)" type="number" value={form.mrp || ""} onChange={(v) => update("mrp", v)} data-testid="product-mrp" />
+
+          <FField label="Price (₹)" type="number" min="0" step="0.01" value={form.price} onChange={(v) => update("price", v)} required data-testid="product-price" />
+          <FField label="MRP (₹)" type="number" min="0" step="0.01" value={form.mrp ?? ""} onChange={(v) => update("mrp", v)} data-testid="product-mrp" />
           <FField label="Unit" value={form.unit} onChange={(v) => update("unit", v)} placeholder="1 kg" data-testid="product-unit" />
+
           <div>
             <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Category</label>
             <select value={form.category_slug} onChange={(e) => update("category_slug", e.target.value)} className="input-base" data-testid="product-category">
@@ -416,121 +514,107 @@ function ProductForm({ initial, categories, onClose, onSaved }) {
               ))}
             </select>
           </div>
+
           <div className="sm:col-span-2">
             <FField label="Image URL" value={form.image} onChange={(v) => update("image", v)} required data-testid="product-image" />
           </div>
-          <FField label="Stock" type="number" value={form.stock} onChange={(v) => update("stock", v)} required data-testid="product-stock" />
-           <FField
-  label="Stock"
-  type="number"
-  value={form.stock}
-  onChange={(v) => update("stock", v)}
-  required
-  data-testid="product-stock"
-/>
 
-<div className="sm:col-span-2">
-  <label className="mb-2 block text-xs font-semibold text-[#4A4A4A]">
-    Product Variants
-  </label>
+          <FField label="Stock" type="number" min="0" step="1" value={form.stock} onChange={(v) => update("stock", v)} required data-testid="product-stock" />
 
-  {variants.map((v, i) => (
-    <div key={i} className="mb-2 flex gap-2">
-      <input
-        className="input-base flex-1"
-        placeholder="Label (500g)"
-        value={v.label}
-        onChange={(e) => {
-          const copy = [...variants];
-          copy[i].label = e.target.value;
-          setVariants(copy);
-        }}
-      />
+          {/* Commission */}
+          <div className="sm:col-span-2 rounded-2xl border border-[#D9E8DE] bg-[#F7FBF8] p-4">
+            <div className="mb-3">
+              <h4 className="font-heading text-base font-semibold text-[#1B4332]">Product Commission</h4>
+              <p className="mt-1 text-xs text-[#4A4A4A]">
+                MRP Commission uses a percentage of the applicable MRP. Custom Commission uses a fixed amount.
+              </p>
+            </div>
 
-      <input
-        className="input-base w-28"
-        type="number"
-        placeholder="Price"
-        value={v.price}
-        onChange={(e) => {
-          const copy = [...variants];
-          copy[i].price = Number(e.target.value);
-          setVariants(copy);
-        }}
-      />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Commission Type</label>
+                <select
+                  value={form.commission_type || "MRP"}
+                  onChange={(e) => update("commission_type", e.target.value)}
+                  className="input-base"
+                  data-testid="product-commission-type"
+                >
+                  <option value="MRP">MRP Commission</option>
+                  <option value="CUSTOM">Custom Commission</option>
+                </select>
+              </div>
 
-      <input
-        className="input-base w-28"
-        placeholder="Unit"
-        value={v.unit}
-        onChange={(e) => {
-          const copy = [...variants];
-          copy[i].unit = e.target.value;
-          setVariants(copy);
-        }}
-      />
+              <FField
+                label={form.commission_type === "CUSTOM" ? "Custom Commission (₹)" : "Commission Rate (%)"}
+                type="number"
+                min="0"
+                max={form.commission_type === "MRP" ? "100" : undefined}
+                step="0.01"
+                value={form.commission_value ?? 0}
+                onChange={(v) => update("commission_value", v)}
+                required
+                data-testid="product-commission-value"
+              />
+            </div>
+          </div>
 
-      <button
-        type="button"
-        className="btn-secondary"
-        onClick={() => setVariants(variants.filter((_, idx) => idx !== i))}
-      >
-        ✕
-      </button>
-    </div>
-  ))}
+          {/* Variants */}
+          <div className="sm:col-span-2 rounded-2xl border border-[#E5E5E5] p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h4 className="font-heading text-base font-semibold">Product Variants</h4>
+                <p className="mt-1 text-xs text-[#4A4A4A]">Add variant price and MRP. Variant MRP is used for MRP commission.</p>
+              </div>
+              <button type="button" className="btn-secondary whitespace-nowrap" onClick={addVariant}>
+                + Add Variant
+              </button>
+            </div>
 
-  <button
-    type="button"
-    className="btn-secondary mt-2"
-    onClick={() =>
-      setVariants([
-        ...variants,
-        { label: "", price: 0, unit: "" },
-      ])
-    }
-  >
-    + Add Variant
-  </button>
-</div>
+            {variants.length === 0 ? (
+              <p className="rounded-xl border border-dashed border-[#E5E5E5] p-4 text-center text-xs text-[#4A4A4A]">
+                No variants added.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {variants.map((v, i) => (
+                  <div key={i} className="rounded-xl border border-[#E5E5E5] p-3">
+                    <div className="grid gap-3 sm:grid-cols-5">
+                      <FField label="Label" value={v.label} onChange={(value) => updateVariant(i, "label", value)} placeholder="500g" />
+                      <FField label="Price (₹)" type="number" min="0" step="0.01" value={v.price} onChange={(value) => updateVariant(i, "price", Number(value))} />
+                      <FField label="MRP (₹)" type="number" min="0" step="0.01" value={v.mrp} onChange={(value) => updateVariant(i, "mrp", value)} placeholder="25" />
+                      <FField label="Unit" value={v.unit} onChange={(value) => updateVariant(i, "unit", value)} placeholder="500g" />
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Stock</label>
+                        <div className="flex gap-2">
+                          <input type="number" min="0" step="1" value={v.stock} onChange={(e) => updateVariant(i, "stock", Number(e.target.value))} className="input-base min-w-0 flex-1" />
+                          <button type="button" className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-red-600 hover:bg-red-50" onClick={() => removeVariant(i)} aria-label={`Remove variant ${i + 1}`}>
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
-<div className="flex items-center gap-4 pt-6">
-  <label className="flex items-center gap-2 text-sm">
-    <input
-      type="checkbox"
-      checked={form.featured}
-      onChange={(e) => update("featured", e.target.checked)}
-    />
-    Featured
-  </label>
-
-  <label className="flex items-center gap-2 text-sm">
-    <input
-      type="checkbox"
-      checked={form.popular}
-      onChange={(e) => update("popular", e.target.checked)}
-    />
-    Popular
-  </label>
-</div> 
-           <div className="flex items-center gap-4 pt-6">
-  ...
-</div>
-          <div className="flex items-center gap-4 pt-6">
+          <div className="sm:col-span-2 flex items-center gap-5 pt-2">
             <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={form.featured} onChange={(e) => update("featured", e.target.checked)} />
+              <input type="checkbox" checked={Boolean(form.featured)} onChange={(e) => update("featured", e.target.checked)} />
               Featured
             </label>
             <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={form.popular} onChange={(e) => update("popular", e.target.checked)} />
+              <input type="checkbox" checked={Boolean(form.popular)} onChange={(e) => update("popular", e.target.checked)} />
               Popular
             </label>
           </div>
+
           <div className="sm:col-span-2 flex justify-end gap-3 pt-2">
             <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
             <button type="submit" disabled={saving} className="btn-primary" data-testid="save-product">
               {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-              Save
+              {initial ? "Save changes" : "Save product"}
             </button>
           </div>
         </form>

@@ -31,8 +31,9 @@ const CGST_RATE = 0.025;
 const SGST_RATE = 0.025;
 const GST_RATE = 0.05;
 
-const DELIVERY_RATE_PER_KM = 13;
-const DELIVERY_RATE_ABOVE_1_5_KM = 20;
+const DELIVERY_RATE_PER_KM = 12;
+const DELIVERY_BASE_UP_TO_1_5_KM = 16;
+const DELIVERY_BASE_DISTANCE_KM = 1.5;
 
 /*
 |--------------------------------------------------------------------------
@@ -46,6 +47,15 @@ const DELIVERY_RATE_ABOVE_1_5_KM = 20;
 
 const STORE_LATITUDE = 18.7271336;
 const STORE_LONGITUDE = 76.3810922;
+
+/*
+|--------------------------------------------------------------------------
+| Ambajogai delivery serviceability
+|--------------------------------------------------------------------------
+*/
+const DELIVERY_ZONE_NAME = "Ambajogai";
+const SERVICEABILITY_MESSAGE =
+  "Sorry, we only deliver in Ambajogai.";
 
 /*
 |--------------------------------------------------------------------------
@@ -143,25 +153,23 @@ function calculateDeliveryFee(
     return 0;
   }
 
+  // Up to 1.5 km: fixed ₹16.
   if (
-    distanceKm <= 1.5
+    distanceKm <= DELIVERY_BASE_DISTANCE_KM
   ) {
-    return (
-      Math.round(
-        distanceKm *
-          DELIVERY_RATE_PER_KM *
-          100
-      ) / 100
-    );
+    return DELIVERY_BASE_UP_TO_1_5_KM;
   }
 
-  return (
-    Math.round(
-      distanceKm *
-        DELIVERY_RATE_ABOVE_1_5_KM *
-        100
-    ) / 100
-  );
+  // Above 1.5 km: ₹16 for the first 1.5 km
+  // + ₹12 for every additional km.
+  const additionalDistance =
+    distanceKm - DELIVERY_BASE_DISTANCE_KM;
+
+  const fee =
+    DELIVERY_BASE_UP_TO_1_5_KM +
+    additionalDistance * DELIVERY_RATE_PER_KM;
+
+  return Math.round(fee * 100) / 100;
 }
 
 export default function Checkout() {
@@ -251,6 +259,15 @@ export default function Checkout() {
 
   const [locating, setLocating] =
     useState(false);
+
+  const [serviceabilityLoading, setServiceabilityLoading] =
+    useState(false);
+
+  const [serviceable, setServiceable] =
+    useState(null);
+
+  const [serviceabilityMessage, setServiceabilityMessage] =
+    useState("");
 
   /*
   |--------------------------------------------------------------------------
@@ -463,6 +480,90 @@ export default function Checkout() {
 
   /*
   |--------------------------------------------------------------------------
+  | Backend serviceability check
+  |--------------------------------------------------------------------------
+  |
+  | The frontend uses this for instant feedback, but the backend remains
+  | authoritative and validates the coordinates again when the order is
+  | submitted.
+  |
+  */
+
+  const checkServiceability = async (
+    latitude = location.latitude,
+    longitude = location.longitude
+  ) => {
+    if (
+      latitude === null ||
+      longitude === null ||
+      !Number.isFinite(Number(latitude)) ||
+      !Number.isFinite(Number(longitude))
+    ) {
+      setServiceable(null);
+      setServiceabilityMessage("");
+      return null;
+    }
+
+    setServiceabilityLoading(true);
+    setServiceable(null);
+    setServiceabilityMessage("");
+
+    try {
+      const { data } = await api.get(
+        "/delivery/serviceability",
+        {
+          params: {
+            latitude: Number(latitude),
+            longitude: Number(longitude),
+          },
+        }
+      );
+
+      const allowed = data?.serviceable === true;
+      setServiceable(allowed);
+      setServiceabilityMessage(
+        allowed
+          ? `Delivery available in ${data?.zone_name || DELIVERY_ZONE_NAME}.`
+          : data?.message || SERVICEABILITY_MESSAGE
+      );
+
+      return data;
+    } catch (error) {
+      console.error(
+        "SERVICEABILITY CHECK ERROR:",
+        error
+      );
+
+      setServiceable(false);
+      setServiceabilityMessage(
+        "We could not verify your delivery location. Please try again."
+      );
+
+      return null;
+    } finally {
+      setServiceabilityLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (
+      location.latitude === null ||
+      location.longitude === null
+    ) {
+      setServiceable(null);
+      setServiceabilityMessage("");
+      return;
+    }
+
+    checkServiceability(
+      location.latitude,
+      location.longitude
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.latitude, location.longitude]);
+
+  /*
+  |--------------------------------------------------------------------------
   | Coupon discount
   |--------------------------------------------------------------------------
   */
@@ -667,6 +768,17 @@ export default function Checkout() {
       return "Please allow location access so delivery charges can be calculated.";
     }
 
+    if (serviceable === false) {
+      return (
+        serviceabilityMessage ||
+        SERVICEABILITY_MESSAGE
+      );
+    }
+
+    if (serviceable !== true) {
+      return "Please verify that your delivery location is within Ambajogai before placing the order.";
+    }
+
     if (
       items.length === 0
     ) {
@@ -688,6 +800,20 @@ export default function Checkout() {
 
     if (error) {
       toast.error(error);
+      return;
+    }
+
+    // Fresh backend check immediately before creating the order.
+    const serviceability = await checkServiceability(
+      location.latitude,
+      location.longitude
+    );
+
+    if (!serviceability?.serviceable) {
+      toast.error(
+        serviceability?.message ||
+        SERVICEABILITY_MESSAGE
+      );
       return;
     }
 
@@ -1640,8 +1766,8 @@ ${
                   ? "FREE delivery"
                   : estimatedDistance <=
                     1.5
-                  ? `₹${DELIVERY_RATE_PER_KM}/km delivery`
-                  : `₹${DELIVERY_RATE_ABOVE_1_5_KM}/km delivery`}
+                  ? `₹16 delivery up to 1.5 km`
+                  : `₹16 + ₹${DELIVERY_RATE_PER_KM}/km after 1.5 km`}
 
                 {" · "}
 
@@ -1693,6 +1819,38 @@ ${
 
           </div>
 
+          {/* DELIVERY SERVICEABILITY MESSAGE */}
+
+          {serviceabilityLoading && (
+            <div className="mt-4 flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 p-3 text-center text-sm text-blue-700">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Verifying delivery availability...
+            </div>
+          )}
+
+          {!serviceabilityLoading &&
+            serviceable === false && (
+            <div
+              className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-center text-sm text-red-700"
+              data-testid="outside-zone-message"
+            >
+              <strong>{serviceabilityMessage || SERVICEABILITY_MESSAGE}</strong>
+              <div className="mt-1 text-xs text-red-600">
+                Please use a delivery location within Ambajogai.
+              </div>
+            </div>
+          )}
+
+          {!serviceabilityLoading &&
+            serviceable === true && (
+            <div
+              className="mt-4 rounded-xl border border-green-200 bg-green-50 p-3 text-center text-sm text-green-700"
+              data-testid="serviceable-zone-message"
+            >
+              {serviceabilityMessage || `Delivery available in ${DELIVERY_ZONE_NAME}.`}
+            </div>
+          )}
+
           {/* MINIMUM ORDER MESSAGE */}
 
           {Number(subtotal || 0) <
@@ -1723,6 +1881,9 @@ ${
             }
             disabled={
               submitting ||
+              locating ||
+              serviceabilityLoading ||
+              serviceable !== true ||
               location.latitude ===
                 null ||
               location.longitude ===
@@ -1742,6 +1903,14 @@ ${
 
             {submitting
               ? "Placing order..."
+              : locating
+              ? "Detecting location..."
+              : serviceabilityLoading
+              ? "Verifying delivery area..."
+              : serviceable === false
+              ? "Outside delivery area"
+              : serviceable !== true
+              ? "Verify delivery location"
               : Number(
                   subtotal || 0
                 ) <

@@ -1,186 +1,104 @@
-import { Link } from "react-router-dom";
-import { Plus, Minus, ShoppingCart } from "lucide-react";
-import { useCart, lineKey } from "@/context/CartContext";
-import { formatINR } from "@/lib/api";
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
+import { ShoppingCart, Plus, Minus } from "lucide-react";
+import { useCart } from "../context/CartContext";
 
 export default function ProductCard({ product }) {
-  const { addItem, items, setQuantity } = useCart();
-
-  /*
-   * ---------------------------------------------------------------
-   * Product variants
-   * ---------------------------------------------------------------
-   *
-   * Supports variant objects such as:
-   *
-   * {
-   *   label: "1 kg",
-   *   price: 50,
-   *   unit: "1 kg"
-   * }
-   *
-   * Also safely handles label/name/unit differences.
-   */
+  const {
+    addItem,
+    items,
+    setQuantity,
+    removeItem,
+  } = useCart();
 
   const variants = useMemo(() => {
     if (!Array.isArray(product?.variants)) {
       return [];
     }
 
-    return product.variants
-      .map((variant, index) => {
-        const label =
-          variant?.label ??
-          variant?.name ??
-          variant?.unit ??
-          `Option ${index + 1}`;
-
-        const price = Number(
-          variant?.price ??
-            variant?.selling_price ??
-            product.price ??
-            0
-        );
-
-        const unit =
-          variant?.unit ??
-          variant?.label ??
-          label;
-
-        const mrp =
-          variant?.mrp !== undefined &&
-          variant?.mrp !== null
-            ? Number(variant.mrp)
-            : Number(product.mrp ?? 0);
-
-        return {
-          ...variant,
-          label: String(label),
-          price,
-          unit: String(unit),
-          mrp,
-        };
-      })
-      .filter((variant) => variant.price >= 0);
+    return product.variants.filter(
+      (variant) =>
+        variant &&
+        variant.label &&
+        Number.isFinite(Number(variant.price))
+    );
   }, [product]);
 
   /*
-   * Selected variant.
-   *
-   * If variants exist, first variant is selected automatically.
-   * If there are no variants, null means normal product.
-   */
+  |--------------------------------------------------------------------------
+  | Variant Selection
+  |--------------------------------------------------------------------------
+  */
 
-  const [selectedVariantLabel, setSelectedVariantLabel] =
-    useState(
-      variants.length > 0
-        ? variants[0].label
-        : null
-    );
-
-  /*
-   * Get currently selected variant.
-   */
-
-  const selectedVariant = useMemo(() => {
-    if (!selectedVariantLabel) {
-      return null;
-    }
-
-    return (
-      variants.find(
-        (variant) =>
-          variant.label ===
-          selectedVariantLabel
-      ) || null
-    );
-  }, [
-    variants,
-    selectedVariantLabel,
-  ]);
-
-  /*
-   * ---------------------------------------------------------------
-   * Active product values
-   * ---------------------------------------------------------------
-   */
-
-  const activePrice = selectedVariant
-    ? Number(selectedVariant.price)
-    : Number(product.price || 0);
-
-  const activeUnit = selectedVariant
-    ? selectedVariant.unit
-    : product.unit;
-
-  const activeMrp = selectedVariant
-    ? Number(selectedVariant.mrp || 0)
-    : Number(product.mrp || 0);
-
-  /*
-   * ---------------------------------------------------------------
-   * Discount
-   * ---------------------------------------------------------------
-   */
-
-  const off =
-    activeMrp > activePrice
-      ? Math.round(
-          ((activeMrp - activePrice) /
-            activeMrp) *
-            100
-        )
-      : 0;
-
-  /*
-   * ---------------------------------------------------------------
-   * Stock
-   * ---------------------------------------------------------------
-   *
-   * Variant stock is used when available.
-   * Otherwise product stock is used.
-   */
-
-  const stock = Number(
-    selectedVariant?.stock ??
-      product.stock ??
-      0
+  const [selectedVariant, setSelectedVariant] = useState(
+    variants.length > 0 ? variants[0] : null
   );
 
   /*
-   * ---------------------------------------------------------------
-   * Current cart item
-   * ---------------------------------------------------------------
-   *
-   * IMPORTANT:
-   * Product + variant are treated as separate cart lines.
-   *
-   * Example:
-   *
-   * Tomato 1 kg
-   * Tomato 2 kg
-   *
-   * can both exist independently in the cart.
-   */
+  |--------------------------------------------------------------------------
+  | Selected Price
+  |--------------------------------------------------------------------------
+  */
 
-  const inCart = Array.isArray(items)
-    ? items.find(
-        (item) =>
-          item.product_id === product.id &&
-          (item.variant_label || null) ===
-            (selectedVariant?.label || null)
-      )
-    : null;
+  const selectedPrice = selectedVariant
+    ? Number(selectedVariant.price)
+    : Number(product?.price || 0);
 
   /*
-   * ---------------------------------------------------------------
-   * Add selected variant
-   * ---------------------------------------------------------------
-   */
+  |--------------------------------------------------------------------------
+  | Selected Unit
+  |--------------------------------------------------------------------------
+  */
+
+  const selectedUnit = selectedVariant
+    ? selectedVariant.unit ||
+      selectedVariant.label ||
+      product?.unit ||
+      "1 pc"
+    : product?.unit || "1 pc";
+
+  /*
+  |--------------------------------------------------------------------------
+  | Cart Key
+  |--------------------------------------------------------------------------
+  */
+
+  const cartKey = `${product?.id}::${
+    selectedVariant?.label || ""
+  }`;
+
+  /*
+  |--------------------------------------------------------------------------
+  | Current Cart Item
+  |--------------------------------------------------------------------------
+  */
+
+  const cartItem = items.find((item) => {
+    return (
+      item.product_id === product?.id &&
+      (item.variant_label || null) ===
+        (selectedVariant?.label || null)
+    );
+  });
+
+  const quantity = Number(
+    cartItem?.quantity || 0
+  );
+
+  /*
+  |--------------------------------------------------------------------------
+  | Add To Cart
+  |--------------------------------------------------------------------------
+  */
 
   const handleAddToCart = () => {
-    if (stock <= 0) {
+    if (!product?.id) {
+      return;
+    }
+
+    if (
+      !Number.isFinite(selectedPrice) ||
+      selectedPrice < 0
+    ) {
       return;
     }
 
@@ -189,263 +107,217 @@ export default function ProductCard({ product }) {
       1,
       null,
       selectedVariant?.label || null,
-      activePrice,
-      activeUnit
+      selectedPrice,
+      selectedUnit
     );
   };
 
   /*
-   * ---------------------------------------------------------------
-   * Quantity controls
-   * ---------------------------------------------------------------
-   */
+  |--------------------------------------------------------------------------
+  | Increase Quantity
+  |--------------------------------------------------------------------------
+  */
 
   const handleIncrease = () => {
-    if (!inCart) {
-      return;
-    }
-
-    if (inCart.quantity >= stock) {
-      return;
-    }
-
-    setQuantity(
-      lineKey(inCart),
-      inCart.quantity + 1
+    addItem(
+      product,
+      1,
+      null,
+      selectedVariant?.label || null,
+      selectedPrice,
+      selectedUnit
     );
   };
+
+  /*
+  |--------------------------------------------------------------------------
+  | Decrease Quantity
+  |--------------------------------------------------------------------------
+  */
 
   const handleDecrease = () => {
-    if (!inCart) {
+    if (!cartItem) {
+      return;
+    }
+
+    if (quantity <= 1) {
+      removeItem(cartKey);
       return;
     }
 
     setQuantity(
-      lineKey(inCart),
-      inCart.quantity - 1
+      cartKey,
+      quantity - 1
     );
   };
 
-  return (
-    <div
-      className="card-base group flex flex-col overflow-hidden hover:border-[#8BA888] hover:shadow-md"
-      data-testid={`product-card-${product.slug}`}
-    >
-      {/* =========================================================
-          PRODUCT IMAGE
-      ========================================================= */}
+  /*
+  |--------------------------------------------------------------------------
+  | Product Image
+  |--------------------------------------------------------------------------
+  */
 
-      <Link
-        to={`/products/${product.slug}`}
-        className="relative aspect-square overflow-hidden bg-gray-50"
-      >
+  const image =
+    product?.image ||
+    product?.image_url ||
+    "/placeholder-product.png";
+
+  /*
+  |--------------------------------------------------------------------------
+  | MRP
+  |--------------------------------------------------------------------------
+  */
+
+  const mrp = selectedVariant
+    ? Number(
+        selectedVariant.mrp ||
+        selectedVariant.compare_at_price ||
+        0
+      )
+    : Number(
+        product?.mrp ||
+        product?.compare_at_price ||
+        0
+      );
+
+  /*
+  |--------------------------------------------------------------------------
+  | Discount
+  |--------------------------------------------------------------------------
+  */
+
+  const discount =
+    mrp > selectedPrice
+      ? Math.round(
+          ((mrp - selectedPrice) /
+            mrp) *
+            100
+        )
+      : 0;
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm hover:shadow-md transition-shadow">
+      {/* Image */}
+
+      <div className="relative bg-gray-50 aspect-square overflow-hidden">
         <img
-          src={product.image}
-          alt={product.name}
+          src={image}
+          alt={product?.name || "Product"}
+          className="w-full h-full object-cover"
           loading="lazy"
-          className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+          onError={(event) => {
+            event.currentTarget.src =
+              "/placeholder-product.png";
+          }}
         />
 
-        {/* Discount */}
-
-        {off > 0 && (
-          <span className="absolute left-3 top-3 rounded-full bg-[#E07A5F] px-2 py-0.5 text-xs font-semibold text-white">
-            {off}% OFF
+        {discount > 0 && (
+          <span className="absolute top-2 left-2 bg-green-600 text-white text-xs font-semibold px-2 py-1 rounded-full">
+            {discount}% OFF
           </span>
         )}
+      </div>
 
-        {/* Out of Stock */}
+      {/* Content */}
 
-        {stock <= 0 && (
-          <div className="absolute inset-0 grid place-items-center bg-white/70">
-            <span className="rounded-full bg-red-600 px-3 py-1 text-xs font-semibold text-white">
-              Out of stock
-            </span>
-          </div>
-        )}
-      </Link>
+      <div className="p-3">
+        <h3 className="font-semibold text-gray-900 text-sm line-clamp-2 min-h-[40px]">
+          {product?.name}
+        </h3>
 
-      {/* =========================================================
-          PRODUCT INFORMATION
-      ========================================================= */}
-
-      <div className="flex flex-1 flex-col gap-2 p-4">
-        {/* Unit + Vendor */}
-
-        <div className="flex items-center justify-between gap-2 text-xs text-gray-500">
-          <span>
-            {selectedVariant
-              ? selectedVariant.unit
-              : product.unit}
-          </span>
-
-          {product.vendor_id &&
-            product.vendor_name && (
-              <Link
-                to={`/vendors/${product.vendor_id}`}
-                onClick={(e) =>
-                  e.stopPropagation()
-                }
-                className="max-w-[55%] truncate rounded-full bg-[#8BA888]/15 px-2 py-0.5 text-[10px] font-semibold text-[#1B4332] hover:bg-[#8BA888]/30"
-                data-testid={`vendor-badge-${product.slug}`}
-              >
-                by {product.vendor_name}
-              </Link>
-            )}
-        </div>
-
-        {/* Product Name */}
-
-        <Link
-          to={`/products/${product.slug}`}
-          className="line-clamp-2 text-sm font-semibold text-[#1A1A1A] hover:text-[#1B4332]"
-        >
-          {product.name}
-        </Link>
-
-        {/* =======================================================
-            VARIANT SELECTOR
-        ======================================================= */}
+        {/* Variant Selector */}
 
         {variants.length > 0 && (
-          <div className="mt-1">
-            <div className="mb-1.5 text-[11px] font-semibold text-gray-500">
-              Select weight
-            </div>
+          <div className="mt-2">
+            <select
+              value={
+                selectedVariant?.label || ""
+              }
+              onChange={(event) => {
+                const variant =
+                  variants.find(
+                    (item) =>
+                      String(item.label) ===
+                      event.target.value
+                  );
 
-            <div className="flex flex-wrap gap-1.5">
-              {variants.map((variant) => {
-                const selected =
-                  selectedVariantLabel ===
-                  variant.label;
-
-                const variantStock = Number(
-                  variant.stock ??
-                    product.stock ??
-                    0
+                setSelectedVariant(
+                  variant || null
                 );
-
-                return (
-                  <button
-                    key={variant.label}
-                    type="button"
-                    disabled={
-                      variantStock <= 0
-                    }
-                    onClick={() =>
-                      setSelectedVariantLabel(
-                        variant.label
-                      )
-                    }
-                    className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-all ${
-                      selected
-                        ? "border-[#1B4332] bg-[#1B4332] text-white"
-                        : "border-gray-200 bg-white text-[#1B4332] hover:border-[#8BA888] hover:bg-[#8BA888]/10"
-                    } ${
-                      variantStock <= 0
-                        ? "cursor-not-allowed opacity-40"
-                        : ""
-                    }`}
-                    data-testid={`variant-${product.slug}-${variant.label}`}
+              }}
+              className="w-full border border-gray-200 rounded-lg px-2 py-2 text-sm bg-white outline-none focus:border-green-500"
+            >
+              {variants.map(
+                (variant, index) => (
+                  <option
+                    key={`${variant.label}-${index}`}
+                    value={variant.label}
                   >
-                    {variant.label}
-                  </button>
-                );
-              })}
-            </div>
+                    {variant.label} - ₹
+                    {Number(
+                      variant.price
+                    ).toFixed(0)}
+                  </option>
+                )
+              )}
+            </select>
           </div>
         )}
 
-        {/* =======================================================
-            PRICE + CART CONTROLS
-        ======================================================= */}
+        {/* Price */}
 
-        <div className="mt-auto flex items-center justify-between gap-2 pt-2">
-          {/* Price */}
+        <div className="flex items-center gap-2 mt-3">
+          <span className="text-lg font-bold text-gray-900">
+            ₹{selectedPrice.toFixed(0)}
+          </span>
 
-          <div>
-            <div className="text-lg font-bold text-[#1B4332]">
-              {formatINR(activePrice)}
-            </div>
+          {mrp > selectedPrice && (
+            <span className="text-xs text-gray-400 line-through">
+              ₹{mrp.toFixed(0)}
+            </span>
+          )}
+        </div>
 
-            {activeMrp > activePrice && (
-              <div className="text-xs text-gray-400 line-through">
-                {formatINR(activeMrp)}
-              </div>
-            )}
+        <div className="text-xs text-gray-500 mt-1">
+          {selectedUnit}
+        </div>
 
-            {/* Selected variant */}
+        {/* Cart Controls */}
 
-            {selectedVariant && (
-              <div className="mt-0.5 text-[10px] font-medium text-gray-500">
-                {selectedVariant.label}
-              </div>
-            )}
-          </div>
-
-          {/* =====================================================
-              CART CONTROLS
-          ===================================================== */}
-
-          {inCart ? (
-            <div className="flex items-center gap-2 rounded-full border border-[#1B4332] bg-white p-0.5 shadow-sm">
-              {/* Decrease */}
-
-              <button
-                type="button"
-                onClick={
-                  handleDecrease
-                }
-                className="grid h-8 w-8 place-items-center rounded-full text-[#1B4332] transition-colors hover:bg-[#1B4332]/10"
-                data-testid={`decrement-${product.slug}`}
-                aria-label={`Decrease ${product.name} quantity`}
-              >
-                <Minus className="h-3.5 w-3.5" />
-              </button>
-
-              {/* Quantity */}
-
-              <span
-                className="min-w-6 text-center text-sm font-bold text-[#1B4332]"
-                data-testid={`qty-${product.slug}`}
-              >
-                {inCart.quantity}
-              </span>
-
-              {/* Increase */}
-
-              <button
-                type="button"
-                onClick={
-                  handleIncrease
-                }
-                disabled={
-                  inCart.quantity >=
-                  stock
-                }
-                className="grid h-8 w-8 place-items-center rounded-full text-[#1B4332] transition-colors hover:bg-[#1B4332]/10 disabled:cursor-not-allowed disabled:opacity-30"
-                data-testid={`increment-${product.slug}`}
-                aria-label={`Increase ${product.name} quantity`}
-              >
-                <Plus className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          ) : (
-            /* Add To Cart */
-
+        <div className="mt-3">
+          {quantity <= 0 ? (
             <button
               type="button"
-              disabled={stock <= 0}
-              onClick={
-                handleAddToCart
-              }
-              className="inline-flex items-center gap-1.5 rounded-full bg-[#1B4332] px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-[#2D6A4F] disabled:cursor-not-allowed disabled:opacity-40"
-              data-testid={`add-to-cart-${product.slug}`}
+              onClick={handleAddToCart}
+              className="w-full flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white font-semibold py-2.5 rounded-xl transition-colors"
             >
-              <ShoppingCart className="h-3.5 w-3.5" />
-
-              Add
+              <ShoppingCart size={17} />
+              Add to Cart
             </button>
+          ) : (
+            <div className="w-full flex items-center justify-between border border-green-600 rounded-xl overflow-hidden">
+              <button
+                type="button"
+                onClick={handleDecrease}
+                className="w-11 h-10 flex items-center justify-center text-green-700 hover:bg-green-50"
+                aria-label="Decrease quantity"
+              >
+                <Minus size={17} />
+              </button>
+
+              <span className="font-semibold text-gray-900">
+                {quantity}
+              </span>
+
+              <button
+                type="button"
+                onClick={handleIncrease}
+                className="w-11 h-10 flex items-center justify-center text-green-700 hover:bg-green-50"
+                aria-label="Increase quantity"
+              >
+                <Plus size={17} />
+              </button>
+            </div>
           )}
         </div>
       </div>
