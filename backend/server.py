@@ -1,10 +1,11 @@
-from dotenv import load_dotenv
 from pathlib import Path
+import os
+
+from dotenv import load_dotenv
+from twilio.rest import Client
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
-
-import os
 import logging
 import uuid
 import re
@@ -35,6 +36,25 @@ DB_NAME = os.environ["DB_NAME"]
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_DAYS = int(os.environ.get("JWT_EXPIRE_DAYS", "7"))
+# ---------------------------------------------------------------------------
+# Twilio Verify
+# ---------------------------------------------------------------------------
+
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
+TWILIO_VERIFY_SERVICE_SID = os.environ.get("TWILIO_VERIFY_SERVICE_SID")
+
+twilio_client = None
+
+if (
+    TWILIO_ACCOUNT_SID
+    and TWILIO_AUTH_TOKEN
+    and TWILIO_VERIFY_SERVICE_SID
+):
+    twilio_client = Client(
+        TWILIO_ACCOUNT_SID,
+        TWILIO_AUTH_TOKEN,
+    )
 cloudinary.config(
     cloud_name=os.environ.get("CLOUDINARY_CLOUD_NAME"),
     api_key=os.environ.get("CLOUDINARY_API_KEY"),
@@ -437,67 +457,153 @@ async def otp_verify(payload: OTPVerify):
 @api.post("/auth/password-reset/request")
 async def password_reset_request(payload: ForgotPasswordRequest):
     phone = payload.phone.strip()
+
     if not phone:
-        raise HTTPException(status_code=400, detail="Phone number is required")
-
-    # Keep the response generic in production to avoid account enumeration.
-    user = await db.users.find_one({"phone": phone})
-    code = f"{secrets.randbelow(1000000):06d}"
-
-    if user:
-        await db.password_reset_otps.update_one(
-            {"phone": phone},
-            {
-                "$set": {
-                    "code": code,
-                    "expires_at": (now_utc() + timedelta(minutes=5)).isoformat(),
-                    "attempts": 0,
-                }
-            },
-            upsert=True,
+        raise HTTPException(
+            status_code=400,
+            detail="Phone number is required"
         )
-        logger.info(f"[PASSWORD RESET OTP] phone={phone} code={code}")
 
-    response = {
+    if not twilio_client:
+        logger.error("Twilio Verify is not configured.")
+        raise HTTPException(
+            status_code=500,
+            detail="OTP service is not configured."
+        )
+
+    # Indian mobile number -> E.164 format
+    if re.fullmatch(r"\d{10}", phone):
+        phone = f"+91{phone}"
+    elif not phone.startswith("+"):
+        raise HTTPException(
+            status_code=400,
+            detail="Please enter a valid mobile number."
+        )
+
+    # Check whether account exists
+    user = await db.users.find_one({"phone": phone})
+
+    # Keep response generic to avoid account enumeration.
+    if not user:
+        return {
+            "success": True,
+            "message": "If an account exists with this phone number, an OTP has been sent."
+        }
+
+    try:
+        verification = await twilio_client.verify.v2 \
+            .services(TWILIO_VERIFY_SERVICE_SID) \
+            .verifications.create(
+                to=phone,
+                channel="sms",
+            )
+
+        logger.info(
+            f"[PASSWORD RESET OTP] Twilio verification started "
+            f"for phone ending {phone[-4:]}, "
+            f"status={verification.status}"
+        )
+
+    except Exception as exc:
+        logger.exception(
+            "Failed to send password reset OTP through Twilio."
+        )
+
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to send OTP. Please try again."
+        )
+
+    return {
         "success": True,
-        "message": "If an account exists with this phone number, an OTP has been generated."
+        "message": "OTP sent successfully."
     }
-    # Existing project uses mock OTPs. Keep the code available for local/dev testing,
-    # but never expose it when APP_ENV=production.
-    if os.environ.get("APP_ENV", "development").lower() != "production" and user:
-        response["debug_code"] = code
-    return response
-
 
 @api.post("/auth/password-reset/verify")
 async def password_reset_verify(payload: PasswordResetOTPVerify):
     phone = payload.phone.strip()
-    rec = await db.password_reset_otps.find_one({"phone": phone})
-    if not rec or rec.get("code") != payload.code:
-        raise HTTPException(status_code=400, detail="Invalid OTP")
-    if datetime.fromisoformat(rec["expires_at"]) < now_utc():
-        await db.password_reset_otps.delete_one({"phone": phone})
-        raise HTTPException(status_code=400, detail="OTP expired")
+    code = payload.code.strip()
 
+    if not phone:
+        raise HTTPException(
+            status_code=400,
+            detail="Phone number is required"
+        )
+
+    if not re.fullmatch(r"\d{6}", code):
+        raise HTTPException(
+            status_code=400,
+            detail="Please enter a valid 6-digit OTP."
+        )
+
+    if not twilio_client:
+        logger.error("Twilio Verify is not configured.")
+        raise HTTPException(
+            status_code=500,
+            detail="OTP service is not configured."
+        )
+
+    # Convert Indian 10-digit number to E.164 format
+    if re.fullmatch(r"\d{10}", phone):
+        phone = f"+91{phone}"
+    elif not phone.startswith("+"):
+        raise HTTPException(
+            status_code=400,
+            detail="Please enter a valid mobile number."
+        )
+
+    try:
+        verification_check = await twilio_client.verify.v2 \
+            .services(TWILIO_VERIFY_SERVICE_SID) \
+            .verification_checks.create(
+                to=phone,
+                code=code,
+            )
+
+    except Exception:
+        logger.exception(
+            "Twilio OTP verification failed."
+        )
+
+        raise HTTPException(
+            status_code=400,
+            detail="Unable to verify OTP. Please try again."
+        )
+
+    if verification_check.status != "approved":
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired OTP."
+        )
+
+    # OTP is verified by Twilio.
+    # Now find the user and create the existing reset token.
     user = await db.users.find_one({"phone": phone})
+
     if not user:
-        await db.password_reset_otps.delete_one({"phone": phone})
-        raise HTTPException(status_code=400, detail="Invalid OTP")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid OTP."
+        )
 
     reset_token = secrets.token_urlsafe(32)
-    token_hash = hashlib.sha256(reset_token.encode()).hexdigest()
+    token_hash = hashlib.sha256(
+        reset_token.encode()
+    ).hexdigest()
+
     await db.password_reset_tokens.update_one(
         {"phone": phone},
         {
             "$set": {
                 "user_id": str(user["_id"]),
                 "token_hash": token_hash,
-                "expires_at": (now_utc() + timedelta(minutes=10)).isoformat(),
+                "expires_at": (
+                    now_utc() + timedelta(minutes=10)
+                ).isoformat(),
             }
         },
         upsert=True,
     )
-    await db.password_reset_otps.delete_one({"phone": phone})
 
     return {
         "success": True,
