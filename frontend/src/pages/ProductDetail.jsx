@@ -38,10 +38,9 @@ export default function ProductDetail() {
   | Selected Variant
   |--------------------------------------------------------------------------
   |
-  | If product has variants, the first variant will be selected
-  | automatically.
+  | NULL means customer is buying the normal/base product.
   |
-  | For products without variants, selectedVariant remains null.
+  | Variant is OPTIONAL.
   |--------------------------------------------------------------------------
   */
 
@@ -122,12 +121,12 @@ export default function ProductDetail() {
   | Normalize Variants
   |--------------------------------------------------------------------------
   |
-  | Supports:
+  | Supports both:
   |
   | variants
   | varients
   |
-  | Older backend data may contain the typo "varients".
+  | because older backend data may contain the typo.
   |--------------------------------------------------------------------------
   */
 
@@ -151,7 +150,7 @@ export default function ProductDetail() {
       .map((variant, index) => {
         /*
         |--------------------------------------------------------------------------
-        | String Variant
+        | Backend may return object
         |--------------------------------------------------------------------------
         */
 
@@ -160,24 +159,13 @@ export default function ProductDetail() {
         ) {
           return {
             id: `${variant}-${index}`,
-
             label: variant,
-
             price: Number(
               product.price || 0
             ),
-
             unit: variant,
-
-            mrp: null,
           };
         }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Variant Label
-        |--------------------------------------------------------------------------
-        */
 
         const label = String(
           variant?.label ||
@@ -185,12 +173,6 @@ export default function ProductDetail() {
             variant?.name ||
             ""
         ).trim();
-
-        /*
-        |--------------------------------------------------------------------------
-        | Variant Price
-        |--------------------------------------------------------------------------
-        */
 
         const price = Number(
           variant?.price ??
@@ -200,29 +182,11 @@ export default function ProductDetail() {
             0
         );
 
-        /*
-        |--------------------------------------------------------------------------
-        | Variant Unit
-        |--------------------------------------------------------------------------
-        */
-
         const unit =
           variant?.unit ||
           label ||
           product.unit ||
           "1 pc";
-
-        /*
-        |--------------------------------------------------------------------------
-        | Variant MRP
-        |--------------------------------------------------------------------------
-        */
-
-        const mrp =
-          variant?.mrp ??
-          variant?.compare_at_price ??
-          variant?.original_price ??
-          null;
 
         return {
           ...variant,
@@ -243,8 +207,6 @@ export default function ProductDetail() {
                 ),
 
           unit,
-
-          mrp,
         };
       })
       .filter(
@@ -255,32 +217,14 @@ export default function ProductDetail() {
 
   /*
   |--------------------------------------------------------------------------
-  | Automatically Select First Variant
-  |--------------------------------------------------------------------------
-  |
-  | IMPORTANT:
-  |
-  | If variants exist, variant selection is mandatory.
-  |
-  | Therefore the first available variant is automatically selected.
-  |--------------------------------------------------------------------------
-  */
-
-  useEffect(() => {
-    if (
-      variants.length > 0
-    ) {
-      setSelectedVariant(
-        variants[0]
-      );
-    } else {
-      setSelectedVariant(null);
-    }
-  }, [variants]);
-
-  /*
-  |--------------------------------------------------------------------------
   | Current Price
+  |--------------------------------------------------------------------------
+  |
+  | No variant selected:
+  |     product.price
+  |
+  | Variant selected:
+  |     variant.price
   |--------------------------------------------------------------------------
   */
 
@@ -323,21 +267,9 @@ export default function ProductDetail() {
   |--------------------------------------------------------------------------
   */
 
-  const discount =
-    displayMrp &&
-    Number(displayMrp) >
-      Number(displayPrice)
-      ? Math.round(
-          (
-            (
-              Number(displayMrp) -
-              Number(displayPrice)
-            ) /
-            Number(displayMrp)
-          ) *
-            100
-        )
-      : 0;
+  // Promotional badge is fixed at 10%. The actual discount is applied
+  // only after GROCERY10 is explicitly applied at checkout.
+  const discount = 10;
 
   /*
   |--------------------------------------------------------------------------
@@ -350,12 +282,6 @@ export default function ProductDetail() {
       return;
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Stock Validation
-    |--------------------------------------------------------------------------
-    */
-
     if (
       Number(product.stock || 0) <= 0
     ) {
@@ -367,23 +293,8 @@ export default function ProductDetail() {
 
     /*
     |--------------------------------------------------------------------------
-    | Mandatory Variant Validation
-    |--------------------------------------------------------------------------
-    */
-
-    if (
-      variants.length > 0 &&
-      !selectedVariant
-    ) {
-      toast.error(
-        "Please select a variant."
-      );
-      return;
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Variant Product
+    | IMPORTANT:
+    | Variant is OPTIONAL.
     |--------------------------------------------------------------------------
     */
 
@@ -393,9 +304,7 @@ export default function ProductDetail() {
           ...product,
 
           price:
-            Number(
-              selectedVariant.price || 0
-            ),
+            selectedVariant.price,
 
           unit:
             selectedVariant.unit ||
@@ -409,9 +318,7 @@ export default function ProductDetail() {
 
         selectedVariant.label,
 
-        Number(
-          selectedVariant.price || 0
-        ),
+        selectedVariant.price,
 
         selectedVariant.unit ||
           selectedVariant.label ||
@@ -423,7 +330,7 @@ export default function ProductDetail() {
 
     /*
     |--------------------------------------------------------------------------
-    | Normal Product Without Variants
+    | Normal product without variant
     |--------------------------------------------------------------------------
     */
 
@@ -455,12 +362,6 @@ export default function ProductDetail() {
       return;
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Stock Validation
-    |--------------------------------------------------------------------------
-    */
-
     if (
       Number(product.stock || 0) <= 0
     ) {
@@ -472,23 +373,7 @@ export default function ProductDetail() {
 
     /*
     |--------------------------------------------------------------------------
-    | Mandatory Variant Validation
-    |--------------------------------------------------------------------------
-    */
-
-    if (
-      variants.length > 0 &&
-      !selectedVariant
-    ) {
-      toast.error(
-        "Please select a variant."
-      );
-      return;
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Variant Selected
+    | Variant selected
     |--------------------------------------------------------------------------
     */
 
@@ -498,9 +383,7 @@ export default function ProductDetail() {
           ...product,
 
           price:
-            Number(
-              selectedVariant.price || 0
-            ),
+            selectedVariant.price,
 
           unit:
             selectedVariant.unit ||
@@ -514,9 +397,7 @@ export default function ProductDetail() {
 
         selectedVariant.label,
 
-        Number(
-          selectedVariant.price || 0
-        ),
+        selectedVariant.price,
 
         selectedVariant.unit ||
           selectedVariant.label ||
@@ -525,7 +406,7 @@ export default function ProductDetail() {
     } else {
       /*
       |--------------------------------------------------------------------------
-      | Normal Product
+      | Normal product
       |--------------------------------------------------------------------------
       */
 
@@ -675,13 +556,17 @@ export default function ProductDetail() {
                     )}
                   </div>
 
-                  {discount > 0 && (
-                    <span className="rounded-full bg-[#E07A5F]/10 px-2.5 py-0.5 text-sm font-semibold text-[#E07A5F]">
-                      {discount}% off
-                    </span>
-                  )}
+                  <span className="rounded-full bg-[#E07A5F]/10 px-2.5 py-0.5 text-sm font-semibold text-[#E07A5F]">
+                    {discount}% off
+                  </span>
                 </>
               )}
+
+            {!(displayMrp && Number(displayMrp) > Number(displayPrice)) && (
+              <span className="rounded-full bg-[#E07A5F]/10 px-2.5 py-0.5 text-sm font-semibold text-[#E07A5F]">
+                {discount}% off
+              </span>
+            )}
           </div>
 
           {/* ===================================================
@@ -707,7 +592,7 @@ export default function ProductDetail() {
           </p>
 
           {/* ===================================================
-              VARIANT SELECTOR
+              OPTIONAL VARIANT SELECTOR
           ==================================================== */}
 
           {variants.length > 0 && (
@@ -717,8 +602,8 @@ export default function ProductDetail() {
             >
               <div className="mb-3 text-sm font-semibold text-[#1A1A1A]">
                 Select Weight / Variant{" "}
-                <span className="font-normal text-red-500">
-                  * Required
+                <span className="font-normal text-gray-400">
+                  (Optional)
                 </span>
               </div>
 
@@ -735,7 +620,9 @@ export default function ProductDetail() {
                         type="button"
                         onClick={() =>
                           setSelectedVariant(
-                            variant
+                            active
+                              ? null
+                              : variant
                           )
                         }
                         className={`rounded-xl border px-3 py-3 text-center transition-all ${
@@ -767,9 +654,8 @@ export default function ProductDetail() {
               </div>
 
               <p className="mt-2 text-xs text-gray-500">
-                Please select the required
-                weight / variant before adding
-                this product to your cart.
+                You can buy the normal product price
+                without selecting a variant.
               </p>
             </div>
           )}
@@ -857,11 +743,7 @@ export default function ProductDetail() {
               disabled={
                 Number(
                   product.stock || 0
-                ) <= 0 ||
-                (
-                  variants.length > 0 &&
-                  !selectedVariant
-                )
+                ) <= 0
               }
               onClick={
                 handleAddToCart
@@ -873,8 +755,6 @@ export default function ProductDetail() {
 
               {selectedVariant
                 ? `Add ${selectedVariant.label}`
-                : variants.length > 0
-                ? "Select Variant"
                 : "Add to Cart"}
             </button>
 
@@ -887,11 +767,7 @@ export default function ProductDetail() {
               disabled={
                 Number(
                   product.stock || 0
-                ) <= 0 ||
-                (
-                  variants.length > 0 &&
-                  !selectedVariant
-                )
+                ) <= 0
               }
               onClick={handleBuyNow}
               className="btn-accent flex-1 sm:flex-initial disabled:cursor-not-allowed disabled:opacity-50"

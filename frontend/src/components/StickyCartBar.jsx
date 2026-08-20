@@ -13,7 +13,7 @@ export default function StickyCartBar() {
 
   return (
     <div
-      className="fixed bottom-4 left-0 right-0 z-50 px-4 sm:bottom-6"
+      className="fixed bottom-4 left-0 right-0 z-[60] px-4 sm:bottom-6"
       data-testid="sticky-cart-bar"
     >
       <div className="mx-auto max-w-2xl">
