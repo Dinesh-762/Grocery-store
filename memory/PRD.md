@@ -67,7 +67,7 @@ Build a production-ready Grocery Store website for Ambajogai Grocery Store, then
 ### P1
 - [DONE Feb 2026] ✅ 60-second cooldown on `/api/auth/forgot-password` per email; attempts are preserved across OTP re-requests so the 5-attempt lockout can't be reset.
 - [DONE Feb 2026] ✅ `POST /api/upload/image` now requires auth (admin or vendor), enforces MIME whitelist (JPG/PNG/WEBP/GIF), and caps size at 5 MB (413 on oversize).
-- Improve backward-transition error message on order-status PATCH (currently returns forward-hint by accident).
+- [DONE Feb 2026] ✅ Admin order-status backward transitions now return `"Order cannot move backward from {current} to {new}"` instead of the forward-hint message.
 - Split `server.py` (~2300 lines) and `Admin.jsx` (~1460 lines) into modules.
 - TTL index on `password_resets`.
 - Replace `window.confirm` on address-delete with shadcn `AlertDialog`.

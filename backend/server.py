@@ -1017,6 +1017,8 @@ async def update_order_status(order_id: str, payload: OrderStatusUpdate, _: dict
             ni = flow.index(new_status)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid status transition")
+        if ni < ci:
+            raise HTTPException(status_code=400, detail=f"Order cannot move backward from {current} to {new_status}")
         if ni != ci + 1:
             raise HTTPException(status_code=400, detail=f"Must move to next step: {flow[ci + 1] if ci + 1 < len(flow) else 'Delivered'}")
 
