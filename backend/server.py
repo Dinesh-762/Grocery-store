@@ -744,23 +744,30 @@ async def delete_product(prod_id: str, _: dict = Depends(require_admin)):
     return {"success": True}
 
 
-# ---------------------------------------------------------------------------
-# Orders / Delivery Pricing
+# ---------------------------------------------------------------------------\r\n# Orders / Delivery Pricing
 # ---------------------------------------------------------------------------
 
 # Delivery pricing:
-#   <= 1.5 km  -> ₹13 per km
-#   > 1.5 km   -> ₹20 per km
+#   <= 1.5 km  -> ₹16 fixed
+#   > 1.5 km   -> ₹16 + ₹12 for every additional km
 #   subtotal >= ₹499 -> FREE delivery
-#
-# The store/customer coordinates are read from environment variables so the
-# production location can be changed without modifying code.
-DELIVERY_RATE_PER_KM = 13.0
-DELIVERY_RATE_ABOVE_1_5_KM = 20.0
+
+DELIVERY_BASE_FEE = 16.0
+DELIVERY_RATE_AFTER_1_5_KM = 12.0
+DELIVERY_BASE_DISTANCE_KM = 1.5
 FREE_DELIVERY_THRESHOLD = 499.0
-MAX_DELIVERY_DISTANCE_KM = float(os.environ.get("MAX_DELIVERY_DISTANCE_KM", "12.0"))
-STORE_LATITUDE = float(os.environ.get("STORE_LATITUDE", "18.73"))
-STORE_LONGITUDE = float(os.environ.get("STORE_LONGITUDE", "76.38"))
+
+MAX_DELIVERY_DISTANCE_KM = float(
+    os.environ.get("MAX_DELIVERY_DISTANCE_KM", "12.0")
+)
+
+STORE_LATITUDE = float(
+    os.environ.get("STORE_LATITUDE", "18.73")
+)
+
+STORE_LONGITUDE = float(
+    os.environ.get("STORE_LONGITUDE", "76.38")
+)
 
 
 def calculate_distance_km(
@@ -773,8 +780,10 @@ def calculate_distance_km(
     import math
 
     earth_radius_km = 6371.0
+
     lat1_rad = math.radians(float(lat1))
     lat2_rad = math.radians(float(lat2))
+
     delta_lat = math.radians(float(lat2) - float(lat1))
     delta_lon = math.radians(float(lon2) - float(lon1))
 
@@ -784,24 +793,44 @@ def calculate_distance_km(
         * math.cos(lat2_rad)
         * math.sin(delta_lon / 2) ** 2
     )
+
     a = min(1.0, max(0.0, a))
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    c = 2 * math.atan2(
+        math.sqrt(a),
+        math.sqrt(1 - a),
+    )
+
     return round(earth_radius_km * c, 2)
 
 
-def calculate_delivery_fee(distance_km: float, subtotal: float = 0.0) -> float:
-    """Calculate delivery fee from distance and subtotal."""
+def calculate_delivery_fee(
+    distance_km: float,
+    subtotal: float = 0.0,
+) -> float:
+    """Calculate delivery fee using the ₹16 + ₹12/km rule."""
+
     distance_km = max(0.0, float(distance_km))
     subtotal = max(0.0, float(subtotal))
 
-    # Free delivery for eligible orders or a zero-distance calculation.
-    if subtotal >= FREE_DELIVERY_THRESHOLD or distance_km <= 0:
+    # Free delivery for eligible orders.
+    if subtotal >= FREE_DELIVERY_THRESHOLD:
         return 0.0
 
-    if distance_km <= 1.5:
-        return round(distance_km * DELIVERY_RATE_PER_KM, 2)
+    # Up to 1.5 km = fixed ₹16.
+    if distance_km <= DELIVERY_BASE_DISTANCE_KM:
+        return DELIVERY_BASE_FEE
 
-    return round(distance_km * DELIVERY_RATE_ABOVE_1_5_KM, 2)
+    # Above 1.5 km:
+    # ₹16 + ₹12 for every additional km.
+    additional_distance = distance_km - DELIVERY_BASE_DISTANCE_KM
+
+    delivery_fee = (
+        DELIVERY_BASE_FEE
+        + (additional_distance * DELIVERY_RATE_AFTER_1_5_KM)
+    )
+
+    return round(delivery_fee, 2)
 
 
 def safe_object_id(id_str: str) -> ObjectId:
@@ -932,7 +961,7 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Sorry! Fatafat currently delivers only within "
+                f"Sorry! We currently deliver only within "
                 f"{MAX_DELIVERY_DISTANCE_KM:g} km of the store. "
                 f"Your location is approximately {distance_km:.2f} km away."
             ),

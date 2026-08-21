@@ -31,8 +31,9 @@ const CGST_RATE = 0.025;
 const SGST_RATE = 0.025;
 const GST_RATE = 0.05;
 
-const DELIVERY_RATE_PER_KM = 13;
-const DELIVERY_RATE_ABOVE_1_5_KM = 20;
+const DELIVERY_BASE_FEE = 16;
+const DELIVERY_RATE_AFTER_1_5_KM = 12;
+const DELIVERY_BASE_DISTANCE_KM = 1.5;
 
 /*
 |--------------------------------------------------------------------------
@@ -136,8 +137,6 @@ function calculateDeliveryFee(
 
   /*
    * Orders >= ₹499 get free delivery.
-   *
-   * Backend remains authoritative.
    */
 
   if (
@@ -146,23 +145,28 @@ function calculateDeliveryFee(
     return 0;
   }
 
+  /*
+   * Delivery pricing:
+   * Up to 1.5 km  -> ₹16 fixed
+   * Above 1.5 km -> ₹16 + ₹12 for every additional km
+   */
+
   if (
-    distanceKm <= 1.5
+    distanceKm <= DELIVERY_BASE_DISTANCE_KM
   ) {
-    return (
-      Math.round(
-        distanceKm *
-          DELIVERY_RATE_PER_KM *
-          100
-      ) / 100
-    );
+    return DELIVERY_BASE_FEE;
   }
+
+  const additionalDistance =
+    distanceKm - DELIVERY_BASE_DISTANCE_KM;
 
   return (
     Math.round(
-      distanceKm *
-        DELIVERY_RATE_ABOVE_1_5_KM *
-        100
+      (
+        DELIVERY_BASE_FEE +
+        additionalDistance *
+          DELIVERY_RATE_AFTER_1_5_KM
+      ) * 100
     ) / 100
   );
 }
@@ -1803,22 +1807,16 @@ ${
             {estimatedDistance !==
               null && (
               <div className="rounded-lg bg-[#8BA888]/10 px-3 py-2 text-xs text-[#1B4332]">
+ {Number(discountedSubtotal) >= 499
+  ? "FREE delivery"
+  : estimatedDistance <= 1.5
+    ? "₹16 delivery up to 1.5 km"
+    : "₹16 + ₹12/km after 1.5 km"}
 
-                {Number(
-                  discountedSubtotal
-                ) >= 499
-                  ? "FREE delivery"
-                  : estimatedDistance <=
-                    1.5
-                  ? `₹${DELIVERY_RATE_PER_KM}/km delivery`
-                  : `₹${DELIVERY_RATE_ABOVE_1_5_KM}/km delivery`}
+{" · "}
 
-                {" · "}
-
-                {estimatedDistance.toFixed(
-                  2
-                )}{" "}
-                km
+{estimatedDistance.toFixed(2)}{" "}
+km
 
               </div>
             )}
