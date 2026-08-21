@@ -1,4 +1,5 @@
 import Dashboard from "@/pages/Dashboard";
+import Catalogue from "@/pages/Catalogue";
 import VendorBottomNav from "@/components/VendorBottomNav";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { NavLink, Routes, Route, Navigate } from "react-router-dom";
@@ -99,8 +100,8 @@ export default function VendorDashboard() {
                 Catalogue now uses VProducts
                 instead of the old Catalogue component.
             */}
-            <Route path="catalogue" element={<VProducts />} />
-            <Route path="products" element={<VProducts />} />
+            <Route path="catalogue" element={<Catalogue />} />
+            <Route path="products" element={<Catalogue />} />
 
             <Route path="orders" element={<VOrders />} />
             <Route path="analytics" element={<VAnalytics />} />
