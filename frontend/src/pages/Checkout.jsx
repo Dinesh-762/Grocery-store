@@ -124,7 +124,9 @@ export default function Checkout() {
   const removeCoupon = () => { setCoupon(null); setCouponInput(""); };
 
   const discount = coupon?.discount || 0;
-  const total = Math.max(0, Math.round((cartTotal - discount) * 100) / 100);
+  // Compute effective delivery fee locally so the UI matches what the server will charge (13/20)
+  const effectiveDelivery = subtotal >= 499 ? 0 : (Number(f.distance_km || 1) <= 1.5 ? 13 : 20);
+  const total = Math.max(0, Math.round((subtotal + effectiveDelivery - discount) * 100) / 100);
 
   // UPI QR — use upi:// deep link encoded as QR via qrserver (no key needed)
   const upiUrl = `upi://pay?pa=${encodeURIComponent(store.upi_id)}&pn=${encodeURIComponent(store.upi_name)}&am=${total}&cu=INR&tn=${encodeURIComponent("Ambajogai Grocery Order")}`;
@@ -241,7 +243,7 @@ export default function Checkout() {
           </div>
           <div className="mt-4 space-y-2 border-t border-dashed pt-4 text-sm">
             <Row label="Subtotal" value={formatINR(subtotal)} />
-            <Row label="Delivery" value={deliveryFee === 0 ? "FREE" : formatINR(deliveryFee)} />
+            <Row label="Delivery" value={effectiveDelivery === 0 ? "FREE" : formatINR(effectiveDelivery)} />
             {discount > 0 && (
               <Row label={`Coupon (${coupon.code})`} value={`- ${formatINR(discount)}`} />
             )}
