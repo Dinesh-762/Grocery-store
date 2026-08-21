@@ -431,24 +431,30 @@ def order_to_out(o: dict) -> dict:
 
 
 @api.post("/upload/image")
-async def upload_image(file: UploadFile = File(...)):
+async def upload_image(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    if user.get("role") not in ("admin", "vendor"):
+        raise HTTPException(status_code=403, detail="Only admins and vendors can upload images")
+
+    allowed_types = {"image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"}
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type. Allowed: JPG, PNG, WEBP, GIF (got {file.content_type})")
+
+    MAX_BYTES = 5 * 1024 * 1024  # 5 MB
     try:
         contents = await file.read()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not read uploaded file")
 
-        result = cloudinary.uploader.upload(
-            contents,
-            folder="grocery_products"
-        )
+    if len(contents) == 0:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(contents) > MAX_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large. Max size is {MAX_BYTES // (1024*1024)} MB")
 
-        return {
-            "url": result.get("secure_url")
-        }
-
+    try:
+        result = cloudinary.uploader.upload(contents, folder="grocery_products")
+        return {"url": result.get("secure_url")}
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Image upload failed: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Image upload failed: {str(e)}")
 
 
 
@@ -532,6 +538,9 @@ def _password_reset_email_html(name: str, code: str) -> str:
     )
 
 
+FORGOT_PASSWORD_COOLDOWN_SEC = 60
+
+
 @api.post("/auth/forgot-password")
 async def forgot_password(payload: ForgotPasswordIn):
     email = payload.email.lower().strip()
@@ -539,14 +548,35 @@ async def forgot_password(payload: ForgotPasswordIn):
     # Always return success to prevent user enumeration
     if not user:
         return {"success": True, "message": "If an account exists, a code was sent."}
+
+    # 60-second cooldown between OTP requests per email
+    existing = await db.password_resets.find_one({"email": email})
+    if existing and existing.get("last_sent_at"):
+        try:
+            last_sent = datetime.fromisoformat(existing["last_sent_at"])
+            elapsed = (now_utc() - last_sent).total_seconds()
+            if elapsed < FORGOT_PASSWORD_COOLDOWN_SEC:
+                wait = int(FORGOT_PASSWORD_COOLDOWN_SEC - elapsed)
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Please wait {wait} seconds before requesting another code.",
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass  # bad timestamp — proceed
+
     code = str(uuid.uuid4().int)[-6:]
+    # Preserve attempts on re-request so a spammer cannot reset the 5-attempt lockout
+    prior_attempts = int(existing.get("attempts", 0)) if existing else 0
     await db.password_resets.update_one(
         {"email": email},
         {"$set": {
             "email": email,
             "code": code,
             "expires_at": (now_utc() + timedelta(minutes=10)).isoformat(),
-            "attempts": 0,
+            "attempts": prior_attempts,
+            "last_sent_at": iso_now(),
         }},
         upsert=True,
     )
@@ -555,7 +585,6 @@ async def forgot_password(payload: ForgotPasswordIn):
     try:
         await send_email(to=email, subject=subject, html=html)
     except HTTPException:
-        # keep 200 to avoid enumeration but log
         logger.error(f"Failed to send password reset email to {email}")
     return {"success": True, "message": "If an account exists, a code was sent."}
 

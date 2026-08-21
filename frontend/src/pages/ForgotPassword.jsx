@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, formatApiError } from "@/lib/api";
 import { toast } from "sonner";
@@ -11,6 +11,14 @@ export default function ForgotPassword() {
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
+
+  // Tick the cooldown timer once per second
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = setTimeout(() => setCooldown((c) => Math.max(0, c - 1)), 1000);
+    return () => clearTimeout(t);
+  }, [cooldown]);
 
   const sendCode = async (e) => {
     e.preventDefault();
@@ -20,8 +28,15 @@ export default function ForgotPassword() {
       await api.post("/auth/forgot-password", { email: email.trim().toLowerCase() });
       toast.success("If an account exists, we sent a code to your email.");
       setStep(2);
-    } catch (e) {
-      toast.error(formatApiError(e));
+      setCooldown(60);
+    } catch (err) {
+      // 429 → surface remaining seconds inline
+      const detail = err?.response?.data?.detail || "";
+      const match = /wait\s+(\d+)\s+seconds/i.exec(detail);
+      if (err?.response?.status === 429 && match) {
+        setCooldown(Number(match[1]));
+      }
+      toast.error(formatApiError(err));
     } finally {
       setLoading(false);
     }
@@ -75,10 +90,15 @@ export default function ForgotPassword() {
                   />
                 </div>
               </div>
-              <button type="submit" disabled={loading} className="btn-primary w-full" data-testid="forgot-send-code">
+              <button type="submit" disabled={loading || cooldown > 0} className="btn-primary w-full" data-testid="forgot-send-code">
                 {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-                {loading ? "Sending…" : "Send code"}
+                {cooldown > 0 ? `Wait ${cooldown}s…` : loading ? "Sending…" : "Send code"}
               </button>
+              {cooldown > 0 && (
+                <p className="text-center text-xs text-[#4A4A4A]" data-testid="forgot-cooldown-hint">
+                  You can request another code in {cooldown} seconds.
+                </p>
+              )}
             </form>
           )}
 
