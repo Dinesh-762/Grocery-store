@@ -1,7 +1,8 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { NavLink, Routes, Route, Navigate } from "react-router-dom";
 import { api, formatINR, formatApiError } from "@/lib/api";
 import { toast } from "sonner";
+import { playAlert } from "@/lib/audioAlert";
 import {
   LayoutDashboard,
   ShoppingBag,
@@ -205,6 +206,8 @@ function OrderCard({ o, onStatus, showActions = true }) {
 function AssignedOrders() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [alertMuted, setAlertMuted] = useState(() => localStorage.getItem("delivery_new_order_muted") === "1");
+  const lastSeenIdRef = useRef(localStorage.getItem("delivery_last_seen_order_id") || "");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -215,6 +218,36 @@ function AssignedOrders() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Poll for newly assigned orders every 15s and play alert
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const { data } = await api.get("/delivery/new-count");
+        if (cancelled || !data.latest_id) return;
+        if (lastSeenIdRef.current && data.latest_id !== lastSeenIdRef.current) {
+          if (!alertMuted) {
+            playAlert();
+            toast.success("New delivery assigned!", { duration: 6000 });
+          }
+          load();
+        }
+        lastSeenIdRef.current = data.latest_id;
+        localStorage.setItem("delivery_last_seen_order_id", data.latest_id);
+      } catch { /* silent */ }
+    };
+    check();
+    const t = setInterval(check, 15000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [alertMuted, load]);
+
+  const toggleMute = () => {
+    const next = !alertMuted;
+    setAlertMuted(next);
+    localStorage.setItem("delivery_new_order_muted", next ? "1" : "0");
+    if (!next) playAlert();
+  };
+
   const setStatus = async (id, status) => {
     try {
       await api.patch(`/delivery/orders/${id}/status`, { status });
@@ -224,11 +257,27 @@ function AssignedOrders() {
   };
 
   if (loading) return <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#1B4332]" />;
-  if (orders.length === 0) return <div className="rounded-2xl border border-dashed border-[#E5E5E5] p-10 text-center text-[#4A4A4A]">No active assignments right now.</div>;
 
   return (
     <div className="space-y-4" data-testid="delivery-orders">
-      {orders.map((o) => <OrderCard key={o.id} o={o} onStatus={setStatus} />)}
+      <div className="flex justify-end">
+        <button
+          onClick={toggleMute}
+          className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
+            alertMuted
+              ? "border-gray-300 bg-gray-100 text-gray-600 hover:bg-gray-200"
+              : "border-[#1B4332] bg-[#1B4332]/5 text-[#1B4332] hover:bg-[#1B4332]/10"
+          }`}
+          data-testid="delivery-alert-toggle"
+        >
+          {alertMuted ? "🔕 Alert muted" : "🔔 Alert on"}
+        </button>
+      </div>
+      {orders.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-[#E5E5E5] p-10 text-center text-[#4A4A4A]">No active assignments right now.</div>
+      ) : (
+        orders.map((o) => <OrderCard key={o.id} o={o} onStatus={setStatus} />)
+      )}
     </div>
   );
 }

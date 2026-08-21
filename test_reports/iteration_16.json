@@ -1,0 +1,48 @@
+{
+  "summary": "Tested only the NEW feature batch (message 363): email-OTP forgot/reset password, saved delivery addresses, strict order-status flow, new-order alert polling endpoints + UI toggles, delivery-fee formula, category image upload, home 'Shop by Store' grouping. Backend: 26/26 pytest cases pass (3 consecutive clean runs) in /app/backend/tests/test_iteration16_new_features.py. Frontend: all 8 new UI flows verified on the preview URL (forgot-password 2-step, login link, Shop by Store, checkout saved addresses incl. save/pick/new/delete, admin alert toggle + persistence, admin strict status dropdown + PATCH, admin category image upload via Cloudinary, delivery alert toggle + persistence, and the live new-order toast/alert path).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/auth/forgot-password", "issue": "Emergent Resend returned HTTP 429 'email rate limit exceeded' during repeated tests; endpoint still returns 200 and only logs the failure, so a user can be told 'code sent' when no email was delivered. Consider (a) rate-limiting requests per email (currently unlimited, each call overwrites the code and resets the attempt counter, which weakens the 5-attempt lockout) and (b) surfacing a generic retry hint when the provider hard-fails."},
+      {"endpoint": "POST /api/users/me/addresses", "issue": "No cap on number of saved addresses and no duplicate detection; label is a free-form string (Home/Work/Other not enforced server-side)."},
+      {"endpoint": "PATCH /api/admin/orders/{id}/status", "issue": "Backward transition (Accepted -> Pending) is rejected with the forward-hint message 'Must move to next step: Preparing' instead of an explicit 'cannot move backward' message. Behaviour correct, message misleading."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Checkout - saved address card", "issues": ["Delete (trash) icon uses text-gray-400 on white: low contrast, easy to miss until hover", "Deletion uses native window.confirm() instead of a shadcn AlertDialog (inconsistent with rest of app)"]},
+      {"screen": "Checkout - 'Use a new address'", "issues": ["Clears only line1/landmark/area/pincode; full_name and phone are retained (may be intentional, but the spec said 'clears form')"]},
+      {"screen": "Admin Orders", "issues": ["Sonner toast overlays the header account menu (\"Store/Sign-out\" text is covered) at 1920px"]},
+      {"screen": "Vendor storefront /vendors/:id", "issues": ["Banner + logo images 404 for the seeded TEST vendor (bad seed image URLs); one seeded product still uses image https://x/y.jpg which fails DNS and logs console errors on Admin Orders"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration16_new_features.py",
+    "/app/test_reports/pytest/it16.xml"
+  ],
+  "action_items": [
+    "Optional: rate-limit /api/auth/forgot-password per email (provider returned 429 under load) and note that re-requesting a code resets the 5-attempt lockout.",
+    "Optional: change the backward-transition error message on PATCH /api/admin/orders/{id}/status to say the order cannot move backward.",
+    "Optional polish: darken the checkout delete-address icon, replace window.confirm with an AlertDialog, and fix/replace the broken seeded vendor banner/logo and https://x/y.jpg product image."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 2326 lines and Admin.jsx 1460 lines — both exceed the 700-line guideline; split into modules/routers and per-tab admin components.",
+    "Admin.jsx has its import of lucide-react icons placed AFTER top-level code (line 20) — valid ESM but hurts readability/lint hygiene.",
+    "forgot_password upsert resets 'attempts' to 0, so unlimited OTP requests defeat the brute-force lockout; consider a per-email request cooldown + attempt carry-over.",
+    "db.password_resets has no TTL index and no unique index on email — expired codes accumulate and concurrent upserts could duplicate records.",
+    "POST /api/upload/image has no auth guard, no MIME/size validation — any anonymous caller can push images to the Cloudinary account.",
+    "Delivery-fee tiers are duplicated between backend compute_delivery_fee and the hardcoded Checkout.jsx distance-km <option> labels; a mismatch would silently mislead users."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration16_new_features.py"
+  ],
+  "success_rate": {"backend": "100% (26/26)", "frontend": "100% of new flows verified"},
+  "seed_data_creation": "Created two persistent test accounts for UI testing: test_it16_cust_ui@example.com / Test@123 (customer) and test_it16_dp_ui@example.com / Deliver@123 (delivery role). All test orders, addresses, categories and password_reset docs created during testing were deleted, product stock was restored, and the one pre-existing Pending order advanced during the admin dropdown test (6a70a1be...) was reverted to Pending in the DB.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@ambajogai.com / Admin@123 · test_it16_cust_ui@example.com / Test@123 · test_it16_dp_ui@example.com / Deliver@123",
+  "context_for_next_testing_agent": "Run backend suite with `cd /app/backend && python -m pytest tests/test_iteration16_new_features.py` (pytest.ini uses xdist loadscope; fixtures are worker-scoped via PYTEST_XDIST_WORKER so do not remove the WORKER suffixes). Notes: (1) order items require name/price/image/unit in POST /api/orders, (2) several seeded products are out of stock — always use `button[data-testid^=\"add-to-cart-\"]:not([disabled])`, (3) checkout delete-address uses window.confirm so Playwright must accept the dialog, (4) the Delivery alert toggle lives on the 'My Orders' tab, not Dashboard, (5) new-order alert can be verified deterministically by setting localStorage admin_last_seen_order_id to a stale value before loading /admin/orders, (6) urllib requests to the preview URL get 403 — use `requests`.",
+  "rca_of_the_issue": "No functional defects found. Initial red test runs were all test-harness issues: xdist worker collisions on session fixtures, missing required OrderItem fields, product stock depletion from test orders (now restored after each order), and Playwright auto-dismissing the native confirm dialog on address delete. Delivery-fee math verified exactly: 1.0km=15, 3.0km=33, 5.0km=57, subtotal>=499 => 0."
+}

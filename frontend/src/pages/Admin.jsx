@@ -1,7 +1,22 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { NavLink, Routes, Route, Navigate } from "react-router-dom";
 import { api, formatINR, formatApiError } from "@/lib/api";
 import { toast } from "sonner";
+import { playAlert } from "@/lib/audioAlert";
+
+/* Order status flow — strict forward-only progression (enforced by backend too) */
+const STATUS_FLOW = ["Pending", "Accepted", "Preparing", "Packed", "Ready", "Out For Delivery", "Delivered"];
+
+function slugify(s) {
+  return String(s || "").toLowerCase().trim().replace(/[^\w\s-]/g, "").replace(/\s+/g, "-");
+}
+
+function allowedNextStatuses(current) {
+  if (current === "Cancelled" || current === "Delivered") return [current];
+  const idx = STATUS_FLOW.indexOf(current);
+  const next = idx >= 0 && idx < STATUS_FLOW.length - 1 ? [STATUS_FLOW[idx + 1]] : [];
+  return [current, ...next, "Cancelled"];
+}
 import {
   LayoutDashboard,
   Package,
@@ -556,6 +571,8 @@ function OrdersAdmin() {
   const [dps, setDps] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("");
+  const [alertMuted, setAlertMuted] = useState(() => localStorage.getItem("admin_new_order_muted") === "1");
+  const lastSeenIdRef = useRef(localStorage.getItem("admin_last_seen_order_id") || "");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -571,6 +588,36 @@ function OrdersAdmin() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Poll for new pending orders every 15s and play alert on new arrivals
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const { data } = await api.get("/admin/orders/pending-count");
+        if (cancelled || !data.latest_id) return;
+        if (lastSeenIdRef.current && data.latest_id !== lastSeenIdRef.current) {
+          if (!alertMuted) {
+            playAlert();
+            toast.success(`New order received! ${data.count} pending`, { duration: 6000 });
+          }
+          load();
+        }
+        lastSeenIdRef.current = data.latest_id;
+        localStorage.setItem("admin_last_seen_order_id", data.latest_id);
+      } catch { /* silent */ }
+    };
+    check();
+    const t = setInterval(check, 15000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [alertMuted, load]);
+
+  const toggleMute = () => {
+    const next = !alertMuted;
+    setAlertMuted(next);
+    localStorage.setItem("admin_new_order_muted", next ? "1" : "0");
+    if (!next) playAlert(); // preview when unmuting
+  };
 
   const setStatus = async (id, status) => {
     try {
@@ -600,12 +647,26 @@ function OrdersAdmin() {
 
   return (
     <div data-testid="orders-admin">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h2 className="font-heading text-2xl font-semibold">Orders</h2>
-        <select value={filter} onChange={(e) => setFilter(e.target.value)} className="input-base w-48">
-          <option value="">All</option>
-          {ALL_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={toggleMute}
+            className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
+              alertMuted
+                ? "border-gray-300 bg-gray-100 text-gray-600 hover:bg-gray-200"
+                : "border-[#1B4332] bg-[#1B4332]/5 text-[#1B4332] hover:bg-[#1B4332]/10"
+            }`}
+            data-testid="new-order-alert-toggle"
+            title="Toggle new-order sound alert"
+          >
+            {alertMuted ? "🔕 Alert muted" : "🔔 Alert on"}
+          </button>
+          <select value={filter} onChange={(e) => setFilter(e.target.value)} className="input-base w-48">
+            <option value="">All</option>
+            {ALL_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
       </div>
 
       {loading ? (
@@ -636,7 +697,9 @@ function OrdersAdmin() {
                       className="input-base w-44 text-sm"
                       data-testid={`status-select-${o.id}`}
                     >
-                      {ALL_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                      {allowedNextStatuses(o.status).map((s) => (
+                        <option key={s} value={s}>{s}{s === o.status ? " (current)" : ""}</option>
+                      ))}
                     </select>
                   </div>
                 </div>
@@ -751,6 +814,7 @@ function Categories() {
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState({ name: "", slug: "", image: "", description: "" });
   const [showForm, setShowForm] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -760,6 +824,22 @@ function Categories() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const uploadImage = async (file) => {
+    if (!file) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      setUploading(true);
+      const res = await api.post("/upload/image", fd, { headers: { "Content-Type": "multipart/form-data" } });
+      setForm((f) => ({ ...f, image: res.data.url }));
+      toast.success("Image uploaded");
+    } catch (e) {
+      toast.error(formatApiError(e) || "Image upload failed");
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const save = async (e) => {
     e.preventDefault();
@@ -786,20 +866,34 @@ function Categories() {
     <div data-testid="categories-admin">
       <div className="mb-6 flex items-center justify-between">
         <h2 className="font-heading text-2xl font-semibold">Categories ({cats.length})</h2>
-        <button onClick={() => setShowForm((v) => !v)} className="btn-primary">
+        <button onClick={() => setShowForm((v) => !v)} className="btn-primary" data-testid="new-category">
           <Plus className="h-4 w-4" /> Add category
         </button>
       </div>
 
       {showForm && (
         <form onSubmit={save} className="card-base mb-6 grid gap-4 p-6 sm:grid-cols-2">
-          <FField label="Name" value={form.name} onChange={(v) => setForm({ ...form, name: v })} required />
-          <FField label="Slug" value={form.slug} onChange={(v) => setForm({ ...form, slug: v })} placeholder="auto from name" />
+          <FField label="Name" value={form.name} onChange={(v) => setForm({ ...form, name: v })} required data-testid="category-name" />
+          <FField label="Slug" value={form.slug} onChange={(v) => setForm({ ...form, slug: v })} placeholder="auto from name" data-testid="category-slug" />
           <div className="sm:col-span-2">
-            <FField label="Image URL" value={form.image} onChange={(v) => setForm({ ...form, image: v })} />
+            <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Category image</label>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(e) => uploadImage(e.target.files?.[0])}
+              className="input-base"
+              data-testid="category-image-file"
+            />
+            {uploading && <p className="mt-2 text-xs text-[#1B4332]">Uploading image…</p>}
+            {form.image && (
+              <img src={form.image} alt="Preview" className="mt-3 h-24 w-24 rounded-lg object-cover" data-testid="category-image-preview" />
+            )}
+            <div className="mt-2">
+              <FField label="Or paste image URL" value={form.image} onChange={(v) => setForm({ ...form, image: v })} placeholder="https://…" data-testid="category-image-url" />
+            </div>
           </div>
           <div className="sm:col-span-2 flex justify-end">
-            <button className="btn-primary">Save</button>
+            <button className="btn-primary" data-testid="save-category">Save</button>
           </div>
         </form>
       )}
@@ -879,7 +973,7 @@ function VendorsAdmin() {
                   </div>
                   <div className="mt-1 text-sm text-[#4A4A4A]">{v.owner_name} · {v.owner_email} · {v.phone}</div>
                   <div className="text-xs text-[#4A4A4A]">{v.business_address} - {v.business_pincode}</div>
-                  {v.business_description && <div className="mt-1 text-xs italic text-[#4A4A4A]">"{v.business_description}"</div>}
+                  {v.business_description && <div className="mt-1 text-xs italic text-[#4A4A4A]">&ldquo;{v.business_description}&rdquo;</div>}
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <button

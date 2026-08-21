@@ -14,6 +14,11 @@ from typing import List, Optional, Annotated
 
 import bcrypt
 import jwt
+import httpx
+import ipaddress
+from html import escape
+from html.parser import HTMLParser
+from urllib.parse import urlparse
 from bson import ObjectId
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -127,6 +132,109 @@ async def require_delivery(user: dict = Depends(get_current_user)) -> dict:
 
 DEFAULT_COMMISSION_PCT = float(os.environ.get("DEFAULT_COMMISSION_PCT", "10"))
 DEFAULT_DELIVERY_EARNING = float(os.environ.get("DEFAULT_DELIVERY_EARNING", "20"))
+
+# ---------------------------------------------------------------------------
+# Emergent-managed Email (Resend) — used for forgot-password OTP
+# ---------------------------------------------------------------------------
+EMAIL_BASE_URL = "https://integrations.emergentagent.com"
+EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY")
+EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "Ambajogai Grocery Store")
+
+_SHORTENERS = ("bit.ly", "tinyurl.com", "t.co", "is.gd", "cutt.ly", "goo.gl", "rebrand.ly")
+_CRED_ASK = (
+    "reply with your password", "reply with the code", "send your password", "cvv",
+    "send us your password", "enter your password below", "confirm your card number",
+    "your full card number", "seed phrase", "recovery phrase", "verify your card",
+    "social security number", "confirm your bank details",
+)
+_HOSTISH = re.compile(r"\b(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,})", re.I)
+
+
+def _host_ok(host: str) -> bool:
+    if not host or "xn--" in host:
+        return False
+    try:
+        ipaddress.ip_address(host)
+        return False
+    except ValueError:
+        pass
+    return not any(host == s or host.endswith("." + s) for s in _SHORTENERS)
+
+
+def _same_site(shown: str, real: str) -> bool:
+    return shown == real or real.endswith("." + shown) or shown.endswith("." + real)
+
+
+class _EmailScan(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.tags, self.urls, self.anchors = set(), [], []
+        self._href, self._text = None, []
+
+    def handle_starttag(self, tag, attrs):
+        self.tags.add(tag.lower())
+        self.urls += [v for k, v in attrs if k.lower() in ("href", "src") and v]
+        if tag.lower() == "a":
+            self._href = dict((k.lower(), v) for k, v in attrs).get("href")
+            self._text = []
+
+    def handle_data(self, data):
+        if self._href is not None:
+            self._text.append(data)
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "a" and self._href is not None:
+            self.anchors.append((self._href, "".join(self._text)))
+            self._href, self._text = None, []
+
+
+def _assert_safe_email(subject: str, html: str) -> None:
+    scan = _EmailScan()
+    scan.feed(html)
+    if scan.tags & {"form", "input", "textarea", "select"}:
+        raise ValueError("No forms or input fields in email (G2)")
+    body = f"{subject}\n{html}".lower()
+    for p in _CRED_ASK:
+        if p in body:
+            raise ValueError(f"Email asks the recipient for credentials: {p!r} (G2)")
+    for url in scan.urls:
+        low = url.strip().lower()
+        if low.startswith(("mailto:", "tel:", "cid:", "#")):
+            continue
+        if not low.startswith("https://"):
+            raise ValueError(f"Email links/assets must be absolute https: {url!r} (G3)")
+        host = urlparse(low).hostname or ""
+        if not _host_ok(host) or urlparse(low).username is not None:
+            raise ValueError(f"Shortened, numeric-host or credential-bearing URL: {url!r} (G3)")
+    for href, text in scan.anchors:
+        real = urlparse(href.strip().lower()).hostname or ""
+        if not real:
+            continue
+        for m in _HOSTISH.finditer(text):
+            if not _same_site(m.group(1).lower(), real):
+                raise ValueError(f"Anchor text {m.group(1)!r} != real link host {real!r} (G3)")
+
+
+async def send_email(*, to: str, subject: str, html: str) -> Optional[str]:
+    if not EMAIL_KEY:
+        raise HTTPException(status_code=500, detail="Email service not configured")
+    _assert_safe_email(subject, html)
+    payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{EMAIL_BASE_URL}/api/v1/email/send",
+                headers={"X-Email-Key": EMAIL_KEY},
+                json=payload,
+            )
+        resp.raise_for_status()
+        return resp.json().get("id")
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Email send failed: {e.response.status_code} {e.response.text}")
+        raise HTTPException(status_code=502, detail="Failed to send email")
+    except Exception as e:
+        logger.error(f"Email send error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to send email")
 
 
 # ---------------------------------------------------------------------------
@@ -389,6 +497,144 @@ async def me(user: dict = Depends(get_current_user)):
     return user
 
 
+# ---------------------------------------------------------------------------
+# Forgot password — email OTP via Emergent-managed Resend
+# ---------------------------------------------------------------------------
+
+class ForgotPasswordIn(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordIn(BaseModel):
+    email: EmailStr
+    code: str
+    new_password: str = Field(min_length=6, max_length=128)
+
+
+def _password_reset_email_html(name: str, code: str) -> str:
+    return (
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        f'style="background:#FDFBF7;padding:24px;font-family:Arial,sans-serif">'
+        f'<tr><td>'
+        f'<table role="presentation" width="100%" style="max-width:520px;margin:0 auto;'
+        f'background:#ffffff;border-radius:16px;padding:32px">'
+        f'<tr><td>'
+        f'<h1 style="margin:0 0 8px;color:#1B4332;font-size:20px">Reset your password</h1>'
+        f'<p style="margin:0 0 16px;color:#4A4A4A;font-size:14px">Hi {escape(name or "there")}, use the code below to reset your Ambajogai Grocery Store password. It expires in 10 minutes.</p>'
+        f'<div style="text-align:center;margin:24px 0">'
+        f'<div style="display:inline-block;background:#1B4332;color:#ffffff;font-size:28px;'
+        f'letter-spacing:8px;padding:16px 24px;border-radius:12px;font-weight:bold">{escape(code)}</div>'
+        f'</div>'
+        f'<p style="margin:0 0 8px;color:#4A4A4A;font-size:13px">If you did not request this, you can safely ignore this email — your password will not change.</p>'
+        f'<p style="margin:24px 0 0;color:#8BA888;font-size:12px">Sent by {escape(EMAIL_FROM_NAME)}. We never ask for your password or card details by email.</p>'
+        f'</td></tr></table>'
+        f'</td></tr></table>'
+    )
+
+
+@api.post("/auth/forgot-password")
+async def forgot_password(payload: ForgotPasswordIn):
+    email = payload.email.lower().strip()
+    user = await db.users.find_one({"email": email})
+    # Always return success to prevent user enumeration
+    if not user:
+        return {"success": True, "message": "If an account exists, a code was sent."}
+    code = str(uuid.uuid4().int)[-6:]
+    await db.password_resets.update_one(
+        {"email": email},
+        {"$set": {
+            "email": email,
+            "code": code,
+            "expires_at": (now_utc() + timedelta(minutes=10)).isoformat(),
+            "attempts": 0,
+        }},
+        upsert=True,
+    )
+    subject = f"Your {EMAIL_FROM_NAME} password reset code"
+    html = _password_reset_email_html(user.get("name", ""), code)
+    try:
+        await send_email(to=email, subject=subject, html=html)
+    except HTTPException:
+        # keep 200 to avoid enumeration but log
+        logger.error(f"Failed to send password reset email to {email}")
+    return {"success": True, "message": "If an account exists, a code was sent."}
+
+
+@api.post("/auth/reset-password")
+async def reset_password(payload: ResetPasswordIn):
+    email = payload.email.lower().strip()
+    rec = await db.password_resets.find_one({"email": email})
+    if not rec:
+        raise HTTPException(status_code=400, detail="Invalid or expired code")
+    if rec.get("attempts", 0) >= 5:
+        raise HTTPException(status_code=400, detail="Too many attempts. Request a new code.")
+    if rec.get("code") != payload.code.strip():
+        await db.password_resets.update_one({"email": email}, {"$inc": {"attempts": 1}})
+        raise HTTPException(status_code=400, detail="Invalid or expired code")
+    if datetime.fromisoformat(rec["expires_at"]) < now_utc():
+        raise HTTPException(status_code=400, detail="Invalid or expired code")
+    user = await db.users.find_one({"email": email})
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid or expired code")
+    await db.users.update_one({"_id": user["_id"]}, {"$set": {"password_hash": hash_password(payload.new_password)}})
+    await db.password_resets.delete_one({"email": email})
+    return {"success": True, "message": "Password reset successful. Please sign in."}
+
+
+# ---------------------------------------------------------------------------
+# Saved delivery addresses (per-user)
+# ---------------------------------------------------------------------------
+
+class SavedAddressIn(BaseModel):
+    label: str = Field(min_length=1, max_length=30)  # Home / Work / Other
+    full_name: str
+    phone: str
+    line1: str
+    landmark: Optional[str] = ""
+    area: str
+    city: str = "Ambajogai"
+    pincode: str
+
+
+def _address_to_out(a: dict) -> dict:
+    return {
+        "id": a.get("id"),
+        "label": a.get("label", "Home"),
+        "full_name": a.get("full_name", ""),
+        "phone": a.get("phone", ""),
+        "line1": a.get("line1", ""),
+        "landmark": a.get("landmark", ""),
+        "area": a.get("area", ""),
+        "city": a.get("city", "Ambajogai"),
+        "pincode": a.get("pincode", ""),
+    }
+
+
+@api.get("/users/me/addresses")
+async def list_addresses(user: dict = Depends(get_current_user)):
+    u = await db.users.find_one({"_id": ObjectId(user["id"])})
+    return [_address_to_out(a) for a in (u.get("saved_addresses") or [])]
+
+
+@api.post("/users/me/addresses")
+async def add_address(payload: SavedAddressIn, user: dict = Depends(get_current_user)):
+    new_addr = {**payload.model_dump(), "id": str(uuid.uuid4())}
+    await db.users.update_one(
+        {"_id": ObjectId(user["id"])},
+        {"$push": {"saved_addresses": new_addr}},
+    )
+    return _address_to_out(new_addr)
+
+
+@api.delete("/users/me/addresses/{addr_id}")
+async def delete_address(addr_id: str, user: dict = Depends(get_current_user)):
+    await db.users.update_one(
+        {"_id": ObjectId(user["id"])},
+        {"$pull": {"saved_addresses": {"id": addr_id}}},
+    )
+    return {"success": True}
+
+
 # Mock OTP: generate 6-digit code stored server-side (for demo, returned in response)
 @api.post("/auth/otp/request")
 async def otp_request(payload: OTPRequest):
@@ -520,10 +766,21 @@ async def delete_product(prod_id: str, _: dict = Depends(require_admin)):
 # Orders
 # ---------------------------------------------------------------------------
 
-DELIVERY_FEE = 20.0
-DELIVERY_FEE_NEAR = 13.0
-NEAR_DISTANCE_KM = 1.5
+DELIVERY_CENTER_LAT = float(os.environ.get("DELIVERY_CENTER_LAT", "18.735994"))
+DELIVERY_CENTER_LNG = float(os.environ.get("DELIVERY_CENTER_LNG", "76.3891403"))
+DELIVERY_NEAR_KM = 1.5
+DELIVERY_NEAR_FEE = 15.0
+DELIVERY_PER_KM = 12.0
 FREE_DELIVERY_THRESHOLD = 499.0
+
+
+def compute_delivery_fee(distance_km: float, subtotal: float) -> float:
+    if subtotal >= FREE_DELIVERY_THRESHOLD:
+        return 0.0
+    d = max(0.0, float(distance_km or 0))
+    if d <= DELIVERY_NEAR_KM:
+        return DELIVERY_NEAR_FEE
+    return round(DELIVERY_NEAR_FEE + (d - DELIVERY_NEAR_KM) * DELIVERY_PER_KM, 2)
 
 
 def safe_object_id(id_str: str) -> ObjectId:
@@ -600,10 +857,9 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
                 raise HTTPException(status_code=400, detail=f"Minimum order for {vend.get('business_name', 'this vendor')} is ₹{int(min_amt) if float(min_amt).is_integer() else round(min_amt, 2)}. Current subtotal for their items is ₹{sub:.2f}.")
 
     subtotal = round(sum(i["price"] * i["quantity"] for i in verified_items), 2)
-    # Distance-based delivery fee (default: assume near if unspecified)
-    dist = payload.distance_km if payload.distance_km is not None else 1.0
-    base_fee = DELIVERY_FEE_NEAR if dist <= NEAR_DISTANCE_KM else DELIVERY_FEE
-    delivery_fee = 0.0 if subtotal >= FREE_DELIVERY_THRESHOLD else base_fee
+    # Distance-based delivery fee from Mandi Bazar, Ambajogai center
+    dist = payload.distance_km if payload.distance_km is not None else 0.0
+    delivery_fee = compute_delivery_fee(dist, subtotal)
 
     # Apply coupon if provided
     discount = 0.0
@@ -676,6 +932,34 @@ async def admin_list_orders(_: dict = Depends(require_admin), status_filter: Opt
     return [order_to_out(d) for d in docs]
 
 
+@api.get("/admin/orders/pending-count")
+async def admin_pending_orders_count(_: dict = Depends(require_admin)):
+    count = await db.orders.count_documents({"status": "Pending"})
+    latest = await db.orders.find({"status": "Pending"}).sort("created_at", -1).limit(1).to_list(1)
+    return {
+        "count": count,
+        "latest_id": str(latest[0]["_id"]) if latest else None,
+        "latest_created_at": latest[0].get("created_at") if latest else None,
+    }
+
+
+@api.get("/delivery/new-count")
+async def delivery_new_count(user: dict = Depends(require_delivery)):
+    count = await db.orders.count_documents({
+        "delivery_partner_id": user["id"],
+        "status": {"$nin": ["Delivered", "Cancelled"]},
+    })
+    latest = await db.orders.find({
+        "delivery_partner_id": user["id"],
+        "status": {"$nin": ["Delivered", "Cancelled"]},
+    }).sort("created_at", -1).limit(1).to_list(1)
+    return {
+        "count": count,
+        "latest_id": str(latest[0]["_id"]) if latest else None,
+        "latest_created_at": latest[0].get("created_at") if latest else None,
+    }
+
+
 @api.patch("/admin/orders/{order_id}/status")
 async def update_order_status(order_id: str, payload: OrderStatusUpdate, _: dict = Depends(require_admin)):
     if payload.status not in ORDER_STATUSES:
@@ -684,6 +968,29 @@ async def update_order_status(order_id: str, payload: OrderStatusUpdate, _: dict
     doc = await db.orders.find_one({"_id": oid})
     if not doc:
         raise HTTPException(status_code=404, detail="Order not found")
+
+    # Strict order flow: allow only forward progression by one step, or Cancel (any time before Delivered)
+    flow = ["Pending", "Accepted", "Preparing", "Packed", "Ready", "Out For Delivery", "Delivered"]
+    current = doc.get("status", "Pending")
+    new_status = payload.status
+    if new_status == current:
+        raise HTTPException(status_code=400, detail=f"Order is already {current}")
+    if new_status == "Cancelled":
+        if current == "Delivered":
+            raise HTTPException(status_code=400, detail="Delivered orders cannot be cancelled")
+    else:
+        if current == "Cancelled":
+            raise HTTPException(status_code=400, detail="Cancelled orders cannot be updated")
+        if current == "Delivered":
+            raise HTTPException(status_code=400, detail="Order is already delivered")
+        try:
+            ci = flow.index(current)
+            ni = flow.index(new_status)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid status transition")
+        if ni != ci + 1:
+            raise HTTPException(status_code=400, detail=f"Must move to next step: {flow[ci + 1] if ci + 1 < len(flow) else 'Delivered'}")
+
     history = doc.get("status_history", [])
     history.append({"status": payload.status, "at": iso_now()})
     await db.orders.update_one(
@@ -1874,8 +2181,16 @@ async def store_info():
         "upi_id": os.environ.get("STORE_UPI_ID", "ambajogai@upi"),
         "upi_name": os.environ.get("STORE_UPI_NAME", "Ambajogai Grocery Store"),
         "upi_qr": os.environ.get("STORE_UPI_QR", ""),
-        "address": "Main Road, Ambajogai, Maharashtra 431517",
+        "address": "Mandi Bazar, Ambajogai, Maharashtra 431517",
         "email": os.environ.get("STORE_EMAIL", "ambajogaigrocerystores@gmail.com"),
+        "delivery": {
+            "center_lat": DELIVERY_CENTER_LAT,
+            "center_lng": DELIVERY_CENTER_LNG,
+            "near_km": DELIVERY_NEAR_KM,
+            "near_fee": DELIVERY_NEAR_FEE,
+            "per_km": DELIVERY_PER_KM,
+            "free_threshold": FREE_DELIVERY_THRESHOLD,
+        },
     }
 
 

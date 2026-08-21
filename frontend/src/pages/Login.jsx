@@ -59,6 +59,15 @@ export default function Login() {
                 data-testid="login-password"
               />
             </div>
+            <div className="flex justify-end">
+              <Link
+                to="/forgot-password"
+                className="text-xs font-semibold text-[#1B4332] hover:text-[#E07A5F]"
+                data-testid="forgot-password-link"
+              >
+                Forgot password?
+              </Link>
+            </div>
             <button type="submit" disabled={loading} className="btn-primary w-full" data-testid="login-submit">
               {loading && <Loader2 className="h-4 w-4 animate-spin" />}
               {loading ? "Signing in…" : "Sign in"}

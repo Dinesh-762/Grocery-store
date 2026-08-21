@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Search, Truck, ShieldCheck, Clock, Star, ArrowRight, Sparkles } from "lucide-react";
+import { Search, Truck, ShieldCheck, Clock, Star, ArrowRight, Sparkles, Store } from "lucide-react";
 import { api } from "@/lib/api";
 import ProductCard from "@/components/ProductCard";
 import Footer from "@/components/Footer";
@@ -11,28 +11,44 @@ export default function Home() {
   const [categories, setCategories] = useState([]);
   const [featured, setFeatured] = useState([]);
   const [popular, setPopular] = useState([]);
+  const [allProducts, setAllProducts] = useState([]);
   const [reviews, setReviews] = useState([]);
 
   useEffect(() => {
     (async () => {
       try {
-        const [cRes, fRes, pRes, rRes] = await Promise.all([
+        const [cRes, fRes, pRes, aRes, rRes] = await Promise.all([
           api.get("/categories"),
           api.get("/products?featured=true&limit=8"),
           api.get("/products?popular=true&limit=8"),
+          api.get("/products?limit=200"),
           api.get("/reviews?limit=6"),
         ]);
         setCategories(cRes.data);
-        console.log("Featured:", fRes.data);
-        console.log("Popular:", pRes.data);
         setFeatured(fRes.data);
         setPopular(pRes.data);
+        setAllProducts(aRes.data);
         setReviews(rRes.data);
       } catch {
         /* ignore fetch errors on home */
       }
     })();
   }, []);
+
+  // Group products by vendor for the "Shop by Store" section
+  const productsByVendor = useMemo(() => {
+    const groups = {};
+    for (const p of allProducts) {
+      if (!p.vendor_id || !p.vendor_name) continue;
+      if (!groups[p.vendor_id]) {
+        groups[p.vendor_id] = { vendor_id: p.vendor_id, vendor_name: p.vendor_name, items: [] };
+      }
+      if (groups[p.vendor_id].items.length < 4) {
+        groups[p.vendor_id].items.push(p);
+      }
+    }
+    return Object.values(groups);
+  }, [allProducts]);
 
   const submitSearch = (e) => {
     e.preventDefault();
@@ -159,6 +175,43 @@ export default function Home() {
           <div className="mt-8 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
             {popular.map((p) => (
               <ProductCard key={p.id} product={p} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* SHOP BY VENDOR / STORE */}
+      {productsByVendor.length > 0 && (
+        <section className="container-app py-8" data-testid="shop-by-vendor">
+          <SectionHeading title="Shop by Store" subtitle="Fresh picks from your neighbourhood vendors" />
+          <div className="mt-8 space-y-10">
+            {productsByVendor.map((g) => (
+              <div key={g.vendor_id} data-testid={`vendor-group-${g.vendor_id}`}>
+                <div className="flex items-center justify-between">
+                  <Link
+                    to={`/vendors/${g.vendor_id}`}
+                    className="group inline-flex items-center gap-2 text-lg font-semibold text-[#1A1A1A] hover:text-[#1B4332]"
+                  >
+                    <span className="grid h-9 w-9 place-items-center rounded-full bg-[#1B4332]/10 text-[#1B4332]">
+                      <Store className="h-4 w-4" />
+                    </span>
+                    {g.vendor_name}
+                    <ArrowRight className="h-4 w-4 opacity-0 transition-opacity group-hover:opacity-100" />
+                  </Link>
+                  <Link
+                    to={`/vendors/${g.vendor_id}`}
+                    className="text-xs font-semibold text-[#1B4332] hover:text-[#E07A5F]"
+                    data-testid={`view-store-${g.vendor_id}`}
+                  >
+                    View store
+                  </Link>
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
+                  {g.items.map((p) => (
+                    <ProductCard key={p.id} product={p} />
+                  ))}
+                </div>
+              </div>
             ))}
           </div>
         </section>

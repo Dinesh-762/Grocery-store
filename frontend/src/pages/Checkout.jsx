@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { useCart } from "@/context/CartContext";
 import { useAuth } from "@/context/AuthContext";
 import { api, formatINR, formatApiError } from "@/lib/api";
-import { CreditCard, Truck, MapPin, Loader2, MessageCircle, Tag, X } from "lucide-react";
+import { CreditCard, Truck, MapPin, Loader2, MessageCircle, Tag, X, Home as HomeIcon, Briefcase, MapPinned, Trash2, Plus } from "lucide-react";
 
 export default function Checkout() {
   const { items, subtotal, deliveryFee, total: cartTotal, clearCart } = useCart();
@@ -17,6 +17,10 @@ export default function Checkout() {
   const [couponInput, setCouponInput] = useState("");
   const [coupon, setCoupon] = useState(null); // {code, discount_pct, discount}
   const [couponBusy, setCouponBusy] = useState(false);
+  const [savedAddresses, setSavedAddresses] = useState([]);
+  const [selectedAddrId, setSelectedAddrId] = useState(null);
+  const [saveThisAddress, setSaveThisAddress] = useState(false);
+  const [addrLabel, setAddrLabel] = useState("Home");
   const [f, setForm] = useState({
     full_name: user?.name || "",
     phone: user?.phone || "",
@@ -31,7 +35,40 @@ export default function Checkout() {
 
   useEffect(() => {
     api.get("/store/info").then(({ data }) => setStore(data)).catch(() => {});
+    api.get("/users/me/addresses").then(({ data }) => {
+      setSavedAddresses(data);
+      if (data.length > 0) {
+        // auto-fill from first saved address
+        pickAddress(data[0]);
+      }
+    }).catch(() => {});
   }, []);
+
+  const pickAddress = (a) => {
+    setSelectedAddrId(a.id);
+    setForm((prev) => ({
+      ...prev,
+      full_name: a.full_name || prev.full_name,
+      phone: a.phone || prev.phone,
+      line1: a.line1 || "",
+      landmark: a.landmark || "",
+      area: a.area || "",
+      pincode: a.pincode || "",
+    }));
+  };
+
+  const deleteAddress = async (id) => {
+    if (!window.confirm("Remove this saved address?")) return;
+    try {
+      await api.delete(`/users/me/addresses/${id}`);
+      const next = savedAddresses.filter((a) => a.id !== id);
+      setSavedAddresses(next);
+      if (selectedAddrId === id) setSelectedAddrId(null);
+      toast.success("Address removed");
+    } catch (e) {
+      toast.error(formatApiError(e));
+    }
+  };
 
   useEffect(() => {
     if (items.length === 0 && !submitting && !placed) navigate("/cart");
@@ -81,6 +118,22 @@ export default function Checkout() {
       clearCart();
       toast.success("Order placed successfully!");
 
+      // Save this address to user profile if requested
+      if (saveThisAddress && !selectedAddrId) {
+        try {
+          await api.post("/users/me/addresses", {
+            label: addrLabel || "Home",
+            full_name: form.full_name,
+            phone: form.phone,
+            line1: form.line1,
+            landmark: form.landmark || "",
+            area: form.area,
+            city: "Ambajogai",
+            pincode: form.pincode,
+          });
+        } catch { /* non-blocking */ }
+      }
+
       // 1) Store-facing notification with FULL order details (existing behavior — improved)
       const storeNum = store.whatsapp.replace(/[^\d]/g, "");
       const itemsBlock = data.items.map((it) =>
@@ -105,6 +158,11 @@ export default function Checkout() {
     }
   };
 
+  const removeCoupon = () => {
+    setCoupon(null);
+    setCouponInput("");
+  };
+
   const applyCoupon = async () => {
     const code = couponInput.trim().toUpperCase();
     if (!code) return;
@@ -121,11 +179,10 @@ export default function Checkout() {
     }
   };
 
-  const removeCoupon = () => { setCoupon(null); setCouponInput(""); };
-
   const discount = coupon?.discount || 0;
-  // Compute effective delivery fee locally so the UI matches what the server will charge (13/20)
-  const effectiveDelivery = subtotal >= 499 ? 0 : (Number(f.distance_km || 1) <= 1.5 ? 13 : 20);
+  // Effective delivery fee: matches server formula from GET /store/info
+  const distKm = Number(f.distance_km || 0);
+  const effectiveDelivery = subtotal >= 499 ? 0 : (distKm <= 1.5 ? 15 : Math.round((15 + (distKm - 1.5) * 12) * 100) / 100);
   const total = Math.max(0, Math.round((subtotal + effectiveDelivery - discount) * 100) / 100);
 
   // UPI QR — use upi:// deep link encoded as QR via qrserver (no key needed)
@@ -145,6 +202,61 @@ export default function Checkout() {
               <MapPin className="h-5 w-5 text-[#1B4332]" />
               <h2 className="font-heading text-lg font-semibold">Delivery address</h2>
             </div>
+
+            {/* Saved addresses */}
+            {savedAddresses.length > 0 && (
+              <div className="mb-4" data-testid="saved-addresses">
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#4A4A4A]">Saved addresses</div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {savedAddresses.map((a) => {
+                    const Icon = a.label === "Work" ? Briefcase : a.label === "Home" ? HomeIcon : MapPinned;
+                    const selected = selectedAddrId === a.id;
+                    return (
+                      <div
+                        key={a.id}
+                        className={`relative cursor-pointer rounded-xl border p-3 transition-all ${
+                          selected ? "border-[#1B4332] bg-[#1B4332]/5 ring-1 ring-[#1B4332]" : "border-[#E5E5E5] hover:border-[#8BA888]"
+                        }`}
+                        onClick={() => pickAddress(a)}
+                        data-testid={`saved-addr-${a.id}`}
+                      >
+                        <div className="flex items-start gap-2 pr-6">
+                          <Icon className="mt-0.5 h-4 w-4 flex-shrink-0 text-[#1B4332]" />
+                          <div className="flex-1 text-xs">
+                            <div className="font-semibold text-[#1A1A1A]">{a.label} · {a.full_name}</div>
+                            <div className="text-[#4A4A4A]">
+                              {a.line1}{a.landmark ? `, ${a.landmark}` : ""}, {a.area}, {a.pincode}
+                            </div>
+                            <div className="text-[#4A4A4A]">{a.phone}</div>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); deleteAddress(a.id); }}
+                          className="absolute right-2 top-2 grid h-6 w-6 place-items-center rounded-full text-gray-400 hover:bg-red-50 hover:text-red-600"
+                          aria-label="Remove"
+                          data-testid={`delete-addr-${a.id}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedAddrId(null);
+                    setForm((prev) => ({ ...prev, line1: "", landmark: "", area: "", pincode: "" }));
+                  }}
+                  className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[#1B4332] hover:text-[#E07A5F]"
+                  data-testid="use-new-address"
+                >
+                  <Plus className="h-3.5 w-3.5" /> Use a new address
+                </button>
+              </div>
+            )}
+
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Full name" value={form.full_name} onChange={update("full_name")} testid="addr-name" />
               <Field label="Phone" value={form.phone} onChange={update("phone")} testid="addr-phone" placeholder="+91..." />
@@ -162,8 +274,11 @@ export default function Checkout() {
                   className="input-base"
                   data-testid="distance-km"
                 >
-                  <option value="1.0">Within 1.5 km (₹13 delivery)</option>
-                  <option value="3.0">More than 1.5 km (₹20 delivery)</option>
+                  <option value="1.0">Within 1.5 km (₹15 delivery)</option>
+                  <option value="3.0">3 km (₹33 delivery)</option>
+                  <option value="5.0">5 km (₹57 delivery)</option>
+                  <option value="7.0">7 km (₹81 delivery)</option>
+                  <option value="10.0">10 km (₹117 delivery)</option>
                 </select>
               </div>
               <div className="sm:col-span-2">
@@ -177,6 +292,38 @@ export default function Checkout() {
                   data-testid="addr-notes"
                 />
               </div>
+
+              {/* Save this address */}
+              {!selectedAddrId && (
+                <div className="sm:col-span-2 rounded-xl bg-[#8BA888]/10 p-3">
+                  <label className="flex cursor-pointer items-center gap-2 text-sm text-[#1A1A1A]" data-testid="save-address-toggle-label">
+                    <input
+                      type="checkbox"
+                      checked={saveThisAddress}
+                      onChange={(e) => setSaveThisAddress(e.target.checked)}
+                      data-testid="save-address-toggle"
+                    />
+                    Save this address for next time
+                  </label>
+                  {saveThisAddress && (
+                    <div className="mt-2 flex gap-2">
+                      {["Home", "Work", "Other"].map((l) => (
+                        <button
+                          key={l}
+                          type="button"
+                          onClick={() => setAddrLabel(l)}
+                          className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                            addrLabel === l ? "bg-[#1B4332] text-white" : "bg-white text-[#1B4332] ring-1 ring-[#1B4332]"
+                          }`}
+                          data-testid={`addr-label-${l.toLowerCase()}`}
+                        >
+                          {l}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </section>
 
