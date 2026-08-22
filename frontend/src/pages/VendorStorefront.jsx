@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import ProductCard from "@/components/ProductCard";
-import { Loader2, Store, MapPin, Package, ArrowLeft, ShieldCheck, Phone, Clock, Truck, Palmtree } from "lucide-react";
+import { Loader2, Store, MapPin, Package, ArrowLeft, ShieldCheck, Phone, Clock, Truck, Palmtree, Star } from "lucide-react";
 
 const DAYS = [
   { key: "mon", label: "Mon" },
@@ -90,6 +90,13 @@ export default function VendorStorefront() {
                 ) : (
                   <span className="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-semibold text-green-700" data-testid="open-now-badge">
                     <Clock className="h-3 w-3" /> Open now{todayHours ? ` · ${todayHours}` : ""}
+                  </span>
+                )}
+                {vendor.avg_rating != null && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-[#F4A261]/15 px-2.5 py-0.5 text-xs font-semibold text-[#B4531B]" data-testid="vendor-rating">
+                    <Star className="h-3 w-3 fill-[#F4A261] text-[#F4A261]" />
+                    {vendor.avg_rating.toFixed(1)}
+                    <span className="text-[#8B5A2B]">({vendor.review_count})</span>
                   </span>
                 )}
               </div>

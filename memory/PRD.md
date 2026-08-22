@@ -19,6 +19,11 @@ Build a production-ready Grocery Store website for Ambajogai Grocery Store, then
 - **Delivery fee**: Mandi Bazar center (18.735994, 76.3891403), ₹15 up to 1.5 km + ₹12/km beyond, free above ₹499.
 - **WhatsApp**: `wa.me` links.
 
+### Phase 5 (Feb 2026 — Push + Map + Rating batch)
+- **VAPID Web Push** for admins: real `serviceWorker` (`/sw.js`) + `pushManager.subscribe`. Server sends push via `pywebpush` **from inside `POST /api/orders`** so notifications arrive even when the admin's tab/browser is closed. Endpoints: `GET /api/push/vapid-public-key`, `POST /api/push/subscribe` (admin/delivery only, RBAC-gated), `POST /api/push/unsubscribe`. Dead endpoints (410/404) auto-cleaned. VAPID keys live in `.env` under `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT`.
+- **Live map preview at checkout**: after auto-detect, an inline OpenStreetMap embed shows the pinned drop-off with an "Open in maps ↗" link. Distance-from-Mandi-Bazar is displayed and still drives the correct fee tier (₹15/₹12-per-km — unchanged).
+- **Vendor rating pill on storefront**: `/api/vendors/{id}` now aggregates reviews (by `vendor_id` **and** vendor-owned `product_slug`) and returns `avg_rating` + `review_count`. UI shows a ★ pill next to the Open-now indicator.
+
 ### Phase 4 (Feb 2026 — Post-launch polish batch)
 - **Vendor storefront prominence**: Open-now / Closed / Vacation pill promoted next to business name with today's hours inline. Full weekly hours grid now always visible (Today row highlighted). Closed vendors show a full-width red/yellow banner explaining orders can't be placed.
 - **Browser push notifications for Admin**: On unmuting the new-order alert, admin is prompted for `Notification` permission; every new pending order triggers a system-level notification (`Ambajogai — New order`) in addition to the Web-Audio chirp and toast. Works when the tab is backgrounded.

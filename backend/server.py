@@ -16,6 +16,9 @@ import bcrypt
 import jwt
 import httpx
 import ipaddress
+import asyncio
+import json as _json
+from pywebpush import webpush, WebPushException
 from html import escape
 from html.parser import HTMLParser
 from urllib.parse import urlparse
@@ -541,6 +544,86 @@ def _password_reset_email_html(name: str, code: str) -> str:
 FORGOT_PASSWORD_COOLDOWN_SEC = 60
 
 
+# ---------------------------------------------------------------------------
+# Web Push (VAPID) — admin new-order notifications when the tab is closed
+# ---------------------------------------------------------------------------
+
+VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
+VAPID_PRIVATE_KEY = (os.environ.get("VAPID_PRIVATE_KEY", "") or "").replace("\\n", "\n")
+VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:admin@ambajogai.com")
+
+
+class PushSubscriptionIn(BaseModel):
+    endpoint: str
+    keys: dict  # { p256dh, auth }
+
+
+@api.get("/push/vapid-public-key")
+async def get_vapid_public_key():
+    return {"public_key": VAPID_PUBLIC_KEY}
+
+
+@api.post("/push/subscribe")
+async def push_subscribe(payload: PushSubscriptionIn, user: dict = Depends(get_current_user)):
+    if user.get("role") not in ("admin", "delivery"):
+        raise HTTPException(status_code=403, detail="Only admins and delivery boys can subscribe")
+    await db.push_subscriptions.update_one(
+        {"endpoint": payload.endpoint},
+        {"$set": {
+            "user_id": user["id"],
+            "role": user.get("role"),
+            "endpoint": payload.endpoint,
+            "keys": payload.keys,
+            "updated_at": iso_now(),
+        }},
+        upsert=True,
+    )
+    return {"success": True}
+
+
+@api.post("/push/unsubscribe")
+async def push_unsubscribe(payload: dict, user: dict = Depends(get_current_user)):
+    endpoint = payload.get("endpoint")
+    if endpoint:
+        await db.push_subscriptions.delete_one({"endpoint": endpoint, "user_id": user["id"]})
+    return {"success": True}
+
+
+def _send_push_sync(sub: dict, message: dict) -> bool:
+    try:
+        webpush(
+            subscription_info={"endpoint": sub["endpoint"], "keys": sub["keys"]},
+            data=_json.dumps(message),
+            vapid_private_key=VAPID_PRIVATE_KEY,
+            vapid_claims={"sub": VAPID_SUBJECT},
+            ttl=60,
+        )
+        return True
+    except WebPushException as e:
+        # 404/410 means the subscription is dead — clean it up
+        if e.response is not None and e.response.status_code in (404, 410):
+            return False
+        return False
+    except Exception:
+        return False
+
+
+async def broadcast_push_to_admins(title: str, body: str, url: str = "/admin/orders"):
+    if not VAPID_PRIVATE_KEY or not VAPID_PUBLIC_KEY:
+        return
+    subs = await db.push_subscriptions.find({"role": "admin"}).to_list(500)
+    if not subs:
+        return
+    message = {"title": title, "body": body, "url": url}
+    dead = []
+    for s in subs:
+        ok = await asyncio.to_thread(_send_push_sync, s, message)
+        if not ok:
+            dead.append(s["endpoint"])
+    if dead:
+        await db.push_subscriptions.delete_many({"endpoint": {"$in": dead}})
+
+
 @api.post("/auth/forgot-password")
 async def forgot_password(payload: ForgotPasswordIn):
     email = payload.email.lower().strip()
@@ -934,6 +1017,17 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         except Exception:
             pass
 
+    # Fire-and-forget push to admins so they get notified when browser is closed
+    try:
+        short_id = str(doc["_id"])[-6:].upper()
+        asyncio.create_task(broadcast_push_to_admins(
+            title=f"New order #{short_id}",
+            body=f"₹{doc['total']} from {doc['user_name']} · {doc['payment_method']}",
+            url="/admin/orders",
+        ))
+    except Exception:
+        pass
+
     return order_to_out(doc)
 
 
@@ -1297,6 +1391,13 @@ async def get_public_vendor(vendor_id: str):
         "vendor_id": str(oid),
         "approval_status": "approved",
     }).sort("created_at", -1).to_list(500)
+    # Aggregate reviews from this vendor's products for a storefront rating
+    product_slugs = [p["slug"] for p in products]
+    review_query = {"$or": [{"vendor_id": str(oid)}]}
+    if product_slugs:
+        review_query["$or"].append({"product_slug": {"$in": product_slugs}})
+    reviews = await db.reviews.find(review_query).to_list(2000)
+    avg_rating = round(sum(r["rating"] for r in reviews) / len(reviews), 2) if reviews else None
     return {
         "id": str(v["_id"]),
         "business_name": v["business_name"],
@@ -1316,6 +1417,8 @@ async def get_public_vendor(vendor_id: str):
         "estimated_delivery_min": v.get("estimated_delivery_min"),
         "verified": True,
         "created_at": v.get("created_at"),
+        "avg_rating": avg_rating,
+        "review_count": len(reviews),
         "products": [product_to_out(p) for p in products],
     }
 

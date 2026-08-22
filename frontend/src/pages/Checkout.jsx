@@ -23,6 +23,7 @@ export default function Checkout() {
   const [saveThisAddress, setSaveThisAddress] = useState(false);
   const [addrLabel, setAddrLabel] = useState("Home");
   const [locating, setLocating] = useState(false);
+  const [locCoords, setLocCoords] = useState(null); // { lat, lng, distKm }
 
   const detectMyLocation = () => {
     if (!navigator.geolocation) return toast.error("Geolocation not supported by your browser");
@@ -42,6 +43,7 @@ export default function Checkout() {
             pincode: addr.pincode || prev.pincode,
             distance_km: distKm <= 1.5 ? "1.0" : distKm <= 3 ? "3.0" : distKm <= 5 ? "5.0" : distKm <= 7 ? "7.0" : "10.0",
           }));
+          setLocCoords({ lat: latitude, lng: longitude, distKm });
           setSelectedAddrId(null);
           toast.success(`Location detected · ~${distKm.toFixed(2)} km from store`);
         } catch (err) {
@@ -314,6 +316,34 @@ export default function Checkout() {
               <Field label="Landmark (optional)" value={form.landmark} onChange={update("landmark")} testid="addr-landmark" />
               <Field label="Area / Locality" value={form.area} onChange={update("area")} testid="addr-area" />
               <Field label="Pincode" value={form.pincode} onChange={update("pincode")} testid="addr-pincode" placeholder="431517" />
+
+              {locCoords && (
+                <div className="sm:col-span-2" data-testid="location-map-preview">
+                  <div className="mb-1 flex items-center justify-between">
+                    <label className="text-xs font-semibold text-[#4A4A4A]">
+                      Pinned location · ~{locCoords.distKm.toFixed(2)} km from store
+                    </label>
+                    <a
+                      href={`https://www.openstreetmap.org/?mlat=${locCoords.lat}&mlon=${locCoords.lng}#map=17/${locCoords.lat}/${locCoords.lng}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs font-semibold text-[#1B4332] hover:text-[#E07A5F]"
+                    >
+                      Open in maps ↗
+                    </a>
+                  </div>
+                  <div className="overflow-hidden rounded-xl border border-[#E5E5E5]">
+                    <iframe
+                      title="Delivery location preview"
+                      width="100%"
+                      height="220"
+                      loading="lazy"
+                      style={{ border: 0 }}
+                      src={`https://www.openstreetmap.org/export/embed.html?bbox=${locCoords.lng - 0.005}%2C${locCoords.lat - 0.003}%2C${locCoords.lng + 0.005}%2C${locCoords.lat + 0.003}&layer=mapnik&marker=${locCoords.lat}%2C${locCoords.lng}`}
+                    />
+                  </div>
+                </div>
+              )}
               <div className="sm:col-span-2">
                 <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Distance from store (km)</label>
                 <select
