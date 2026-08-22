@@ -19,6 +19,16 @@ Build a production-ready Grocery Store website for Ambajogai Grocery Store, then
 - **Delivery fee**: Mandi Bazar center (18.735994, 76.3891403), ₹15 up to 1.5 km + ₹12/km beyond, free above ₹499.
 - **WhatsApp**: `wa.me` links.
 
+### Phase 4 (Feb 2026 — Post-launch polish batch)
+- **Vendor storefront prominence**: Open-now / Closed / Vacation pill promoted next to business name with today's hours inline. Full weekly hours grid now always visible (Today row highlighted). Closed vendors show a full-width red/yellow banner explaining orders can't be placed.
+- **Browser push notifications for Admin**: On unmuting the new-order alert, admin is prompted for `Notification` permission; every new pending order triggers a system-level notification (`Ambajogai — New order`) in addition to the Web-Audio chirp and toast. Works when the tab is backgrounded.
+- **Checkout location auto-detect**: "Use my current location" button uses `navigator.geolocation` + Nominatim reverse-geocode (no API key) to auto-fill `line1`, `area`, `pincode`. Haversine distance from Mandi Bazar auto-selects the correct `distance_km` tier so the delivery fee still uses the production ₹15 / ₹12-per-km formula.
+- **WhatsApp OTP fallback**: `/forgot-password` step 2 now has a "Still no code? Get help on WhatsApp" button that opens `wa.me` with a pre-filled message to the store admin. Purely a customer-support fallback — the primary email OTP path is unchanged.
+- **Customer live order timeline**: `OrderDetail` now polls `GET /api/orders/{id}` every 20 s while the order is pre-Delivered, with a pulsing "🟢 Live · refreshes every 20s" indicator next to the status heading. Status_history timestamps update in-place as vendors/admin advance the order.
+
+### Preserved (must-keep) rules
+- **Delivery formula unchanged**: Mandi Bazar (18.735994, 76.3891403) center, ₹15 up to 1.5 km, ₹12/km beyond, free above ₹499 — verified live via `/api/store/info`.
+
 ## What's implemented (Feb 2026)
 ### Phase 0 (MVP grocery store)
 - Home / Products / PDP / Cart / Checkout / Order tracker / My Orders / About / Contact / Legal

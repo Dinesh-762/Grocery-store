@@ -4,7 +4,8 @@ import { toast } from "sonner";
 import { useCart } from "@/context/CartContext";
 import { useAuth } from "@/context/AuthContext";
 import { api, formatINR, formatApiError } from "@/lib/api";
-import { CreditCard, Truck, MapPin, Loader2, MessageCircle, Tag, X, Home as HomeIcon, Briefcase, MapPinned, Trash2, Plus } from "lucide-react";
+import { CreditCard, Truck, MapPin, Loader2, MessageCircle, Tag, X, Home as HomeIcon, Briefcase, MapPinned, Trash2, Plus, Locate } from "lucide-react";
+import { haversineKm, reverseGeocode } from "@/lib/geo";
 
 export default function Checkout() {
   const { items, subtotal, deliveryFee, total: cartTotal, clearCart } = useCart();
@@ -21,6 +22,41 @@ export default function Checkout() {
   const [selectedAddrId, setSelectedAddrId] = useState(null);
   const [saveThisAddress, setSaveThisAddress] = useState(false);
   const [addrLabel, setAddrLabel] = useState("Home");
+  const [locating, setLocating] = useState(false);
+
+  const detectMyLocation = () => {
+    if (!navigator.geolocation) return toast.error("Geolocation not supported by your browser");
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const { latitude, longitude } = pos.coords;
+          const addr = await reverseGeocode(latitude, longitude);
+          const centerLat = store?.delivery?.center_lat ?? 18.735994;
+          const centerLng = store?.delivery?.center_lng ?? 76.3891403;
+          const distKm = haversineKm(centerLat, centerLng, latitude, longitude);
+          setForm((prev) => ({
+            ...prev,
+            line1: addr.line1 || prev.line1,
+            area: addr.area || prev.area,
+            pincode: addr.pincode || prev.pincode,
+            distance_km: distKm <= 1.5 ? "1.0" : distKm <= 3 ? "3.0" : distKm <= 5 ? "5.0" : distKm <= 7 ? "7.0" : "10.0",
+          }));
+          setSelectedAddrId(null);
+          toast.success(`Location detected · ~${distKm.toFixed(2)} km from store`);
+        } catch (err) {
+          toast.error("Could not resolve your address. Please fill it manually.");
+        } finally {
+          setLocating(false);
+        }
+      },
+      (err) => {
+        setLocating(false);
+        toast.error(err.code === 1 ? "Location permission denied" : "Unable to get your location");
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
+    );
+  };
   const [f, setForm] = useState({
     full_name: user?.name || "",
     phone: user?.phone || "",
@@ -198,9 +234,21 @@ export default function Checkout() {
         <div className="space-y-6">
           {/* Address */}
           <section className="card-base p-6">
-            <div className="mb-4 flex items-center gap-2">
-              <MapPin className="h-5 w-5 text-[#1B4332]" />
-              <h2 className="font-heading text-lg font-semibold">Delivery address</h2>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <MapPin className="h-5 w-5 text-[#1B4332]" />
+                <h2 className="font-heading text-lg font-semibold">Delivery address</h2>
+              </div>
+              <button
+                type="button"
+                onClick={detectMyLocation}
+                disabled={locating}
+                className="inline-flex items-center gap-1.5 rounded-full border border-[#1B4332] bg-[#1B4332]/5 px-3 py-1.5 text-xs font-semibold text-[#1B4332] hover:bg-[#1B4332]/10 disabled:opacity-60"
+                data-testid="detect-location-btn"
+              >
+                {locating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Locate className="h-3.5 w-3.5" />}
+                {locating ? "Detecting…" : "Use my current location"}
+              </button>
             </div>
 
             {/* Saved addresses */}

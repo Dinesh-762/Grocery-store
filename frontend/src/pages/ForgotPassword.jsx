@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, formatApiError } from "@/lib/api";
 import { toast } from "sonner";
-import { Loader2, Mail, KeyRound, Lock } from "lucide-react";
+import { Loader2, Mail, KeyRound, Lock, MessageCircle } from "lucide-react";
 
 export default function ForgotPassword() {
   const navigate = useNavigate();
@@ -12,6 +12,20 @@ export default function ForgotPassword() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [cooldown, setCooldown] = useState(0);
+  const [storeWa, setStoreWa] = useState("+918237214975");
+
+  // Load store WhatsApp for the retry fallback
+  useEffect(() => {
+    api.get("/store/info").then(({ data }) => setStoreWa((prev) => data.whatsapp || prev)).catch(() => {});
+  }, []);
+
+  const waFallbackUrl = () => {
+    const num = String(storeWa || "").replace(/[^\d]/g, "");
+    const msg = encodeURIComponent(
+      `Hi Ambajogai Grocery Store, I did not receive the password reset code by email.${email ? ` My registered email is ${email.trim().toLowerCase()}.` : ""} Could you help me reset it via WhatsApp?`
+    );
+    return `https://wa.me/${num}?text=${msg}`;
+  };
 
   // Tick the cooldown timer once per second
   useEffect(() => {
@@ -149,6 +163,15 @@ export default function ForgotPassword() {
               >
                 Didn&apos;t get the code? Try again
               </button>
+              <a
+                href={waFallbackUrl()}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 flex w-full items-center justify-center gap-2 rounded-xl border border-[#25D366] px-3 py-2 text-sm font-semibold text-[#25D366] hover:bg-[#25D366]/10"
+                data-testid="forgot-whatsapp-fallback"
+              >
+                <MessageCircle className="h-4 w-4" /> Still no code? Get help on WhatsApp
+              </a>
             </form>
           )}
 

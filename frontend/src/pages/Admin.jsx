@@ -600,6 +600,16 @@ function OrdersAdmin() {
           if (!alertMuted) {
             playAlert();
             toast.success(`New order received! ${data.count} pending`, { duration: 6000 });
+            // Browser notification (works when tab is in background)
+            if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+              try {
+                new Notification("Ambajogai — New order", {
+                  body: `You have ${data.count} pending order${data.count === 1 ? "" : "s"}. Tap to review.`,
+                  tag: "ambajogai-new-order",
+                  icon: "/favicon.ico",
+                });
+              } catch { /* ignore */ }
+            }
           }
           load();
         }
@@ -612,11 +622,17 @@ function OrdersAdmin() {
     return () => { cancelled = true; clearInterval(t); };
   }, [alertMuted, load]);
 
-  const toggleMute = () => {
+  const toggleMute = async () => {
     const next = !alertMuted;
     setAlertMuted(next);
     localStorage.setItem("admin_new_order_muted", next ? "1" : "0");
-    if (!next) playAlert(); // preview when unmuting
+    if (!next) {
+      playAlert(); // preview when unmuting
+      // Ask for browser-notification permission on first unmute
+      if (typeof Notification !== "undefined" && Notification.permission === "default") {
+        try { await Notification.requestPermission(); } catch { /* ignore */ }
+      }
+    }
   };
 
   const setStatus = async (id, status) => {
