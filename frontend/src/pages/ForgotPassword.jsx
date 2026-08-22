@@ -1,44 +1,56 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { toast } from "sonner";
-import { Loader2, ArrowLeft, LockKeyhole, Smartphone, Mail } from "lucide-react";
 import { api, formatApiError } from "@/lib/api";
+import { toast } from "sonner";
+import { Loader2, Mail, KeyRound, Lock, MessageCircle } from "lucide-react";
 
 export default function ForgotPassword() {
   const navigate = useNavigate();
-  const [step, setStep] = useState(1);
-  const [method, setMethod] = useState("phone");
-  const [phone, setPhone] = useState("");
+  const [step, setStep] = useState(1); // 1: email, 2: code + new password
   const [email, setEmail] = useState("");
-  const [otp, setOtp] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
+  const [storeWa, setStoreWa] = useState("+918237214975");
 
-  const requestOtp = async (e) => {
+  // Load store WhatsApp for the retry fallback
+  useEffect(() => {
+    api.get("/store/info").then(({ data }) => setStoreWa((prev) => data.whatsapp || prev)).catch(() => {});
+  }, []);
+
+  const waFallbackUrl = () => {
+    const num = String(storeWa || "").replace(/[^\d]/g, "");
+    const msg = encodeURIComponent(
+      `Hi Ambajogai Grocery Store, I did not receive the password reset code by email.${email ? ` My registered email is ${email.trim().toLowerCase()}.` : ""} Could you help me reset it via WhatsApp?`
+    );
+    return `https://wa.me/${num}?text=${msg}`;
+  };
+
+  // Tick the cooldown timer once per second
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = setTimeout(() => setCooldown((c) => Math.max(0, c - 1)), 1000);
+    return () => clearTimeout(t);
+  }, [cooldown]);
+
+  const sendCode = async (e) => {
     e.preventDefault();
-    if (method === "phone" && !/^\d{10}$/.test(phone.trim())) {
-      toast.error("Please enter a valid 10-digit mobile number.");
-      return;
-    }
-    if (method === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      toast.error("Please enter a valid email address.");
-      return;
-    }
-
+    if (!email.trim()) return toast.error("Please enter your email");
     setLoading(true);
     try {
-      const payload = method === "phone"
-        ? { method: "phone", phone: phone.trim() }
-        : { method: "email", email: email.trim().toLowerCase() };
-      const { data } = await api.post("/auth/password-reset/request", payload);
-      toast.success(data?.message || "OTP sent successfully.");
-      setOtp("");
-      setNewPassword("");
-      setConfirmPassword("");
+      await api.post("/auth/forgot-password", { email: email.trim().toLowerCase() });
+      toast.success("If an account exists, we sent a code to your email.");
       setStep(2);
+      setCooldown(60);
     } catch (err) {
-      toast.error(formatApiError(err, "Unable to send OTP. Please try again."));
+      // 429 → surface remaining seconds inline
+      const detail = err?.response?.data?.detail || "";
+      const match = /wait\s+(\d+)\s+seconds/i.exec(detail);
+      if (err?.response?.status === 429 && match) {
+        setCooldown(Number(match[1]));
+      }
+      toast.error(formatApiError(err));
     } finally {
       setLoading(false);
     }
@@ -46,136 +58,129 @@ export default function ForgotPassword() {
 
   const resetPassword = async (e) => {
     e.preventDefault();
-    const cleanOtp = otp.trim();
-    if (!/^\d{6}$/.test(cleanOtp)) {
-      toast.error("Please enter the 6-digit OTP.");
-      return;
-    }
-    if (newPassword.length < 6) {
-      toast.error("Password must be at least 6 characters.");
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      toast.error("Passwords do not match.");
-      return;
-    }
-
+    if (!/^\d{6}$/.test(code.trim())) return toast.error("Enter the 6-digit code from your email");
+    if (password.length < 6) return toast.error("Password must be at least 6 characters");
     setLoading(true);
     try {
-      const verifyPayload = method === "phone"
-        ? { method: "phone", phone: phone.trim(), code: cleanOtp }
-        : { method: "email", email: email.trim().toLowerCase(), code: cleanOtp };
-
-      const { data: verified } = await api.post("/auth/password-reset/verify", verifyPayload);
-      if (!verified?.reset_token) {
-        throw new Error("OTP verification failed.");
-      }
-
-      await api.post("/auth/password-reset/confirm", {
-        reset_token: verified.reset_token,
-        new_password: newPassword,
+      await api.post("/auth/reset-password", {
+        email: email.trim().toLowerCase(),
+        code: code.trim(),
+        new_password: password,
       });
-
-      toast.success("Password reset successfully. Please log in with your new password.");
+      toast.success("Password reset. Please sign in with your new password.");
       navigate("/login", { replace: true });
-    } catch (err) {
-      toast.error(formatApiError(err, "Unable to reset password. Please try again."));
+    } catch (e) {
+      toast.error(formatApiError(e));
     } finally {
       setLoading(false);
     }
-  };
-
-  const changeMethod = () => {
-    setStep(1);
-    setOtp("");
-    setNewPassword("");
-    setConfirmPassword("");
   };
 
   return (
     <div className="container-app grid min-h-[80vh] place-items-center py-12">
       <div className="w-full max-w-md" data-testid="forgot-password-page">
         <div className="card-base p-8">
-          <div className="mb-6">
-            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-[#1B4332]/10">
-              <LockKeyhole className="h-6 w-6 text-[#1B4332]" />
-            </div>
-            <h1 className="font-heading text-2xl font-bold sm:text-3xl">Forgot Password?</h1>
-            <p className="mt-2 text-sm leading-6 text-[#4A4A4A]">
-              {step === 1
-                ? "Choose mobile or email to receive your password reset OTP."
-                : "Enter the OTP and create a new password."}
-            </p>
-          </div>
+          <h1 className="font-heading text-2xl font-bold sm:text-3xl">Forgot password</h1>
+          <p className="mt-1 text-sm text-[#4A4A4A]">
+            {step === 1
+              ? "Enter your registered email — we'll send a 6-digit code."
+              : "Enter the code sent to your email and your new password."}
+          </p>
 
-          {step === 1 ? (
-            <form onSubmit={requestOtp} className="space-y-5">
+          {step === 1 && (
+            <form onSubmit={sendCode} className="mt-6 space-y-4" data-testid="forgot-step-1">
               <div>
-                <label className="mb-2 block text-xs font-semibold text-[#4A4A4A]">Reset using</label>
-                <div className="grid grid-cols-2 gap-3">
-                  <button type="button" onClick={() => setMethod("phone")} className={`flex items-center justify-center gap-2 rounded-xl border px-4 py-3 text-sm font-semibold ${method === "phone" ? "border-[#1B4332] bg-[#1B4332] text-white" : "border-black/10 bg-white text-[#4A4A4A]"}`}>
-                    <Smartphone className="h-4 w-4" /> Mobile
-                  </button>
-                  <button type="button" onClick={() => setMethod("email")} className={`flex items-center justify-center gap-2 rounded-xl border px-4 py-3 text-sm font-semibold ${method === "email" ? "border-[#1B4332] bg-[#1B4332] text-white" : "border-black/10 bg-white text-[#4A4A4A]"}`}>
-                    <Mail className="h-4 w-4" /> Email
-                  </button>
+                <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Email</label>
+                <div className="relative">
+                  <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="input-base pl-9"
+                    placeholder="you@example.com"
+                    data-testid="forgot-email"
+                  />
                 </div>
               </div>
-
-              {method === "phone" ? (
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Mobile number</label>
-                  <input value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 10))} placeholder="10-digit mobile number" inputMode="numeric" className="input-base w-full" autoComplete="tel" />
-                </div>
-              ) : (
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Email address</label>
-                  <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" type="email" className="input-base w-full" autoComplete="email" />
-                </div>
+              <button type="submit" disabled={loading || cooldown > 0} className="btn-primary w-full" data-testid="forgot-send-code">
+                {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+                {cooldown > 0 ? `Wait ${cooldown}s…` : loading ? "Sending…" : "Send code"}
+              </button>
+              {cooldown > 0 && (
+                <p className="text-center text-xs text-[#4A4A4A]" data-testid="forgot-cooldown-hint">
+                  You can request another code in {cooldown} seconds.
+                </p>
               )}
-
-              <button type="submit" disabled={loading} className="btn-primary flex w-full items-center justify-center gap-2 disabled:opacity-50">
-                {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-                {loading ? "Sending OTP..." : "Send OTP"}
-              </button>
-            </form>
-          ) : (
-            <form onSubmit={resetPassword} className="space-y-5">
-              <div className="rounded-xl bg-[#1B4332]/5 p-3 text-sm text-[#1B4332]">
-                OTP sent to your registered {method === "phone" ? "mobile number" : "email address"}.
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">6-digit OTP</label>
-                <input value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" maxLength={6} placeholder="Enter OTP" className="input-base w-full text-center tracking-[0.35em]" autoComplete="one-time-code" />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">New password</label>
-                <input value={newPassword} onChange={(e) => setNewPassword(e.target.value)} type="password" className="input-base w-full" autoComplete="new-password" />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Confirm new password</label>
-                <input value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} type="password" className="input-base w-full" autoComplete="new-password" />
-              </div>
-
-              <button type="submit" disabled={loading} className="btn-primary flex w-full items-center justify-center gap-2 disabled:opacity-50">
-                {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-                {loading ? "Resetting password..." : "Reset Password"}
-              </button>
-
-              <button type="button" onClick={changeMethod} className="w-full text-sm font-semibold text-[#1B4332] hover:underline">
-                Use a different method
-              </button>
             </form>
           )}
 
-          <div className="mt-6 border-t border-black/10 pt-5">
-            <Link to="/login" className="inline-flex items-center gap-2 text-sm font-semibold text-[#1B4332]">
-              <ArrowLeft className="h-4 w-4" /> Back to login
+          {step === 2 && (
+            <form onSubmit={resetPassword} className="mt-6 space-y-4" data-testid="forgot-step-2">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">6-digit code</label>
+                <div className="relative">
+                  <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                  <input
+                    inputMode="numeric"
+                    pattern="[0-9]{6}"
+                    maxLength={6}
+                    required
+                    value={code}
+                    onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    className="input-base pl-9 tracking-[0.5em] text-center font-mono text-lg"
+                    placeholder="123456"
+                    data-testid="forgot-code"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">New password</label>
+                <div className="relative">
+                  <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="password"
+                    required
+                    minLength={6}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="input-base pl-9"
+                    placeholder="At least 6 characters"
+                    data-testid="forgot-new-password"
+                  />
+                </div>
+              </div>
+              <button type="submit" disabled={loading} className="btn-primary w-full" data-testid="forgot-reset">
+                {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+                {loading ? "Resetting…" : "Reset password"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setStep(1)}
+                className="w-full text-center text-xs text-[#4A4A4A] hover:text-[#1B4332]"
+                data-testid="forgot-back"
+              >
+                Didn&apos;t get the code? Try again
+              </button>
+              <a
+                href={waFallbackUrl()}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 flex w-full items-center justify-center gap-2 rounded-xl border border-[#25D366] px-3 py-2 text-sm font-semibold text-[#25D366] hover:bg-[#25D366]/10"
+                data-testid="forgot-whatsapp-fallback"
+              >
+                <MessageCircle className="h-4 w-4" /> Still no code? Get help on WhatsApp
+              </a>
+            </form>
+          )}
+
+          <p className="mt-6 text-center text-sm text-[#4A4A4A]">
+            Remembered it?{" "}
+            <Link to="/login" className="font-semibold text-[#1B4332] hover:text-[#E07A5F]">
+              Sign in
             </Link>
-          </div>
+          </p>
         </div>
       </div>
     </div>

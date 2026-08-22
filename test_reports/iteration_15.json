@@ -1,0 +1,30 @@
+{
+  "summary": "Laser retest of the HIGH-priority Checkout delivery-fee display bug from iteration_14. RESULT: NOT FIXED. /app/frontend/src/pages/Checkout.jsx still imports deliveryFee/total from CartContext (flat DELIVERY_FEE=20) — there is no 'effectiveDelivery' variable in the file at all. Changing the distance-km dropdown between '1.0' (Within 1.5 km) and '3.0' (More than 1.5 km) does NOT change the Delivery row, Total, or the UPI 'Scan & pay' amount; all stay at Delivery ₹20 / Total ₹45 for a ₹25 subtotal. Placed a real COD order with distance_km=1.0 while UI displayed Total ₹45 — server recorded delivery_fee ₹13 and Total ₹38 (order 6a70a1bea41d3ca55a713cbe), proving the display/charge mismatch is still live. Backend logic (server.py L604-606: DELIVERY_FEE_NEAR if dist <= NEAR_DISTANCE_KM else DELIVERY_FEE, free >= 499) is correct; the defect is purely frontend.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Checkout.jsx order summary + UPI block", "issue": "Delivery row, Total and 'Scan & pay ₹X' use CartContext deliveryFee (hardcoded ₹20) instead of a distance-derived fee. Selecting 'Within 1.5 km' still shows ₹20 (should be ₹13). The claimed effectiveDelivery fix was never applied to the file.", "selector": "[data-testid=\"distance-km\"], [data-testid=\"checkout-total\"], [data-testid=\"checkout-summary\"]", "priority": "HIGH"}
+    ],
+    "integration_issues": [
+      {"flow": "Place order with distance_km=1.0 (subtotal ₹25)", "issue": "UI showed Total ₹45 (delivery ₹20); POST /api/orders returned delivery_fee 13 / total 38 and the order detail page shows Delivery ₹13, Total ₹38. Customer is quoted a wrong amount (and UPI QR amount is also wrong for near-distance orders).", "affected_selectors": ["[data-testid=\"checkout-total\"]", "[data-testid=\"upi-qr\"]"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iteration14_distance.py"],
+  "action_items": [
+    "In /app/frontend/src/pages/Checkout.jsx: compute effectiveDelivery = subtotal >= 499 ? 0 : (Number(f.distance_km) <= 1.5 ? 13 : 20); use it in the Delivery Row (line 244) and in total = max(0, subtotal + effectiveDelivery - discount) (line 127) so the UPI 'Scan & pay' text and QR amount also update. Do not keep using cartTotal/deliveryFee from CartContext on this page.",
+    "Optionally source 13 / 20 / 499 from /api/store/info or shared constants so frontend and backend (DELIVERY_FEE_NEAR / DELIVERY_FEE / FREE_DELIVERY_THRESHOLD) cannot drift again."
+  ],
+  "critical_code_review_comments": [
+    "Delivery-fee tiers are duplicated: CartContext.jsx hardcodes DELIVERY_FEE=20 / FREE_THRESHOLD=499 while backend has a 3-value tiered rule. Single source of truth needed.",
+    "Cart page also shows the flat ₹20 estimate; acceptable pre-distance-selection but should be labelled 'estimated'."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested (frontend-only request)", "frontend": "0% (1/1 target bug still failing)"},
+  "seed_data_creation": "One TEST COD order created via UI (id 6a70a1bea41d3ca55a713cbe) for the existing customer TEST_it14_ui_1785765866@example.com",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "Customer TEST_it14_ui_1785765866@example.com / Cust@123 (works); Admin admin@ambajogai.com / Admin@123",
+  "context_for_next_testing_agent": "Retest steps: login as the TEST customer, /products -> add 'Potato' (₹25, testid add-to-cart-potato; tomato/onion/banana/apple are out of stock and disabled), go to /checkout, toggle [data-testid=distance-km] between 1.0 and 3.0 and read [data-testid=checkout-summary] + [data-testid=checkout-total]. Expect ₹13/₹38 for 1.0 and ₹20/₹45 for 3.0. Also add ≥₹499 subtotal to verify Delivery FREE in both tiers, then place a COD order and compare with the order detail page numbers.",
+  "rca_of_the_issue": "Checkout.jsx line 10 destructures deliveryFee and total from useCart(); CartContext.jsx line 72-75 computes a single flat DELIVERY_FEE=20 with no distance input. The distance-km select only feeds the POST /api/orders payload (line 78), never the displayed math, so the UI cannot reflect the backend's ₹13 near-distance tier."
+}

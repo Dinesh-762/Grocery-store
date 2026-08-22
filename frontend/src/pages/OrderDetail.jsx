@@ -13,12 +13,21 @@ export default function OrderDetail() {
 
   useEffect(() => {
     api.get("/store/info").then(({ data }) => setStore(data)).catch(() => {});
-    api
-      .get(`/orders/${id}`)
-      .then(({ data }) => setOrder(data))
-      .catch(() => setOrder(null))
-      .finally(() => setLoading(false));
-  }, [id]);
+    let cancelled = false;
+    const fetchOrder = () =>
+      api
+        .get(`/orders/${id}`)
+        .then(({ data }) => { if (!cancelled) setOrder(data); })
+        .catch(() => { if (!cancelled) setOrder((o) => o || null); })
+        .finally(() => { if (!cancelled) setLoading(false); });
+    fetchOrder();
+    // Live timeline: refresh every 20s while the order is still open
+    const t = setInterval(() => {
+      if (!order || ["Delivered", "Cancelled"].includes(order.status)) return;
+      fetchOrder();
+    }, 20000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [id, order]);
 
   if (loading) {
     return (
@@ -68,7 +77,18 @@ export default function OrderDetail() {
 
       {/* Tracker */}
       <section className="card-base mt-8 p-6" data-testid="order-tracker">
-        <h2 className="font-heading text-lg font-semibold">Order status</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="font-heading text-lg font-semibold">Order status</h2>
+          {!isCancelled && order.status !== "Delivered" && (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-semibold text-green-700" data-testid="live-indicator">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-green-500" />
+              </span>
+              Live · refreshes every 20s
+            </span>
+          )}
+        </div>
         {isCancelled ? (
           <div className="mt-6 rounded-xl bg-red-50 p-6 text-center">
             <div className="font-heading text-lg font-semibold text-red-700">This order was cancelled</div>

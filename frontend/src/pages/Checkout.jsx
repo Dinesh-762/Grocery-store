@@ -1,2028 +1,564 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { useCart } from "@/context/CartContext";
 import { useAuth } from "@/context/AuthContext";
 import { api, formatINR, formatApiError } from "@/lib/api";
-import {
-  CreditCard,
-  Truck,
-  MapPin,
-  Loader2,
-  MessageCircle,
-  Tag,
-  X,
-  Navigation,
-} from "lucide-react";
-
-/*
-|--------------------------------------------------------------------------
-| Pricing Configuration
-|--------------------------------------------------------------------------
-*/
-
-const MINIMUM_ORDER_VALUE = 100;
-const FREE_ORDER_LIMIT = 249;
-const FREE_ORDER_REQUIRED_ORDERS = 13;
-
-const PLATFORM_FEE = 10;
-
-const CGST_RATE = 0.025;
-const SGST_RATE = 0.025;
-const GST_RATE = 0.05;
-
-const DELIVERY_BASE_FEE = 16;
-const DELIVERY_RATE_AFTER_1_5_KM = 12;
-const DELIVERY_BASE_DISTANCE_KM = 1.5;
-
-/*
-|--------------------------------------------------------------------------
-| EXACT AMBAJOGAI STORE LOCATION
-|--------------------------------------------------------------------------
-|
-| Latitude  : 18.7271336
-| Longitude : 76.3810922
-|
-*/
-
-const STORE_LATITUDE = 18.7271336;
-const STORE_LONGITUDE = 76.3810922;
-const MAX_DELIVERY_DISTANCE_KM = 12;
-const GROCERY_COUPON_CODE = "GROCERY10";
-const SAVED_ADDRESS_KEY = "ambajogai_saved_address";
-
-/*
-|--------------------------------------------------------------------------
-| Helpers
-|--------------------------------------------------------------------------
-*/
-
-function calculateDistanceKm(
-  lat1,
-  lon1,
-  lat2,
-  lon2
-) {
-  const earthRadiusKm = 6371;
-
-  const latitude1 = Number(lat1);
-  const longitude1 = Number(lon1);
-  const latitude2 = Number(lat2);
-  const longitude2 = Number(lon2);
-
-  if (
-    !Number.isFinite(latitude1) ||
-    !Number.isFinite(longitude1) ||
-    !Number.isFinite(latitude2) ||
-    !Number.isFinite(longitude2)
-  ) {
-    return 0;
-  }
-
-  const dLat =
-    ((latitude2 - latitude1) * Math.PI) /
-    180;
-
-  const dLon =
-    ((longitude2 - longitude1) * Math.PI) /
-    180;
-
-  const lat1Rad =
-    (latitude1 * Math.PI) /
-    180;
-
-  const lat2Rad =
-    (latitude2 * Math.PI) /
-    180;
-
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1Rad) *
-      Math.cos(lat2Rad) *
-      Math.sin(dLon / 2) ** 2;
-
-  const safeA = Math.min(
-    1,
-    Math.max(0, a)
-  );
-
-  const c =
-    2 *
-    Math.atan2(
-      Math.sqrt(safeA),
-      Math.sqrt(1 - safeA)
-    );
-
-  return Math.round(
-    earthRadiusKm * c * 100
-  ) / 100;
-}
-
-/*
-|--------------------------------------------------------------------------
-| Delivery fee
-|--------------------------------------------------------------------------
-*/
-
-function calculateDeliveryFee(
-  distanceKm,
-  subtotal = 0
-) {
-  if (
-    !Number.isFinite(distanceKm) ||
-    distanceKm <= 0
-  ) {
-    return 0;
-  }
-
-  /*
-   * Orders >= ₹499 get free delivery.
-   */
-
-  if (
-    Number(subtotal) >= 499
-  ) {
-    return 0;
-  }
-
-  /*
-   * Delivery pricing:
-   * Up to 1.5 km  -> ₹16 fixed
-   * Above 1.5 km -> ₹16 + ₹12 for every additional km
-   */
-
-  if (
-    distanceKm <= DELIVERY_BASE_DISTANCE_KM
-  ) {
-    return DELIVERY_BASE_FEE;
-  }
-
-  const additionalDistance =
-    distanceKm - DELIVERY_BASE_DISTANCE_KM;
-
-  return (
-    Math.round(
-      (
-        DELIVERY_BASE_FEE +
-        additionalDistance *
-          DELIVERY_RATE_AFTER_1_5_KM
-      ) * 100
-    ) / 100
-  );
-}
+import { CreditCard, Truck, MapPin, Loader2, MessageCircle, Tag, X, Home as HomeIcon, Briefcase, MapPinned, Trash2, Plus, Locate } from "lucide-react";
+import { haversineKm, reverseGeocode } from "@/lib/geo";
 
 export default function Checkout() {
-  const {
-    items,
-    subtotal,
-    clearCart,
-  } = useCart();
-
+  const { items, subtotal, deliveryFee, total: cartTotal, clearCart } = useCart();
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [store, setStore] = useState({ upi_id: "ambajogai@upi", upi_name: "Ambajogai Grocery Store", whatsapp: "+918237214975", upi_qr: "/assets/upi-qr.jpeg" });
+  const [payment, setPayment] = useState("UPI");
+  const [submitting, setSubmitting] = useState(false);
+  const [placed, setPlaced] = useState(false);
+  const [couponInput, setCouponInput] = useState("");
+  const [coupon, setCoupon] = useState(null); // {code, discount_pct, discount}
+  const [couponBusy, setCouponBusy] = useState(false);
+  const [savedAddresses, setSavedAddresses] = useState([]);
+  const [selectedAddrId, setSelectedAddrId] = useState(null);
+  const [saveThisAddress, setSaveThisAddress] = useState(false);
+  const [addrLabel, setAddrLabel] = useState("Home");
+  const [locating, setLocating] = useState(false);
+  const [locCoords, setLocCoords] = useState(null); // { lat, lng, distKm }
 
-  /*
-  |--------------------------------------------------------------------------
-  | Store information
-  |--------------------------------------------------------------------------
-  */
-
-  const [store, setStore] = useState({
-    upi_id: "ambajogai@upi",
-    upi_name:
-      "Ambajogai Grocery Store",
-    whatsapp: "+918237214975",
-    upi_qr: "/assets/upi-qr.jpeg",
-  });
-
-  /*
-  |--------------------------------------------------------------------------
-  | Payment
-  |--------------------------------------------------------------------------
-  */
-
-  const [payment, setPayment] =
-    useState("UPI");
-
-  const [submitting, setSubmitting] =
-    useState(false);
-
-  const [placed, setPlaced] =
-    useState(false);
-
-  /*
-  |--------------------------------------------------------------------------
-  | Coupon
-  |--------------------------------------------------------------------------
-  */
-
-  const [couponInput, setCouponInput] =
-    useState("");
-
-  const [coupon, setCoupon] =
-    useState(null);
-
-  const [couponBusy, setCouponBusy] =
-    useState(false);
-
-  /*
-  |--------------------------------------------------------------------------
-  | Delivery form
-  |--------------------------------------------------------------------------
-  */
-
-  const [form, setForm] = useState({
-    full_name:
-      user?.name || "",
-    phone:
-      user?.phone || "",
+  const detectMyLocation = () => {
+    if (!navigator.geolocation) return toast.error("Geolocation not supported by your browser");
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const { latitude, longitude } = pos.coords;
+          const addr = await reverseGeocode(latitude, longitude);
+          const centerLat = store?.delivery?.center_lat ?? 18.735994;
+          const centerLng = store?.delivery?.center_lng ?? 76.3891403;
+          const distKm = haversineKm(centerLat, centerLng, latitude, longitude);
+          setForm((prev) => ({
+            ...prev,
+            line1: addr.line1 || prev.line1,
+            area: addr.area || prev.area,
+            pincode: addr.pincode || prev.pincode,
+            distance_km: distKm <= 1.5 ? "1.0" : distKm <= 3 ? "3.0" : distKm <= 5 ? "5.0" : distKm <= 7 ? "7.0" : "10.0",
+          }));
+          setLocCoords({ lat: latitude, lng: longitude, distKm });
+          setSelectedAddrId(null);
+          toast.success(`Location detected · ~${distKm.toFixed(2)} km from store`);
+        } catch (err) {
+          toast.error("Could not resolve your address. Please fill it manually.");
+        } finally {
+          setLocating(false);
+        }
+      },
+      (err) => {
+        setLocating(false);
+        toast.error(err.code === 1 ? "Location permission denied" : "Unable to get your location");
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
+    );
+  };
+  const [f, setForm] = useState({
+    full_name: user?.name || "",
+    phone: user?.phone || "",
     line1: "",
     landmark: "",
     area: "",
     pincode: "",
     notes: "",
+    distance_km: "1.0",
   });
-
-  const [addressSaved, setAddressSaved] = useState(false);
-  const [serviceable, setServiceable] = useState(null);
-  const [serviceabilityMessage, setServiceabilityMessage] = useState("");
-
-  /*
-  |--------------------------------------------------------------------------
-  | GPS
-  |--------------------------------------------------------------------------
-  */
-
-  const [location, setLocation] =
-    useState({
-      latitude: null,
-      longitude: null,
-      accuracy: null,
-    });
-
-  const [locating, setLocating] =
-    useState(false);
-
-  /*
-  |--------------------------------------------------------------------------
-  | Load store information
-  |--------------------------------------------------------------------------
-  */
+  const form = f;
 
   useEffect(() => {
-    api
-      .get("/store/info")
-      .then(({ data }) => {
-        setStore((current) => ({
-          ...current,
-          ...data,
-        }));
-      })
-      .catch(() => {});
+    api.get("/store/info").then(({ data }) => setStore(data)).catch(() => {});
+    api.get("/users/me/addresses").then(({ data }) => {
+      setSavedAddresses(data);
+      if (data.length > 0) {
+        // auto-fill from first saved address
+        pickAddress(data[0]);
+      }
+    }).catch(() => {});
   }, []);
 
-  // Load the saved address for this account. It stays in place until the
-  // customer explicitly chooses Change Address. A local fallback supports
-  // older accounts that were saved before the backend endpoint existed.
-  useEffect(() => {
-    if (!user?.id) return;
-    const localKey = `${SAVED_ADDRESS_KEY}_${user.id}`;
-    let active = true;
-
-    const applySaved = (saved) => {
-      if (!active || !saved) return false;
-      const address = saved.form || saved;
-      setForm((current) => ({
-        ...current,
-        ...address,
-        full_name: address.full_name || user.name || current.full_name,
-        phone: address.phone || user.phone || current.phone,
-      }));
-      if (Number.isFinite(Number(address.latitude)) && Number.isFinite(Number(address.longitude))) {
-        setLocation({
-          latitude: Number(address.latitude),
-          longitude: Number(address.longitude),
-          accuracy: address.accuracy == null ? null : Number(address.accuracy),
-        });
-      }
-      setAddressSaved(true);
-      return true;
-    };
-
-    api.get("/auth/saved-address")
-      .then(({ data }) => {
-        if (!applySaved(data?.saved_address)) {
-          try {
-            const raw = localStorage.getItem(localKey);
-            if (raw) applySaved(JSON.parse(raw));
-          } catch {}
-        }
-      })
-      .catch(() => {
-        try {
-          const raw = localStorage.getItem(localKey);
-          if (raw) applySaved(JSON.parse(raw));
-        } catch {}
-      });
-
-    return () => { active = false; };
-  }, [user?.id, user?.name, user?.phone]);
-
-  /*
-  |--------------------------------------------------------------------------
-  | Redirect when cart is empty
-  |--------------------------------------------------------------------------
-  */
-
-  useEffect(() => {
-    if (
-      items.length === 0 &&
-      !submitting &&
-      !placed
-    ) {
-      navigate("/cart");
-    }
-  }, [
-    items.length,
-    submitting,
-    placed,
-    navigate,
-  ]);
-
-  /*
-  |--------------------------------------------------------------------------
-  | Update form
-  |--------------------------------------------------------------------------
-  */
-
-  const update = (key) => (event) => {
-    setForm((current) => ({
-      ...current,
-      [key]:
-        event.target.value,
+  const pickAddress = (a) => {
+    setSelectedAddrId(a.id);
+    setForm((prev) => ({
+      ...prev,
+      full_name: a.full_name || prev.full_name,
+      phone: a.phone || prev.phone,
+      line1: a.line1 || "",
+      landmark: a.landmark || "",
+      area: a.area || "",
+      pincode: a.pincode || "",
     }));
   };
 
-  const saveAddress = async () => {
-    if (!user?.id) {
-      toast.error("Please log in before saving your address.");
-      return;
-    }
-    const required = ["full_name", "phone", "line1", "area", "pincode"];
-    const missing = required.find((key) => !String(form[key] || "").trim());
-    if (missing) {
-      toast.error(`Please fill your ${missing.replace("_", " ")}.`);
-      return;
-    }
-    if (!/^\+?\d{10,15}$/.test(String(form.phone).replace(/\s/g, ""))) {
-      toast.error("Enter a valid mobile number.");
-      return;
-    }
-    if (!/^\d{6}$/.test(form.pincode)) {
-      toast.error("Enter a valid 6-digit pincode.");
-      return;
-    }
-    if (location.latitude === null || location.longitude === null) {
-      toast.error("Please verify your delivery location before saving the address.");
-      return;
-    }
-
-    const saved = {
-      ...form,
-      email: user.email || "",
-      latitude: Number(location.latitude),
-      longitude: Number(location.longitude),
-      accuracy: location.accuracy,
-    };
+  const deleteAddress = async (id) => {
+    if (!window.confirm("Remove this saved address?")) return;
     try {
-      await api.put("/auth/saved-address", saved);
-      localStorage.setItem(`${SAVED_ADDRESS_KEY}_${user.id}`, JSON.stringify(saved));
-      setAddressSaved(true);
-      toast.success("Address saved. It will stay saved until you change it.");
-    } catch (error) {
-      toast.error(formatApiError(error, "Could not save your address."));
+      await api.delete(`/users/me/addresses/${id}`);
+      const next = savedAddresses.filter((a) => a.id !== id);
+      setSavedAddresses(next);
+      if (selectedAddrId === id) setSelectedAddrId(null);
+      toast.success("Address removed");
+    } catch (e) {
+      toast.error(formatApiError(e));
     }
   };
-
-  const changeAddress = async () => {
-    if (user?.id) {
-      try { await api.delete("/auth/saved-address"); } catch {}
-      try { localStorage.removeItem(`${SAVED_ADDRESS_KEY}_${user.id}`); } catch {}
-    }
-    setAddressSaved(false);
-    setServiceable(null);
-    setServiceabilityMessage("");
-    setLocation({ latitude: null, longitude: null, accuracy: null });
-    toast.success("You can now enter a new delivery address.");
-  };
-
-  /*
-  |--------------------------------------------------------------------------
-  | GET CURRENT LOCATION
-  |--------------------------------------------------------------------------
-  */
-
-  const getCurrentLocation = () => {
-    if (
-      !navigator.geolocation
-    ) {
-      toast.error(
-        "Location is not supported by your browser."
-      );
-      return;
-    }
-
-    setLocating(true);
-
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const latitude =
-          Number(
-            position.coords.latitude
-          );
-
-        const longitude =
-          Number(
-            position.coords.longitude
-          );
-
-        const accuracy =
-          Number(
-            position.coords.accuracy || 0
-          );
-
-        console.log(
-          "CUSTOMER GPS:",
-          {
-            latitude,
-            longitude,
-            accuracy,
-          }
-        );
-
-        if (
-          !Number.isFinite(
-            latitude
-          ) ||
-          !Number.isFinite(
-            longitude
-          )
-        ) {
-          setLocating(false);
-
-          toast.error(
-            "Invalid location received. Please try again."
-          );
-
-          return;
-        }
-
-        if (
-          latitude < -90 ||
-          latitude > 90 ||
-          longitude < -180 ||
-          longitude > 180
-        ) {
-          setLocating(false);
-
-          toast.error(
-            "Invalid GPS coordinates received."
-          );
-
-          return;
-        }
-
-        setLocation({
-          latitude,
-          longitude,
-          accuracy,
-        });
-
-        toast.success(
-          "Location captured successfully!"
-        );
-
-        setLocating(false);
-      },
-
-      (error) => {
-        setLocating(false);
-
-        console.error(
-          "GPS ERROR:",
-          error
-        );
-
-        if (
-          error.code ===
-          error.PERMISSION_DENIED
-        ) {
-          toast.error(
-            "Please allow location access."
-          );
-        } else if (
-          error.code ===
-          error.POSITION_UNAVAILABLE
-        ) {
-          toast.error(
-            "Unable to detect your location."
-          );
-        } else if (
-          error.code ===
-          error.TIMEOUT
-        ) {
-          toast.error(
-            "Location request timed out. Please try again."
-          );
-        } else {
-          toast.error(
-            "Unable to get your location."
-          );
-        }
-      },
-
-      {
-        enableHighAccuracy: true,
-        timeout: 15000,
-        maximumAge: 0,
-      }
-    );
-  };
-
-  /*
-  |--------------------------------------------------------------------------
-  | Estimated distance
-  |--------------------------------------------------------------------------
-  */
-
-  const estimatedDistance =
-    useMemo(() => {
-      if (
-        location.latitude === null ||
-        location.longitude === null
-      ) {
-        return null;
-      }
-
-      return calculateDistanceKm(
-        STORE_LATITUDE,
-        STORE_LONGITUDE,
-        location.latitude,
-        location.longitude
-      );
-    }, [location]);
 
   useEffect(() => {
-    if (location.latitude === null || location.longitude === null) {
-      setServiceable(null);
-      setServiceabilityMessage("");
-      return;
-    }
+    if (items.length === 0 && !submitting && !placed) navigate("/cart");
+  }, [items.length, submitting, placed, navigate]);
 
-    let active = true;
-    api.get("/delivery/serviceability", {
-      params: { latitude: location.latitude, longitude: location.longitude },
-    }).then(({ data }) => {
-      if (!active) return;
-      setServiceable(Boolean(data?.serviceable));
-      setServiceabilityMessage(data?.message || "");
-    }).catch(() => {
-      // Fallback to the same Haversine calculation locally. The backend order
-      // endpoint remains the final source of truth. This prevents a temporary
-      // serviceability API/network issue from incorrectly rejecting Ambajogai.
-      const localServiceable = Number(estimatedDistance) <= MAX_DELIVERY_DISTANCE_KM;
-      if (!active) return;
-      setServiceable(localServiceable);
-      setServiceabilityMessage(
-        localServiceable
-          ? "Delivery is available in Ambajogai."
-          : "Please use a delivery location within Ambajogai."
-      );
-    });
-
-    return () => { active = false; };
-  }, [location.latitude, location.longitude, estimatedDistance]);
-
-  /*
-  |--------------------------------------------------------------------------
-  | Coupon discount
-  |--------------------------------------------------------------------------
-  */
-
-  const discount = Number(
-    coupon?.discount || 0
-  );
-
-  /*
-  |--------------------------------------------------------------------------
-  | Discounted subtotal
-  |--------------------------------------------------------------------------
-  */
-
-  const discountedSubtotal =
-    Math.max(
-      0,
-      Number(subtotal || 0) -
-        discount
-    );
-
-  /*
-  |--------------------------------------------------------------------------
-  | Estimated delivery fee
-  |--------------------------------------------------------------------------
-  */
-
-  const estimatedDeliveryFee =
-    useMemo(() => {
-      if (
-        estimatedDistance === null
-      ) {
-        return 0;
-      }
-
-      return calculateDeliveryFee(
-        estimatedDistance,
-        Number(
-          subtotal || 0
-        ) -
-          Number(
-            coupon?.discount || 0
-          )
-      );
-    }, [
-      estimatedDistance,
-      subtotal,
-      coupon,
-    ]);
-
-  /*
-  |--------------------------------------------------------------------------
-  | Platform fee
-  |--------------------------------------------------------------------------
-  */
-
-  const platformFee =
-    discountedSubtotal > 0
-      ? PLATFORM_FEE
-      : 0;
-
-  /*
-  |--------------------------------------------------------------------------
-  | Taxable amount
-  |--------------------------------------------------------------------------
-  */
-
-  const taxableAmount =
-    discountedSubtotal +
-    platformFee +
-    Number(
-      estimatedDeliveryFee || 0
-    );
-
-  /*
-  |--------------------------------------------------------------------------
-  | CGST
-  |--------------------------------------------------------------------------
-  */
-
-  const cgst =
-    Math.round(
-      taxableAmount *
-        CGST_RATE *
-        100
-    ) / 100;
-
-  /*
-  |--------------------------------------------------------------------------
-  | SGST
-  |--------------------------------------------------------------------------
-  */
-
-  const sgst =
-    Math.round(
-      taxableAmount *
-        SGST_RATE *
-        100
-    ) / 100;
-
-  /*
-  |--------------------------------------------------------------------------
-  | Total GST
-  |--------------------------------------------------------------------------
-  */
-
-  const gst =
-    Math.round(
-      (cgst + sgst) * 100
-    ) / 100;
-
-  /*
-  |--------------------------------------------------------------------------
-  | Final estimated total
-  |--------------------------------------------------------------------------
-  */
-
-  const estimatedTotal =
-    Math.round(
-      (
-        discountedSubtotal +
-        platformFee +
-        Number(
-          estimatedDeliveryFee || 0
-        ) +
-        gst
-      ) * 100
-    ) / 100;
-
-  /*
-  |--------------------------------------------------------------------------
-  | Validate form
-  |--------------------------------------------------------------------------
-  */
+  const update = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
   const validate = () => {
-    const requiredFields = [
-      "full_name",
-      "phone",
-      "line1",
-      "area",
-      "pincode",
-    ];
-
-    for (
-      const key of requiredFields
-    ) {
-      if (
-        !String(
-          form[key] || ""
-        ).trim()
-      ) {
-        return `Please fill your ${key.replace(
-          "_",
-          " "
-        )}`;
-      }
-    }
-
-    const cleanPhone =
-      form.phone.replace(
-        /\s/g,
-        ""
-      );
-
-    if (
-      !/^\+?\d{10,15}$/.test(
-        cleanPhone
-      )
-    ) {
-      return "Enter a valid phone number";
-    }
-
-    /*
-     * -------------------------------------------------------
-     * MINIMUM ORDER VALUE
-     * -------------------------------------------------------
-     *
-     * Customer must have at least ₹100
-     * worth of products in cart.
-     */
-
-    if (
-      Number(subtotal || 0) <
-      MINIMUM_ORDER_VALUE
-    ) {
-      return `Minimum order value is ₹${MINIMUM_ORDER_VALUE}. Please add more items to your cart.`;
-    }
-
-    if (
-      !/^\d{6}$/.test(
-        form.pincode
-      )
-    ) {
-      return "Enter a valid 6-digit pincode";
-    }
-
-    if (
-      location.latitude === null ||
-      location.longitude === null
-    ) {
-      return "Please allow location access so delivery charges can be calculated.";
-    }
-
-    if (serviceable === false || (serviceable === null && Number(estimatedDistance) > MAX_DELIVERY_DISTANCE_KM)) {
-      return "Please use a delivery location within Ambajogai.";
-    }
-
-    if (
-      items.length === 0
-    ) {
-      return "Your cart is empty.";
-    }
-
+    const req = ["full_name", "phone", "line1", "area", "pincode"];
+    for (const k of req) if (!form[k].trim()) return `Please fill your ${k.replace("_", " ")}`;
+    if (!/^\+?\d{10,15}$/.test(form.phone.replace(/\s/g, ""))) return "Enter a valid phone number";
+    if (!/^\d{6}$/.test(form.pincode)) return "Enter a valid 6-digit pincode";
     return null;
   };
 
-  /*
-  |--------------------------------------------------------------------------
-  | Place order
-  |--------------------------------------------------------------------------
-  */
-
   const submit = async () => {
-    const error =
-      validate();
-
-    if (error) {
-      toast.error(error);
-      return;
-    }
-
+    const err = validate();
+    if (err) return toast.error(err);
     setSubmitting(true);
-
     try {
-      const orderPayload = {
-        items: items.map(
-          (item) => ({
-            product_id:
-              item.product_id,
-
-            name: item.name,
-
-            price: Number(
-              item.price || 0
-            ),
-
-            quantity: Number(
-              item.quantity || 1
-            ),
-
-            image: item.image,
-
-            unit:
-              item.unit || null,
-
-            variant_label:
-              item.variant_label ||
-              null,
-
-            note: null,
-
-            vendor_id:
-              item.vendor_id ||
-              null,
-
-            vendor_name:
-              item.vendor_name ||
-              null,
-          })
-        ),
-
+      const { data } = await api.post("/orders", {
+        items: items.map((i) => ({
+          product_id: i.product_id,
+          name: i.name,
+          price: i.price,
+          quantity: i.quantity,
+          image: i.image,
+          unit: i.unit,
+          variant_label: i.variant_label || null,
+          note: i.note || null,
+        })),
         address: {
-          full_name:
-            form.full_name,
-
-          phone:
-            form.phone,
-
-          line1:
-            form.line1,
-
-          landmark:
-            form.landmark,
-
-          area:
-            form.area,
-
-          city:
-            "Ambajogai",
-
-          pincode:
-            form.pincode,
-
-          latitude:
-            Number(
-              location.latitude
-            ),
-
-          longitude:
-            Number(
-              location.longitude
-            ),
+          full_name: form.full_name,
+          phone: form.phone,
+          line1: form.line1,
+          landmark: form.landmark,
+          area: form.area,
+          city: "Ambajogai",
+          pincode: form.pincode,
         },
-
-        latitude:
-          Number(
-            location.latitude
-          ),
-
-        longitude:
-          Number(
-            location.longitude
-          ),
-
-        payment_method:
-          payment,
-
-        notes:
-          form.notes,
-
-        coupon_code:
-          coupon?.code || null,
-      };
-
-      /*
-       * Send order.
-       */
-
-      const { data } =
-        await api.post(
-          "/orders",
-          orderPayload
-        );
-
+        payment_method: payment,
+        notes: form.notes,
+        coupon_code: coupon?.code || null,
+        distance_km: form.distance_km ? Number(form.distance_km) : null,
+      });
       setPlaced(true);
-
-      /*
-       * Backend is authoritative.
-       */
-
-      const finalSubtotal =
-        Number(
-          data.subtotal ??
-            subtotal
-        );
-
-      const finalDeliveryFee =
-        Number(
-          data.delivery_fee ??
-            estimatedDeliveryFee
-        );
-
-      const finalPlatformFee =
-        Number(
-          data.platform_fee ??
-            platformFee
-        );
-
-      const finalCgst =
-        Number(
-          data.cgst ?? cgst
-        );
-
-      const finalSgst =
-        Number(
-          data.sgst ?? sgst
-        );
-
-      const finalGst =
-        Number(
-          data.gst ??
-            finalCgst +
-              finalSgst
-        );
-
-      const finalDiscount =
-        Number(
-          data.discount ??
-            discount
-        );
-
-      const finalTotal =
-        Number(
-          data.total ??
-            estimatedTotal
-        );
-
-      /*
-       * Clear cart after successful order.
-       */
-
       clearCart();
+      toast.success("Order placed successfully!");
 
-      toast.success(
-        "Order placed successfully!"
-      );
-
-      /*
-       * WhatsApp store notification.
-       */
-
-      const storeNumber =
-        String(
-          store.whatsapp || ""
-        ).replace(
-          /[^\d]/g,
-          ""
-        );
-
-      const itemsBlock = (
-        data.items || items
-      )
-        .map((item) => {
-          const variant =
-            item.variant_label
-              ? ` (${item.variant_label})`
-              : item.unit
-              ? ` (${item.unit})`
-              : "";
-
-          const itemTotal =
-            Number(
-              item.price || 0
-            ) *
-            Number(
-              item.quantity || 0
-            );
-
-          return `- ${
-            item.name
-          }${variant} x ${
-            item.quantity
-          } @ ₹${Number(
-            item.price || 0
-          ).toFixed(
-            2
-          )} = ₹${itemTotal.toFixed(
-            2
-          )}`;
-        })
-        .join("\n");
-
-      const orderId =
-        data.id
-          ? String(data.id)
-              .slice(-6)
-              .toUpperCase()
-          : "NEW";
-
-      const storeMessage =
-        encodeURIComponent(
-          `NEW ORDER #${orderId}
-
-${itemsBlock}
-
-Subtotal: ₹${finalSubtotal.toFixed(
-            2
-          )}
-Discount: -₹${finalDiscount.toFixed(
-            2
-          )}
-Platform Fee: ₹${finalPlatformFee.toFixed(
-            2
-          )}
-Delivery: ₹${finalDeliveryFee.toFixed(
-            2
-          )}
-CGST (2.5%): ₹${finalCgst.toFixed(
-            2
-          )}
-SGST (2.5%): ₹${finalSgst.toFixed(
-            2
-          )}
-GST (5% Total): ₹${finalGst.toFixed(
-            2
-          )}
-Total: ₹${finalTotal.toFixed(
-            2
-          )}
-
-Payment: ${
-            data.payment_method ??
-            payment
-          }
-
-Customer: ${
-            data.address?.full_name ??
-            form.full_name
-          }
-
-Phone: ${
-            data.address?.phone ??
-            form.phone
-          }
-
-Address: ${
-            data.address?.line1 ??
-            form.line1
-          }${
-            (
-              data.address
-                ?.landmark ??
-              form.landmark
-            )
-              ? `, ${
-                  data.address
-                    ?.landmark ??
-                  form.landmark
-                }`
-              : ""
-          }, ${
-            data.address?.area ??
-            form.area
-          }, ${
-            data.address?.pincode ??
-            form.pincode
-          }
-
-Customer Location:
-https://www.google.com/maps?q=${
-            location.latitude
-          },${
-            location.longitude
-          }
-
-Distance from Ambajogai Grocery:
-${
-  data.delivery_distance_km ??
-  estimatedDistance ??
-  0
-} km`
-        );
-
-      if (storeNumber) {
-        window.open(
-          `https://wa.me/${storeNumber}?text=${storeMessage}`,
-          "_blank"
-        );
+      // Save this address to user profile if requested
+      if (saveThisAddress && !selectedAddrId) {
+        try {
+          await api.post("/users/me/addresses", {
+            label: addrLabel || "Home",
+            full_name: form.full_name,
+            phone: form.phone,
+            line1: form.line1,
+            landmark: form.landmark || "",
+            area: form.area,
+            city: "Ambajogai",
+            pincode: form.pincode,
+          });
+        } catch { /* non-blocking */ }
       }
 
-      /*
-       * Customer WhatsApp notification.
-       */
+      // 1) Store-facing notification with FULL order details (existing behavior — improved)
+      const storeNum = store.whatsapp.replace(/[^\d]/g, "");
+      const itemsBlock = data.items.map((it) =>
+        `- ${it.name}${it.variant_label ? ` (${it.variant_label})` : ` (${it.unit})`} x ${it.quantity} @ ₹${it.price} = ₹${(it.price * it.quantity).toFixed(2)}${it.note ? `\n  Note: ${it.note}` : ""}`
+      ).join("\n");
+      const storeMsg = encodeURIComponent(
+        `NEW ORDER #${data.id.slice(-6).toUpperCase()}\n\n${itemsBlock}\n\nSubtotal: ₹${data.subtotal}\nDelivery: ${data.delivery_fee === 0 ? "FREE" : "₹" + data.delivery_fee}${data.discount ? `\nDiscount: -₹${data.discount}` : ""}\nTotal: ₹${data.total}\nPayment: ${data.payment_method}\n\nCustomer: ${data.address.full_name}\nPhone: ${data.address.phone}\nAddress: ${data.address.line1}${data.address.landmark ? ", " + data.address.landmark : ""}, ${data.address.area}, ${data.address.pincode}`
+      );
+      window.open(`https://wa.me/${storeNum}?text=${storeMsg}`, "_blank");
 
+      // 2) Customer-facing thank-you (server template with full details)
       try {
-        const {
-          data: notification,
-        } = await api.post(
-          "/notify/order-whatsapp",
-          {
-            order_id:
-              data.id,
-            event:
-              "placed",
-          }
-        );
+        const { data: notif } = await api.post("/notify/order-whatsapp", { order_id: data.id, event: "placed" });
+        setTimeout(() => window.open(notif.url, "_blank"), 350);
+      } catch { /* non-blocking */ }
 
-        if (
-          notification?.url
-        ) {
-          setTimeout(() => {
-            window.open(
-              notification.url,
-              "_blank"
-            );
-          }, 350);
-        }
-      } catch {
-        /*
-         * Non-blocking.
-         */
-      }
-
-      navigate(
-        `/orders/${data.id}`
-      );
-    } catch (error) {
-      toast.error(
-        formatApiError(error)
-      );
+      navigate(`/orders/${data.id}`);
+    } catch (e) {
+      toast.error(formatApiError(e));
     } finally {
       setSubmitting(false);
     }
   };
-
-  /*
-  |--------------------------------------------------------------------------
-  | Apply coupon
-  |--------------------------------------------------------------------------
-  */
-
-  const applyCoupon = async () => {
-    const code = couponInput.trim().toUpperCase();
-    if (code !== GROCERY_COUPON_CODE) {
-      toast.error(`Use ${GROCERY_COUPON_CODE} to apply the 10% OFF offer.`);
-      return;
-    }
-
-    if (!code) {
-      toast.error(
-        "Enter a coupon code."
-      );
-      return;
-    }
-
-    setCouponBusy(true);
-
-    try {
-      const { data } =
-        await api.get(
-          `/coupons/${encodeURIComponent(
-            code
-          )}/validate?subtotal=${subtotal}`
-        );
-
-      setCoupon(data);
-
-      toast.success(
-        `Coupon ${data.code} applied — saved ${formatINR(
-          data.discount
-        )}`
-      );
-    } catch (error) {
-      setCoupon(null);
-
-      toast.error(
-        formatApiError(error)
-      );
-    } finally {
-      setCouponBusy(false);
-    }
-  };
-
-  /*
-  |--------------------------------------------------------------------------
-  | Remove coupon
-  |--------------------------------------------------------------------------
-  */
 
   const removeCoupon = () => {
     setCoupon(null);
     setCouponInput("");
   };
 
-  /*
-  |--------------------------------------------------------------------------
-  | UPI
-  |--------------------------------------------------------------------------
-  */
+  const applyCoupon = async () => {
+    const code = couponInput.trim().toUpperCase();
+    if (!code) return;
+    setCouponBusy(true);
+    try {
+      const { data } = await api.get(`/coupons/${encodeURIComponent(code)}/validate?subtotal=${subtotal}`);
+      setCoupon(data);
+      toast.success(`Coupon ${data.code} applied — saved ${formatINR(data.discount)}`);
+    } catch (e) {
+      setCoupon(null);
+      toast.error(formatApiError(e));
+    } finally {
+      setCouponBusy(false);
+    }
+  };
 
-  const upiUrl =
-    `upi://pay?pa=${encodeURIComponent(
-      store.upi_id || ""
-    )}&pn=${encodeURIComponent(
-      store.upi_name || ""
-    )}&am=${estimatedTotal.toFixed(
-      2
-    )}&cu=INR&tn=${encodeURIComponent(
-      "Ambajogai Grocery Order"
-    )}`;
+  const discount = coupon?.discount || 0;
+  // Effective delivery fee: matches server formula from GET /store/info
+  const distKm = Number(f.distance_km || 0);
+  const effectiveDelivery = subtotal >= 499 ? 0 : (distKm <= 1.5 ? 15 : Math.round((15 + (distKm - 1.5) * 12) * 100) / 100);
+  const total = Math.max(0, Math.round((subtotal + effectiveDelivery - discount) * 100) / 100);
 
-  const qrSrc =
-    store.upi_qr ||
-    `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(
-      upiUrl
-    )}`;
-
-  /*
-  |--------------------------------------------------------------------------
-  | UI
-  |--------------------------------------------------------------------------
-  */
+  // UPI QR — use upi:// deep link encoded as QR via qrserver (no key needed)
+  const upiUrl = `upi://pay?pa=${encodeURIComponent(store.upi_id)}&pn=${encodeURIComponent(store.upi_name)}&am=${total}&cu=INR&tn=${encodeURIComponent("Ambajogai Grocery Order")}`;
+  const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(upiUrl)}`;
 
   return (
-    <div
-      className="container-app py-8"
-      data-testid="checkout-page"
-    >
-      <h1 className="font-heading text-3xl font-bold sm:text-4xl">
-        Checkout
-      </h1>
-
-      <p className="mt-2 text-sm text-[#4A4A4A]">
-        Review your delivery details and payment
-      </p>
+    <div className="container-app py-8" data-testid="checkout-page">
+      <h1 className="font-heading text-3xl font-bold sm:text-4xl">Checkout</h1>
+      <p className="mt-2 text-sm text-[#4A4A4A]">Review your delivery details and payment</p>
 
       <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_380px]">
-
-        {/* LEFT */}
-
         <div className="space-y-6">
-
-          {/* DELIVERY ADDRESS */}
-
+          {/* Address */}
           <section className="card-base p-6">
-            <div className="mb-4 flex items-center gap-2">
-              <MapPin className="h-5 w-5 text-[#1B4332]" />
-
-              <h2 className="font-heading text-lg font-semibold">
-                Delivery address
-              </h2>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <MapPin className="h-5 w-5 text-[#1B4332]" />
+                <h2 className="font-heading text-lg font-semibold">Delivery address</h2>
+              </div>
+              <button
+                type="button"
+                onClick={detectMyLocation}
+                disabled={locating}
+                className="inline-flex items-center gap-1.5 rounded-full border border-[#1B4332] bg-[#1B4332]/5 px-3 py-1.5 text-xs font-semibold text-[#1B4332] hover:bg-[#1B4332]/10 disabled:opacity-60"
+                data-testid="detect-location-btn"
+              >
+                {locating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Locate className="h-3.5 w-3.5" />}
+                {locating ? "Detecting…" : "Use my current location"}
+              </button>
             </div>
+
+            {/* Saved addresses */}
+            {savedAddresses.length > 0 && (
+              <div className="mb-4" data-testid="saved-addresses">
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#4A4A4A]">Saved addresses</div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {savedAddresses.map((a) => {
+                    const Icon = a.label === "Work" ? Briefcase : a.label === "Home" ? HomeIcon : MapPinned;
+                    const selected = selectedAddrId === a.id;
+                    return (
+                      <div
+                        key={a.id}
+                        className={`relative cursor-pointer rounded-xl border p-3 transition-all ${
+                          selected ? "border-[#1B4332] bg-[#1B4332]/5 ring-1 ring-[#1B4332]" : "border-[#E5E5E5] hover:border-[#8BA888]"
+                        }`}
+                        onClick={() => pickAddress(a)}
+                        data-testid={`saved-addr-${a.id}`}
+                      >
+                        <div className="flex items-start gap-2 pr-6">
+                          <Icon className="mt-0.5 h-4 w-4 flex-shrink-0 text-[#1B4332]" />
+                          <div className="flex-1 text-xs">
+                            <div className="font-semibold text-[#1A1A1A]">{a.label} · {a.full_name}</div>
+                            <div className="text-[#4A4A4A]">
+                              {a.line1}{a.landmark ? `, ${a.landmark}` : ""}, {a.area}, {a.pincode}
+                            </div>
+                            <div className="text-[#4A4A4A]">{a.phone}</div>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); deleteAddress(a.id); }}
+                          className="absolute right-2 top-2 grid h-6 w-6 place-items-center rounded-full text-gray-400 hover:bg-red-50 hover:text-red-600"
+                          aria-label="Remove"
+                          data-testid={`delete-addr-${a.id}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedAddrId(null);
+                    setForm((prev) => ({ ...prev, line1: "", landmark: "", area: "", pincode: "" }));
+                  }}
+                  className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[#1B4332] hover:text-[#E07A5F]"
+                  data-testid="use-new-address"
+                >
+                  <Plus className="h-3.5 w-3.5" /> Use a new address
+                </button>
+              </div>
+            )}
 
             <div className="grid gap-4 sm:grid-cols-2">
-
-              <Field
-                label="Full name"
-                value={
-                  form.full_name
-                }
-                onChange={update(
-                  "full_name"
-                )}
-                testid="addr-name"
-                  disabled={addressSaved}
-              />
-
-              <Field
-                label="Phone"
-                value={
-                  form.phone
-                }
-                onChange={update(
-                  "phone"
-                )}
-                testid="addr-phone"
-                  disabled={addressSaved}
-                placeholder="+91..."
-              />
-
+              <Field label="Full name" value={form.full_name} onChange={update("full_name")} testid="addr-name" />
+              <Field label="Phone" value={form.phone} onChange={update("phone")} testid="addr-phone" placeholder="+91..." />
               <div className="sm:col-span-2">
-                <Field
-                  label="Address line"
-                  value={
-                    form.line1
-                  }
-                  onChange={update(
-                    "line1"
-                  )}
-                  testid="addr-line"
-                  disabled={addressSaved}
-                  placeholder="House / flat no, street"
-                />
+                <Field label="Address line" value={form.line1} onChange={update("line1")} testid="addr-line" placeholder="House / flat no, street" />
               </div>
+              <Field label="Landmark (optional)" value={form.landmark} onChange={update("landmark")} testid="addr-landmark" />
+              <Field label="Area / Locality" value={form.area} onChange={update("area")} testid="addr-area" />
+              <Field label="Pincode" value={form.pincode} onChange={update("pincode")} testid="addr-pincode" placeholder="431517" />
 
-              <Field
-                label="Landmark (optional)"
-                value={
-                  form.landmark
-                }
-                onChange={update(
-                  "landmark"
-                )}
-                testid="addr-landmark"
-                  disabled={addressSaved}
-              />
-
-              <Field
-                label="Area / Locality"
-                value={
-                  form.area
-                }
-                onChange={update(
-                  "area"
-                )}
-                testid="addr-area"
-                  disabled={addressSaved}
-              />
-
-              <Field
-                label="Pincode"
-                value={
-                  form.pincode
-                }
-                onChange={update(
-                  "pincode"
-                )}
-                testid="addr-pincode"
-                  disabled={addressSaved}
-                placeholder="6-digit pincode"
-              />
-
-              <div className="sm:col-span-2">
-                <Field
-                  label="Order notes (optional)"
-                  value={
-                    form.notes
-                  }
-                  onChange={update(
-                    "notes"
-                  )}
-                  testid="order-notes"
-                  placeholder="Any special instructions?"
-                />
-              </div>
-            </div>
-
-            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-              {!addressSaved ? (
-                <button type="button" onClick={saveAddress} className="btn-primary flex-1" data-testid="save-address">
-                  Save Address
-                </button>
-              ) : (
-                <button type="button" onClick={changeAddress} className="btn-secondary flex-1" data-testid="change-address">
-                  Change Address
-                </button>
-              )}
-            </div>
-            {addressSaved && (
-              <p className="mt-2 text-xs text-[#1B4332]">✓ Address saved for this account. It will remain saved until you change it.</p>
-            )}
-
-            {/* LOCATION */}
-
-            <div className="mt-5 rounded-xl border border-[#8BA888]/30 bg-[#8BA888]/10 p-4">
-              <div className="flex items-start gap-3">
-
-                <Navigation className="mt-0.5 h-5 w-5 text-[#1B4332]" />
-
-                <div className="flex-1">
-
-                  <div className="font-semibold text-[#1B4332]">
-                    Delivery location
+              {locCoords && (
+                <div className="sm:col-span-2" data-testid="location-map-preview">
+                  <div className="mb-1 flex items-center justify-between">
+                    <label className="text-xs font-semibold text-[#4A4A4A]">
+                      Pinned location · ~{locCoords.distKm.toFixed(2)} km from store
+                    </label>
+                    <a
+                      href={`https://www.openstreetmap.org/?mlat=${locCoords.lat}&mlon=${locCoords.lng}#map=17/${locCoords.lat}/${locCoords.lng}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs font-semibold text-[#1B4332] hover:text-[#E07A5F]"
+                    >
+                      Open in maps ↗
+                    </a>
                   </div>
+                  <div className="overflow-hidden rounded-xl border border-[#E5E5E5]">
+                    <iframe
+                      title="Delivery location preview"
+                      width="100%"
+                      height="220"
+                      loading="lazy"
+                      style={{ border: 0 }}
+                      src={`https://www.openstreetmap.org/export/embed.html?bbox=${locCoords.lng - 0.005}%2C${locCoords.lat - 0.003}%2C${locCoords.lng + 0.005}%2C${locCoords.lat + 0.003}&layer=mapnik&marker=${locCoords.lat}%2C${locCoords.lng}`}
+                    />
+                  </div>
+                </div>
+              )}
+              <div className="sm:col-span-2">
+                <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Distance from store (km)</label>
+                <select
+                  value={f.distance_km}
+                  onChange={(e) => setForm({ ...f, distance_km: e.target.value })}
+                  className="input-base"
+                  data-testid="distance-km"
+                >
+                  <option value="1.0">Within 1.5 km (₹15 delivery)</option>
+                  <option value="3.0">3 km (₹33 delivery)</option>
+                  <option value="5.0">5 km (₹57 delivery)</option>
+                  <option value="7.0">7 km (₹81 delivery)</option>
+                  <option value="10.0">10 km (₹117 delivery)</option>
+                </select>
+              </div>
+              <div className="sm:col-span-2">
+                <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Delivery notes (optional)</label>
+                <textarea
+                  value={form.notes}
+                  onChange={update("notes")}
+                  rows={2}
+                  className="input-base resize-none"
+                  placeholder="Ring the bell twice, leave at door, etc."
+                  data-testid="addr-notes"
+                />
+              </div>
 
-                  <p className="mt-1 text-xs text-[#4A4A4A]">
-                    Allow location access so we can calculate your exact delivery charge.
-                  </p>
-
-                  {location.latitude !==
-                    null &&
-                    location.longitude !==
-                      null && (
-                      <div className="mt-2 text-xs font-medium text-[#1B4332]">
-                        Location captured ✓
-                      </div>
-                    )}
-
-                  {estimatedDistance !==
-                    null && (
-                    <>
-                      <div className="mt-2 text-xs text-[#4A4A4A]">
-                        Estimated distance:{" "}
-                        <strong>
-                          {estimatedDistance.toFixed(
-                            2
-                          )}{" "}
-                          km
-                        </strong>
-                      </div>
-
-                      {location.accuracy !==
-                        null && (
-                        <div className="mt-1 text-xs text-[#4A4A4A]">
-                          GPS accuracy:{" "}
-                          {Math.round(
-                            location.accuracy
-                          )}{" "}
-                          m
-                        </div>
-                      )}
-                    </>
-                  )}
-
-                  {serviceable !== null && (
-                    <div className={`mt-2 text-xs font-semibold ${serviceable ? "text-[#1B4332]" : "text-red-600"}`}>
-                      {serviceable ? "✓ " : "⚠ "}{serviceabilityMessage}
+              {/* Save this address */}
+              {!selectedAddrId && (
+                <div className="sm:col-span-2 rounded-xl bg-[#8BA888]/10 p-3">
+                  <label className="flex cursor-pointer items-center gap-2 text-sm text-[#1A1A1A]" data-testid="save-address-toggle-label">
+                    <input
+                      type="checkbox"
+                      checked={saveThisAddress}
+                      onChange={(e) => setSaveThisAddress(e.target.checked)}
+                      data-testid="save-address-toggle"
+                    />
+                    Save this address for next time
+                  </label>
+                  {saveThisAddress && (
+                    <div className="mt-2 flex gap-2">
+                      {["Home", "Work", "Other"].map((l) => (
+                        <button
+                          key={l}
+                          type="button"
+                          onClick={() => setAddrLabel(l)}
+                          className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                            addrLabel === l ? "bg-[#1B4332] text-white" : "bg-white text-[#1B4332] ring-1 ring-[#1B4332]"
+                          }`}
+                          data-testid={`addr-label-${l.toLowerCase()}`}
+                        >
+                          {l}
+                        </button>
+                      ))}
                     </div>
                   )}
-
                 </div>
-
-                <button
-                  type="button"
-                  onClick={
-                    getCurrentLocation
-                  }
-                  disabled={
-                    locating
-                  }
-                  className="inline-flex items-center gap-1.5 rounded-full bg-[#1B4332] px-4 py-2 text-xs font-semibold text-white hover:bg-[#2D6A4F] disabled:opacity-50"
-                  data-testid="get-location-btn"
-                >
-                  {locating ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Navigation className="h-3.5 w-3.5" />
-                  )}
-
-                  {locating
-                    ? "Locating..."
-                    : "Use my location"}
-                </button>
-
-              </div>
+              )}
             </div>
           </section>
 
-          {/* COUPON */}
-
+          {/* Payment */}
           <section className="card-base p-6">
-
-            <div className="mb-4 flex items-center gap-2">
-              <Tag className="h-5 w-5 text-[#1B4332]" />
-
-              <h2 className="font-heading text-lg font-semibold">
-                Coupon
-              </h2>
-            </div>
-
-            {!coupon ? (
-              <div className="flex gap-2">
-
-                <input
-                  value={
-                    couponInput
-                  }
-                  onChange={(e) =>
-                    setCouponInput(
-                      e.target.value.toUpperCase()
-                    )
-                  }
-                  placeholder="Enter coupon code"
-                  className="input-base flex-1"
-                  data-testid="coupon-input"
-                />
-
-                <button
-                  type="button"
-                  onClick={
-                    applyCoupon
-                  }
-                  disabled={
-                    couponBusy
-                  }
-                  className="rounded-xl bg-[#1B4332] px-5 py-2 text-sm font-semibold text-white hover:bg-[#2D6A4F] disabled:opacity-50"
-                  data-testid="apply-coupon"
-                >
-                  {couponBusy
-                    ? "Checking..."
-                    : "Apply"}
-                </button>
-
-              </div>
-            ) : (
-              <div className="flex items-center justify-between rounded-xl bg-[#8BA888]/10 p-4">
-
-                <div>
-
-                  <div className="font-semibold text-[#1B4332]">
-                    {
-                      coupon.code
-                    }
-                  </div>
-
-                  <div className="text-xs text-[#4A4A4A]">
-                    You save{" "}
-                    {formatINR(
-                      discount
-                    )}
-                  </div>
-
-                </div>
-
-                <button
-                  type="button"
-                  onClick={
-                    removeCoupon
-                  }
-                  className="grid h-8 w-8 place-items-center rounded-full hover:bg-white"
-                  aria-label="Remove coupon"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-
-              </div>
-            )}
-          </section>
-
-          {/* PAYMENT */}
-
-          <section className="card-base p-6">
-
             <div className="mb-4 flex items-center gap-2">
               <CreditCard className="h-5 w-5 text-[#1B4332]" />
-
-              <h2 className="font-heading text-lg font-semibold">
-                Payment
-              </h2>
+              <h2 className="font-heading text-lg font-semibold">Payment method</h2>
             </div>
-
             <div className="grid gap-3 sm:grid-cols-2">
-
               <PayOption
-                selected={
-                  payment === "UPI"
-                }
-                onClick={() =>
-                  setPayment(
-                    "UPI"
-                  )
-                }
-                title="UPI"
-                sub="Google Pay, PhonePe, Paytm & other UPI apps"
-                testid="payment-upi"
+                selected={payment === "UPI"}
+                onClick={() => setPayment("UPI")}
+                title="UPI QR"
+                sub="Pay via any UPI app"
+                testid="pay-upi"
               />
-
               <PayOption
-                selected={
-                  payment === "COD"
-                }
-                onClick={() =>
-                  setPayment(
-                    "COD"
-                  )
-                }
+                selected={payment === "COD"}
+                onClick={() => setPayment("COD")}
                 title="Cash on Delivery"
-                sub="Pay when your order arrives"
-                testid="payment-cod"
+                sub="Pay when you receive"
+                testid="pay-cod"
               />
-
             </div>
 
-            {payment ===
-              "UPI" && (
-              <div className="mt-6 rounded-xl bg-[#8BA888]/10 p-5 text-center">
-
+            {payment === "UPI" && (
+              <div className="mt-6 flex flex-col items-center gap-3 rounded-xl border border-dashed border-[#8BA888] bg-[#FDFBF7] p-6 text-center">
+                <div className="text-sm font-semibold">Scan & pay {formatINR(total)}</div>
                 <img
-                  src={qrSrc}
+                  src={store.upi_qr || "/assets/upi-qr.jpeg"}
                   alt="UPI QR"
-                  className="mx-auto h-52 w-52 rounded-xl bg-white p-2"
+                  className="h-56 w-56 rounded-lg border border-[#E5E5E5] bg-white object-contain p-2"
+                  data-testid="upi-qr"
                 />
-
-                <div className="mt-4 text-sm font-semibold text-[#1B4332]">
-                  {
-                    store.upi_name
-                  }
-                </div>
-
-                <div className="mt-1 text-xs text-[#4A4A4A]">
-                  {
-                    store.upi_id
-                  }
-                </div>
-
-                <div className="mt-3 text-xs text-[#4A4A4A]">
-                  Pay{" "}
-                  <span className="font-mono font-bold text-[#1B4332]">
-                    {formatINR(
-                      estimatedTotal
-                    )}
-                  </span>{" "}
-                  using any UPI app.
-                </div>
-
-                <div className="mt-2 text-xs text-[#4A4A4A]">
-                  After payment, place the order. We&apos;ll confirm it via WhatsApp.
-                </div>
-
+                <div className="text-xs font-semibold text-[#1B4332]">PhonePe · Google Pay · Paytm · any UPI app</div>
+                <div className="text-xs text-[#4A4A4A]">Enter the amount <span className="font-mono font-semibold">{formatINR(total)}</span> in your UPI app after scanning.</div>
+                <div className="text-xs text-[#4A4A4A]">After payment, place the order — we&apos;ll confirm on WhatsApp.</div>
               </div>
             )}
-
-            {payment ===
-              "COD" && (
+            {payment === "COD" && (
               <div className="mt-6 flex items-start gap-2 rounded-xl bg-[#8BA888]/10 p-4 text-sm text-[#1B4332]">
-
                 <Truck className="mt-0.5 h-4 w-4" />
-
-                <span>
-                  Please keep exact change ready. Cash on Delivery is available across Ambajogai.
-                </span>
-
+                <span>Please keep exact change ready. Cash on Delivery available across Ambajogai.</span>
               </div>
             )}
-
           </section>
         </div>
 
-        {/* RIGHT */}
-
-        <aside
-          className="card-base sticky top-24 h-fit p-6"
-          data-testid="checkout-summary"
-        >
-
-          <h2 className="font-heading text-lg font-semibold">
-            Order summary
-          </h2>
-
+        {/* Summary */}
+        <aside className="card-base sticky top-24 h-fit p-6" data-testid="checkout-summary">
+          <h2 className="font-heading text-lg font-semibold">Order summary</h2>
           <div className="mt-4 max-h-64 space-y-3 overflow-auto pr-1">
-
-            {items.map(
-              (item) => (
-                <div
-                  key={`${item.product_id}-${item.variant_label || ""}`}
-                  className="flex gap-3"
-                >
-
-                  <img
-                    src={
-                      item.image
-                    }
-                    alt=""
-                    className="h-12 w-12 rounded-lg object-cover"
-                  />
-
-                  <div className="flex-1 text-sm">
-
-                    <div className="font-medium">
-                      {
-                        item.name
-                      }
-                    </div>
-
-                    {item.variant_label && (
-                      <div className="mt-0.5 text-xs font-bold text-[#1B4332]">
-                        Weight:{" "}
-                        {
-                          item.variant_label
-                        }
-                      </div>
-                    )}
-
-                    <div className="mt-0.5 text-xs text-[#4A4A4A]">
-                      Qty{" "}
-                      {
-                        item.quantity
-                      }{" "}
-                      ×{" "}
-                      {formatINR(
-                        Number(
-                          item.price ||
-                            0
-                        )
-                      )}
-                    </div>
-
-                  </div>
-
-                  <div className="text-sm font-semibold">
-                    {formatINR(
-                      Number(
-                        item.price ||
-                          0
-                      ) *
-                        Number(
-                          item.quantity ||
-                            0
-                        )
-                    )}
-                  </div>
-
+            {items.map((it) => (
+              <div key={it.product_id} className="flex gap-3">
+                <img src={it.image} alt="" className="h-12 w-12 rounded-lg object-cover" />
+                <div className="flex-1 text-sm">
+                  <div className="font-medium">{it.name}</div>
+                  <div className="text-xs text-[#4A4A4A]">Qty {it.quantity} × {formatINR(it.price)}</div>
                 </div>
-              )
+                <div className="text-sm font-semibold">{formatINR(it.price * it.quantity)}</div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 space-y-2 border-t border-dashed pt-4 text-sm">
+            <Row label="Subtotal" value={formatINR(subtotal)} />
+            <Row label="Delivery" value={effectiveDelivery === 0 ? "FREE" : formatINR(effectiveDelivery)} />
+            {discount > 0 && (
+              <Row label={`Coupon (${coupon.code})`} value={`- ${formatINR(discount)}`} />
             )}
-
           </div>
 
-          <div className="mt-4 space-y-2 border-t border-dashed pt-4 text-sm">
-
-            <Row
-              label="Subtotal"
-              value={formatINR(
-                subtotal
-              )}
-            />
-
-            {discount >
-              0 && (
-              <Row
-                label={`Coupon (${coupon.code})`}
-                value={`- ${formatINR(
-                  discount
-                )}`}
-              />
-            )}
-
-            <Row
-              label="Platform fee"
-              value={formatINR(
-                platformFee
-              )}
-            />
-
-            <Row
-              label="Delivery"
-              value={
-                location.latitude ===
-                    null ||
-                location.longitude ===
-                    null
-                  ? "Location required"
-                  : formatINR(
-                      estimatedDeliveryFee
-                    )
-              }
-            />
-
-            {estimatedDistance !==
-              null && (
-              <div className="rounded-lg bg-[#8BA888]/10 px-3 py-2 text-xs text-[#1B4332]">
- {Number(discountedSubtotal) >= 499
-  ? "FREE delivery"
-  : estimatedDistance <= 1.5
-    ? "₹16 delivery up to 1.5 km"
-    : "₹16 + ₹12/km after 1.5 km"}
-
-{" · "}
-
-{estimatedDistance.toFixed(2)}{" "}
-km
-
+          {/* Coupon */}
+          <div className="mt-4 border-t border-dashed pt-4">
+            {coupon ? (
+              <div className="flex items-center justify-between rounded-xl bg-green-50 px-3 py-2">
+                <span className="flex items-center gap-2 text-sm text-green-700">
+                  <Tag className="h-4 w-4" />
+                  <span className="font-semibold">{coupon.code}</span>
+                  <span className="text-xs">-{coupon.discount_pct}%</span>
+                </span>
+                <button onClick={removeCoupon} className="text-green-700 hover:text-green-900" data-testid="coupon-remove">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                <input
+                  value={couponInput}
+                  onChange={(e) => setCouponInput(e.target.value.toUpperCase())}
+                  placeholder="Coupon code"
+                  className="input-base"
+                  data-testid="coupon-input"
+                />
+                <button
+                  onClick={applyCoupon}
+                  disabled={couponBusy || !couponInput.trim()}
+                  className="btn-secondary shrink-0 px-4 py-2 text-sm"
+                  data-testid="coupon-apply"
+                >
+                  {couponBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Apply"}
+                </button>
               </div>
             )}
-
-            <Row
-              label="CGST (2.5%)"
-              value={formatINR(
-                cgst
-              )}
-            />
-
-            <Row
-              label="SGST (2.5%)"
-              value={formatINR(
-                sgst
-              )}
-            />
-
-            <Row
-              label="GST (5% total)"
-              value={formatINR(
-                gst
-              )}
-            />
-
           </div>
 
           <div className="mt-3 flex items-center justify-between border-t border-dashed pt-3">
-
-            <span className="text-sm font-semibold">
-              Total
-            </span>
-
-            <span
-              className="font-heading text-2xl font-bold text-[#1B4332]"
-              data-testid="checkout-total"
-            >
-              {formatINR(
-                estimatedTotal
-              )}
-            </span>
-
+            <span className="text-sm font-semibold">Total</span>
+            <span className="font-heading text-2xl font-bold text-[#1B4332]" data-testid="checkout-total">{formatINR(total)}</span>
           </div>
-
-          {/* MINIMUM ORDER MESSAGE */}
-
-          {Number(subtotal || 0) <
-            MINIMUM_ORDER_VALUE && (
-            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-center text-sm text-red-700">
-              Minimum order value is{" "}
-              <strong>
-                ₹{MINIMUM_ORDER_VALUE}
-              </strong>
-              . Please add{" "}
-              <strong>
-                ₹
-                {(
-                  MINIMUM_ORDER_VALUE -
-                  Number(
-                    subtotal || 0
-                  )
-                ).toFixed(2)}
-              </strong>{" "}
-              more to place your order.
-            </div>
-          )}
-
           <button
-            type="button"
-            onClick={
-              submit
-            }
-            disabled={
-              submitting ||
-              location.latitude ===
-                null ||
-              location.longitude ===
-                null ||
-              Number(subtotal || 0) <
-                MINIMUM_ORDER_VALUE
-            }
-            className="btn-primary mt-6 w-full disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={submit}
+            disabled={submitting}
+            className="btn-primary mt-6 w-full"
             data-testid="place-order-btn"
           >
-
-            {submitting ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <MessageCircle className="h-4 w-4" />
-            )}
-
-            {submitting
-              ? "Placing order..."
-              : Number(
-                  subtotal || 0
-                ) <
-                MINIMUM_ORDER_VALUE
-              ? `Minimum ₹${MINIMUM_ORDER_VALUE} required`
-              : "Place order"}
-
+            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircle className="h-4 w-4" />}
+            {submitting ? "Placing order…" : "Place order"}
           </button>
-
           <p className="mt-3 text-center text-xs text-[#4A4A4A]">
             We&apos;ll send order confirmation via WhatsApp.
           </p>
-
         </aside>
       </div>
     </div>
   );
 }
 
-/*
-|--------------------------------------------------------------------------
-| FIELD
-|--------------------------------------------------------------------------
-*/
-
-function Field({
-  label,
-  value,
-  onChange,
-  testid,
-  placeholder,
-  disabled = false,
-}) {
+function Field({ label, value, onChange, testid, placeholder }) {
   return (
     <div>
-
-      <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">
-        {label}
-      </label>
-
-      <input
-        value={value}
-        onChange={onChange}
-        placeholder={
-          placeholder
-        }
-        className={`input-base ${disabled ? "bg-gray-100 text-gray-500" : ""}`}
-        disabled={disabled}
-        data-testid={testid}
-      />
-
+      <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">{label}</label>
+      <input value={value} onChange={onChange} placeholder={placeholder} className="input-base" data-testid={testid} />
     </div>
   );
 }
 
-/*
-|--------------------------------------------------------------------------
-| ROW
-|--------------------------------------------------------------------------
-*/
-
-function Row({
-  label,
-  value,
-}) {
+function Row({ label, value }) {
   return (
     <div className="flex items-center justify-between">
-
-      <span className="text-[#4A4A4A]">
-        {label}
-      </span>
-
-      <span className="font-semibold">
-        {value}
-      </span>
-
+      <span className="text-[#4A4A4A]">{label}</span>
+      <span className="font-semibold">{value}</span>
     </div>
   );
 }
 
-/*
-|--------------------------------------------------------------------------
-| PAYMENT OPTION
-|--------------------------------------------------------------------------
-*/
-
-function PayOption({
-  selected,
-  onClick,
-  title,
-  sub,
-  testid,
-}) {
+function PayOption({ selected, onClick, title, sub, testid }) {
   return (
     <button
-      type="button"
       onClick={onClick}
       className={`rounded-xl border p-4 text-left transition-all ${
-        selected
-          ? "border-[#1B4332] bg-[#1B4332]/5 ring-1 ring-[#1B4332]"
-          : "border-[#E5E5E5] hover:border-[#8BA888]"
+        selected ? "border-[#1B4332] bg-[#1B4332]/5 ring-1 ring-[#1B4332]" : "border-[#E5E5E5] hover:border-[#8BA888]"
       }`}
       data-testid={testid}
     >
-
-      <div className="font-semibold text-[#1A1A1A]">
-        {title}
-      </div>
-
-      <div className="mt-1 text-xs text-[#4A4A4A]">
-        {sub}
-      </div>
-
+      <div className="font-semibold text-[#1A1A1A]">{title}</div>
+      <div className="mt-1 text-xs text-[#4A4A4A]">{sub}</div>
     </button>
   );
 }

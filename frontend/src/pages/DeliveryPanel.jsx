@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { NavLink, Routes, Route, Navigate } from "react-router-dom";
 import { api, formatINR, formatApiError } from "@/lib/api";
 import { toast } from "sonner";
+import { playAlert } from "@/lib/audioAlert";
 import {
   LayoutDashboard,
   ShoppingBag,
@@ -205,154 +206,96 @@ function OrderCard({ o, onStatus, showActions = true }) {
 function AssignedOrders() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
-
-  // Keeps track of orders already seen by this delivery partner.
-  const knownOrdersRef = useRef(new Set());
-
-  // Audio instance for new-order ringtone.
-  const audioRef = useRef(null);
-
-  const playNewOrderSound = useCallback(() => {
-    try {
-      if (!audioRef.current) {
-        audioRef.current = new Audio(
-          "https://actions.google.com/sounds/v1/alarms/beep_short.ogg"
-        );
-
-        audioRef.current.volume = 1.0;
-        audioRef.current.preload = "auto";
-      }
-
-      audioRef.current.currentTime = 0;
-
-      const playPromise = audioRef.current.play();
-
-      if (playPromise !== undefined) {
-        playPromise.catch(() => {
-          // Browser may block autoplay until the delivery partner
-          // interacts with the page.
-        });
-      }
-    } catch (error) {
-      console.error("New order ringtone error:", error);
-    }
-  }, []);
+  const [alertMuted, setAlertMuted] = useState(() => localStorage.getItem("delivery_new_order_muted") === "1");
+  const lastSeenIdRef = useRef(localStorage.getItem("delivery_last_seen_order_id") || "");
 
   const load = useCallback(async () => {
-    try {
-      setLoading(true);
-
-      const { data } = await api.get("/delivery/orders");
-
-      setOrders(Array.isArray(data) ? data : []);
-    } catch (error) {
-      toast.error(formatApiError(error));
-    } finally {
-      setLoading(false);
-    }
+    setLoading(true);
+    const { data } = await api.get("/delivery/orders");
+    setOrders(data);
+    setLoading(false);
   }, []);
 
-  // Initial load.
-  useEffect(() => {
-    load();
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
 
-  // ---------------------------------------------------------
-  // NEW ORDER DETECTION + RINGTONE
-  // ---------------------------------------------------------
+  // Poll for newly assigned orders every 15s and play alert
   useEffect(() => {
-    let mounted = true;
-
-    const checkForNewOrders = async () => {
+    let cancelled = false;
+    const check = async () => {
       try {
-        const { data } = await api.get("/delivery/orders");
-
-        if (!mounted || !Array.isArray(data)) return;
-
-        const currentOrderIds = new Set(
-          data.map((order) => String(order.id))
-        );
-
-        // First polling request:
-        // remember existing orders but DO NOT play ringtone.
-        if (knownOrdersRef.current.size === 0) {
-          knownOrdersRef.current = currentOrderIds;
-          setOrders(data);
-          return;
-        }
-
-        let newOrderFound = false;
-
-        for (const order of data) {
-          const orderId = String(order.id);
-
-          if (!knownOrdersRef.current.has(orderId)) {
-            newOrderFound = true;
-
-            toast.success("🔔 New order assigned!", {
-              description: `Order #${orderId.slice(-6).toUpperCase()}`,
-              duration: 6000,
-            });
+        const { data } = await api.get("/delivery/new-count");
+        if (cancelled || !data.latest_id) return;
+        if (lastSeenIdRef.current && data.latest_id !== lastSeenIdRef.current) {
+          if (!alertMuted) {
+            playAlert();
+            toast.success("New delivery assigned!", { duration: 6000 });
           }
+          load();
         }
-
-        if (newOrderFound) {
-          playNewOrderSound();
-        }
-
-        knownOrdersRef.current = currentOrderIds;
-        setOrders(data);
-      } catch (error) {
-        // Don't show an error toast every 5 seconds if polling fails.
-        console.error("Delivery order polling error:", error);
-      }
+        lastSeenIdRef.current = data.latest_id;
+        localStorage.setItem("delivery_last_seen_order_id", data.latest_id);
+      } catch { /* silent */ }
     };
+    check();
+    const t = setInterval(check, 15000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [alertMuted, load]);
 
-    // Check every 5 seconds.
-    const interval = setInterval(checkForNewOrders, 5000);
-
-    return () => {
-      mounted = false;
-      clearInterval(interval);
-    };
-  }, [playNewOrderSound]);
+  const toggleMute = () => {
+    const next = !alertMuted;
+    setAlertMuted(next);
+    localStorage.setItem("delivery_new_order_muted", next ? "1" : "0");
+    if (!next) playAlert();
+  };
 
   const setStatus = async (id, status) => {
     try {
       await api.patch(`/delivery/orders/${id}/status`, { status });
-
       toast.success(`Marked ${status}`);
-
-      // Refresh immediately after status change.
       load();
-    } catch (e) {
-      toast.error(formatApiError(e));
-    }
+    } catch (e) { toast.error(formatApiError(e)); }
   };
 
-  if (loading) {
-    return (
-      <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#1B4332]" />
-    );
-  }
-
-  if (orders.length === 0) {
-    return (
-      <div className="rounded-2xl border border-dashed border-[#E5E5E5] p-10 text-center text-[#4A4A4A]">
-        No active assignments right now.
-      </div>
-    );
-  }
+  if (loading) return <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#1B4332]" />;
 
   return (
     <div className="space-y-4" data-testid="delivery-orders">
-      {orders.map((o) => (
-        <OrderCard
-          key={o.id}
-          o={o}
-          onStatus={setStatus}
-        />
-      ))}
+      <div className="flex justify-end">
+        <button
+          onClick={toggleMute}
+          className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
+            alertMuted
+              ? "border-gray-300 bg-gray-100 text-gray-600 hover:bg-gray-200"
+              : "border-[#1B4332] bg-[#1B4332]/5 text-[#1B4332] hover:bg-[#1B4332]/10"
+          }`}
+          data-testid="delivery-alert-toggle"
+        >
+          {alertMuted ? "🔕 Alert muted" : "🔔 Alert on"}
+        </button>
+      </div>
+      {orders.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-[#E5E5E5] p-10 text-center text-[#4A4A4A]">No active assignments right now.</div>
+      ) : (
+        orders.map((o) => <OrderCard key={o.id} o={o} onStatus={setStatus} />)
+      )}
+    </div>
+  );
+}
+
+function HistoryList() {
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.get("/delivery/history").then(({ data }) => setOrders(data)).finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#1B4332]" />;
+  if (orders.length === 0) return <div className="rounded-2xl border border-dashed border-[#E5E5E5] p-10 text-center text-[#4A4A4A]">No delivery history yet.</div>;
+
+  return (
+    <div className="space-y-4" data-testid="delivery-history">
+      {orders.map((o) => <OrderCard key={o.id} o={o} onStatus={() => {}} showActions={false} />)}
     </div>
   );
 }

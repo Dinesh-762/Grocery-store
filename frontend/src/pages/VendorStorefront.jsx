@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import ProductCard from "@/components/ProductCard";
-import { Loader2, Store, MapPin, Package, ArrowLeft, ShieldCheck, Phone, Clock, Truck, Palmtree } from "lucide-react";
+import { Loader2, Store, MapPin, Package, ArrowLeft, ShieldCheck, Phone, Clock, Truck, Palmtree, Star } from "lucide-react";
 
 const DAYS = [
   { key: "mon", label: "Mon" },
@@ -51,6 +51,8 @@ export default function VendorStorefront() {
   }
 
   const closed = vendor.vacation_mode || vendor.open_now === false;
+  const todayKey = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][new Date().getDay()];
+  const todayHours = vendor.business_hours?.[todayKey];
 
   return (
     <div data-testid="vendor-storefront-page">
@@ -81,9 +83,20 @@ export default function VendorStorefront() {
                     <ShieldCheck className="h-3 w-3" /> Verified vendor
                   </span>
                 )}
-                {closed && (
+                {closed ? (
                   <span className="inline-flex items-center gap-1.5 rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-semibold text-red-700" data-testid="temporarily-closed-badge">
-                    <Palmtree className="h-3 w-3" /> Temporarily closed
+                    <Palmtree className="h-3 w-3" /> {vendor.vacation_mode ? "Temporarily closed" : "Closed now"}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-semibold text-green-700" data-testid="open-now-badge">
+                    <Clock className="h-3 w-3" /> Open now{todayHours ? ` · ${todayHours}` : ""}
+                  </span>
+                )}
+                {vendor.avg_rating != null && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-[#F4A261]/15 px-2.5 py-0.5 text-xs font-semibold text-[#B4531B]" data-testid="vendor-rating">
+                    <Star className="h-3 w-3 fill-[#F4A261] text-[#F4A261]" />
+                    {vendor.avg_rating.toFixed(1)}
+                    <span className="text-[#8B5A2B]">({vendor.review_count})</span>
                   </span>
                 )}
               </div>
@@ -124,24 +137,33 @@ export default function VendorStorefront() {
             </div>
           </div>
 
-          {closed && vendor.vacation_message && (
-            <div className="mt-6 rounded-xl bg-red-50 p-4 text-sm text-red-800" data-testid="vacation-notice">
-              {vendor.vacation_message}
+          {closed && (
+            <div className={`mt-6 rounded-xl p-4 text-sm ${vendor.vacation_mode ? "bg-red-50 text-red-800" : "bg-yellow-50 text-yellow-800"}`} data-testid="vacation-notice">
+              <div className="font-semibold">
+                {vendor.vacation_mode ? "This vendor is on vacation." : "This vendor is closed right now."}
+              </div>
+              {vendor.vacation_message && <div className="mt-1">{vendor.vacation_message}</div>}
+              <div className="mt-1 text-xs">Orders cannot be placed until they reopen.</div>
             </div>
           )}
 
           {vendor.business_hours && Object.keys(vendor.business_hours).length > 0 && (
-            <details className="mt-6 rounded-xl border border-[#E5E5E5] bg-white p-3 text-sm">
-              <summary className="cursor-pointer font-semibold text-[#1B4332]">Business hours</summary>
-              <div className="mt-3 grid gap-1.5 sm:grid-cols-2">
-                {DAYS.map((d) => (
-                  <div key={d.key} className="flex justify-between text-xs">
-                    <span className="font-semibold">{d.label}</span>
-                    <span className="text-[#4A4A4A]">{vendor.business_hours[d.key] || "—"}</span>
-                  </div>
-                ))}
+            <div className="mt-6 rounded-xl border border-[#E5E5E5] bg-white p-4 text-sm" data-testid="business-hours">
+              <div className="mb-3 flex items-center gap-2 font-semibold text-[#1B4332]">
+                <Clock className="h-4 w-4" /> Business hours
               </div>
-            </details>
+              <div className="grid gap-1.5 sm:grid-cols-2">
+                {DAYS.map((d) => {
+                  const isToday = d.key === todayKey;
+                  return (
+                    <div key={d.key} className={`flex items-center justify-between rounded-md px-2 py-1 text-xs ${isToday ? "bg-[#1B4332]/10 font-semibold text-[#1B4332]" : ""}`}>
+                      <span>{d.label}{isToday ? " · Today" : ""}</span>
+                      <span className={isToday ? "" : "text-[#4A4A4A]"}>{vendor.business_hours[d.key] || "Closed"}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           )}
         </div>
       </section>

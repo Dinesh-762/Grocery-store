@@ -8,39 +8,19 @@ export default function Login() {
   const { login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
 
   const submit = async (e) => {
     e.preventDefault();
-
     setLoading(true);
-
-    const res = await login(
-      email.trim().toLowerCase(),
-      password
-    );
-
+    const res = await login(email.trim().toLowerCase(), password);
     setLoading(false);
-
     if (res.ok) {
-      toast.success(
-        `Welcome back, ${res.user.name.split(" ")[0]}!`
-      );
-
-      const roleHome =
-        res.user.role === "admin"
-          ? "/admin"
-          : res.user.role === "vendor"
-          ? "/vendor"
-          : res.user.role === "delivery"
-          ? "/delivery"
-          : "/";
-
+      toast.success(`Welcome back, ${res.user.name.split(" ")[0]}!`);
+      const roleHome = res.user.role === "admin" ? "/admin" : res.user.role === "vendor" ? "/vendor" : res.user.role === "delivery" ? "/delivery" : "/";
       const from = location.state?.from || roleHome;
-
       navigate(from, { replace: true });
     } else {
       toast.error(res.error);
@@ -49,33 +29,14 @@ export default function Login() {
 
   return (
     <div className="container-app grid min-h-[80vh] place-items-center py-12">
-      <div
-        className="w-full max-w-md"
-        data-testid="login-page"
-      >
+      <div className="w-full max-w-md" data-testid="login-page">
         <div className="card-base p-8">
+          <h1 className="font-heading text-2xl font-bold sm:text-3xl">Welcome back</h1>
+          <p className="mt-1 text-sm text-[#4A4A4A]">Sign in to your Ambajogai Grocery account</p>
 
-          {/* Header */}
-          <h1 className="font-heading text-2xl font-bold sm:text-3xl">
-            Welcome back
-          </h1>
-
-          <p className="mt-1 text-sm text-[#4A4A4A]">
-            Sign in to your Ambajogai Grocery account
-          </p>
-
-          {/* Login Form */}
-          <form
-            onSubmit={submit}
-            className="mt-6 space-y-4"
-          >
-
-            {/* Email */}
+          <form onSubmit={submit} className="mt-6 space-y-4">
             <div>
-              <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">
-                Email
-              </label>
-
+              <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Email</label>
               <input
                 type="email"
                 required
@@ -86,27 +47,8 @@ export default function Login() {
                 data-testid="login-email"
               />
             </div>
-
-            {/* Password */}
             <div>
-              <div className="mb-1 flex items-center justify-between">
-
-                <label className="block text-xs font-semibold text-[#4A4A4A]">
-                  Password
-                </label>
-
-                {/* Forgot Password */}
-                <button
-                  type="button"
-                  onClick={() => navigate("/forgot-password")}
-                  className="text-xs font-semibold text-[#1B4332] hover:text-[#E07A5F]"
-                  data-testid="login-forgot-password"
-                >
-                  Forgot Password?
-                </button>
-
-              </div>
-
+              <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Password</label>
               <input
                 type="password"
                 required
@@ -117,37 +59,27 @@ export default function Login() {
                 data-testid="login-password"
               />
             </div>
-
-            {/* Login Button */}
-            <button
-              type="submit"
-              disabled={loading}
-              className="btn-primary w-full"
-              data-testid="login-submit"
-            >
-              {loading && (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              )}
-
-              {loading
-                ? "Signing in…"
-                : "Sign in"}
+            <div className="flex justify-end">
+              <Link
+                to="/forgot-password"
+                className="text-xs font-semibold text-[#1B4332] hover:text-[#E07A5F]"
+                data-testid="forgot-password-link"
+              >
+                Forgot password?
+              </Link>
+            </div>
+            <button type="submit" disabled={loading} className="btn-primary w-full" data-testid="login-submit">
+              {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+              {loading ? "Signing in…" : "Sign in"}
             </button>
-
           </form>
 
-          {/* Register Link */}
           <p className="mt-6 text-center text-sm text-[#4A4A4A]">
             No account?{" "}
-
-            <Link
-              to="/register"
-              className="font-semibold text-[#1B4332] hover:text-[#E07A5F]"
-            >
+            <Link to="/register" className="font-semibold text-[#1B4332] hover:text-[#E07A5F]">
               Create one
             </Link>
           </p>
-
         </div>
       </div>
     </div>
