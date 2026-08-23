@@ -1,7 +1,8 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { NavLink, Routes, Route, Navigate } from "react-router-dom";
 import { api, formatINR, formatApiError } from "@/lib/api";
 import { toast } from "sonner";
+import { playAlert } from "@/lib/audioAlert";
 import {
   LayoutDashboard,
   Package,
@@ -24,7 +25,18 @@ import {
   BarChart3,
   Award,
 } from "lucide-react";
+function urlB64ToUint8Array(base64) {
+  const padding = "=".repeat((4 - (base64.length % 4)) % 4);
+  const b64 = (base64 + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(b64);
+  const out = new Uint8Array(raw.length);
 
+  for (let i = 0; i < raw.length; i++) {
+    out[i] = raw.charCodeAt(i);
+  }
+
+  return out;
+}
 const adminLinks = [
   { to: "/admin", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/admin/analytics", label: "Analytics", icon: BarChart3 },
@@ -640,6 +652,8 @@ function OrdersAdmin() {
   const [dps, setDps] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("");
+  const [alertMuted, setAlertMuted] = useState(() => localStorage.getItem("admin_new_order_muted") === "1");
+  const lastSeenIdRef = useRef(localStorage.getItem("admin_last_seen_order_id") || "");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -655,7 +669,135 @@ function OrdersAdmin() {
   useEffect(() => {
     load();
   }, [load]);
+    // Poll for new pending orders every 15 seconds
+  useEffect(() => {
+    let cancelled = false;
 
+    const check = async () => {
+      try {
+        const { data } = await api.get("/admin/orders/pending-count");
+
+        if (cancelled || !data.latest_id) return;
+
+        if (
+          lastSeenIdRef.current &&
+          data.latest_id !== lastSeenIdRef.current
+        ) {
+          if (!alertMuted) {
+            playAlert();
+
+            toast.success(
+              `New order received! ${data.count} pending`,
+              { duration: 6000 }
+            );
+
+            if (
+              typeof Notification !== "undefined" &&
+              Notification.permission === "granted"
+            ) {
+              try {
+                new Notification("Ambajogai — New order", {
+                  body: `You have ${data.count} pending order${
+                    data.count === 1 ? "" : "s"
+                  }. Tap to review.`,
+                  tag: "ambajogai-new-order",
+                  icon: "/favicon.ico",
+                });
+              } catch {
+                // Ignore notification errors
+              }
+            }
+          }
+
+          load();
+        }
+
+        lastSeenIdRef.current = data.latest_id;
+        localStorage.setItem(
+          "admin_last_seen_order_id",
+          data.latest_id
+        );
+      } catch {
+        // Silent polling failure
+      }
+    };
+
+    check();
+
+    const t = setInterval(check, 15000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [alertMuted, load]);
+    const toggleMute = async () => {
+    const next = !alertMuted;
+
+    setAlertMuted(next);
+    localStorage.setItem(
+      "admin_new_order_muted",
+      next ? "1" : "0"
+    );
+
+    if (!next) {
+      playAlert();
+
+      // Ask for browser notification permission
+      if (
+        typeof Notification !== "undefined" &&
+        Notification.permission === "default"
+      ) {
+        try {
+          await Notification.requestPermission();
+        } catch {
+          // Ignore permission errors
+        }
+      }
+
+      // Register service worker and subscribe to Web Push
+      if (
+        "serviceWorker" in navigator &&
+        "PushManager" in window &&
+        typeof Notification !== "undefined" &&
+        Notification.permission === "granted"
+      ) {
+        try {
+          const reg = await navigator.serviceWorker.register("/sw.js");
+
+          await navigator.serviceWorker.ready;
+
+          const { data } = await api.get(
+            "/push/vapid-public-key"
+          );
+
+          if (data.public_key) {
+            const existing =
+              await reg.pushManager.getSubscription();
+
+            const sub =
+              existing ||
+              await reg.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey:
+                  urlB64ToUint8Array(data.public_key),
+              });
+
+            const json = sub.toJSON();
+
+            await api.post("/push/subscribe", {
+              endpoint: json.endpoint,
+              keys: json.keys,
+            });
+
+            toast.success("Background alerts enabled");
+          }
+        } catch (e) {
+          console.warn("Push setup failed", e);
+        }
+      }
+    }
+  };
   const setStatus = async (id, status) => {
   try {
     await api.patch(`/admin/orders/${id}/status`, { status });

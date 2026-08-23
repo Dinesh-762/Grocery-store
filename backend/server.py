@@ -1,5 +1,8 @@
-from pathlib import Path
+﻿from pathlib import Path
 import os
+import asyncio
+import json as _json
+from pywebpush import webpush, WebPushException
 
 from dotenv import load_dotenv
 from twilio.rest import Client
@@ -641,6 +644,134 @@ async def password_reset_confirm(payload: PasswordResetConfirm):
     return {"success": True, "message": "Password reset successfully. Please log in with your new password."}
 
 
+
+# ---------------------------------------------------------------------------
+# Web Push (VAPID) — admin new-order notifications
+# ---------------------------------------------------------------------------
+
+VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
+VAPID_PRIVATE_KEY = (os.environ.get("VAPID_PRIVATE_KEY", "") or "").replace("\\n", "\n")
+VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:admin@ambajogai.com")
+
+
+class PushSubscriptionIn(BaseModel):
+    endpoint: str
+    keys: dict
+
+
+@api.get("/push/vapid-public-key")
+async def get_vapid_public_key():
+    return {"public_key": VAPID_PUBLIC_KEY}
+
+
+@api.post("/push/subscribe")
+async def push_subscribe(
+    payload: PushSubscriptionIn,
+    user: dict = Depends(get_current_user)
+):
+    if user.get("role") not in ("admin", "delivery"):
+        raise HTTPException(
+            status_code=403,
+            detail="Only admins and delivery boys can subscribe"
+        )
+
+    await db.push_subscriptions.update_one(
+        {"endpoint": payload.endpoint},
+        {
+            "$set": {
+                "user_id": user["id"],
+                "role": user.get("role"),
+                "endpoint": payload.endpoint,
+                "keys": payload.keys,
+                "updated_at": iso_now(),
+            }
+        },
+        upsert=True,
+    )
+
+    return {"success": True}
+
+
+@api.post("/push/unsubscribe")
+async def push_unsubscribe(
+    payload: dict,
+    user: dict = Depends(get_current_user)
+):
+    endpoint = payload.get("endpoint")
+
+    if endpoint:
+        await db.push_subscriptions.delete_one(
+            {
+                "endpoint": endpoint,
+                "user_id": user["id"],
+            }
+        )
+
+    return {"success": True}
+
+
+def _send_push_sync(sub: dict, message: dict) -> bool:
+    try:
+        webpush(
+            subscription_info={
+                "endpoint": sub["endpoint"],
+                "keys": sub["keys"],
+            },
+            data=_json.dumps(message),
+            vapid_private_key=VAPID_PRIVATE_KEY,
+            vapid_claims={"sub": VAPID_SUBJECT},
+            ttl=60,
+        )
+        return True
+
+    except WebPushException as e:
+        if e.response is not None and e.response.status_code in (404, 410):
+            return False
+        return False
+
+    except Exception:
+        return False
+
+
+async def broadcast_push_to_admins(
+    title: str,
+    body: str,
+    url: str = "/admin/orders"
+):
+    if not VAPID_PRIVATE_KEY or not VAPID_PUBLIC_KEY:
+        return
+
+    subs = await db.push_subscriptions.find(
+        {"role": "admin"}
+    ).to_list(500)
+
+    if not subs:
+        return
+
+    message = {
+        "title": title,
+        "body": body,
+        "url": url,
+    }
+
+    dead = []
+
+    for sub in subs:
+        ok = await asyncio.to_thread(
+            _send_push_sync,
+            sub,
+            message
+        )
+
+        if not ok:
+            dead.append(sub["endpoint"])
+
+    if dead:
+        await db.push_subscriptions.delete_many(
+            {"endpoint": {"$in": dead}}
+        )
+
+
 # ---------------------------------------------------------------------------
 # Categories
 # ---------------------------------------------------------------------------
@@ -748,9 +879,9 @@ async def delete_product(prod_id: str, _: dict = Depends(require_admin)):
 # ---------------------------------------------------------------------------
 
 # Delivery pricing:
-#   <= 1.5 km  -> ₹16 fixed
-#   > 1.5 km   -> ₹16 + ₹12 for every additional km
-#   subtotal >= ₹499 -> FREE delivery
+#   <= 1.5 km  -> â‚¹16 fixed
+#   > 1.5 km   -> â‚¹16 + â‚¹12 for every additional km
+#   subtotal >= â‚¹499 -> FREE delivery
 
 DELIVERY_BASE_FEE = 16.0
 DELIVERY_RATE_AFTER_1_5_KM = 12.0
@@ -808,7 +939,7 @@ def calculate_delivery_fee(
     distance_km: float,
     subtotal: float = 0.0,
 ) -> float:
-    """Calculate delivery fee using the ₹16 + ₹12/km rule."""
+    """Calculate delivery fee using the â‚¹16 + â‚¹12/km rule."""
 
     distance_km = max(0.0, float(distance_km))
     subtotal = max(0.0, float(subtotal))
@@ -817,12 +948,12 @@ def calculate_delivery_fee(
     if subtotal >= FREE_DELIVERY_THRESHOLD:
         return 0.0
 
-    # Up to 1.5 km = fixed ₹16.
+    # Up to 1.5 km = fixed â‚¹16.
     if distance_km <= DELIVERY_BASE_DISTANCE_KM:
         return DELIVERY_BASE_FEE
 
     # Above 1.5 km:
-    # ₹16 + ₹12 for every additional km.
+    # â‚¹16 + â‚¹12 for every additional km.
     additional_distance = distance_km - DELIVERY_BASE_DISTANCE_KM
 
     delivery_fee = (
@@ -858,7 +989,7 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         if it.quantity <= 0:
             raise HTTPException(status_code=400, detail="Quantity must be positive")
 
-        # Variant resolution — selected variant controls price/unit and, when present, stock.
+        # Variant resolution â€” selected variant controls price/unit and, when present, stock.
         eff_price = float(prod["price"])
         eff_unit = prod.get("unit", "1 pc")
         selected_variant = None
@@ -917,7 +1048,7 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         if vend:
             min_amt = vend.get("min_order_amount") or 0
             if min_amt and sub < min_amt:
-                raise HTTPException(status_code=400, detail=f"Minimum order for {vend.get('business_name', 'this vendor')} is ₹{int(min_amt) if float(min_amt).is_integer() else round(min_amt, 2)}. Current subtotal for their items is ₹{sub:.2f}.")
+                raise HTTPException(status_code=400, detail=f"Minimum order for {vend.get('business_name', 'this vendor')} is â‚¹{int(min_amt) if float(min_amt).is_integer() else round(min_amt, 2)}. Current subtotal for their items is â‚¹{sub:.2f}.")
 
     subtotal = round(sum(i["price"] * i["quantity"] for i in verified_items), 2)
 
@@ -985,7 +1116,7 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         if coupon.get("expires_at") and datetime.fromisoformat(coupon["expires_at"]) < now_utc():
             raise HTTPException(status_code=400, detail="Coupon expired")
         if subtotal < coupon.get("min_amount", 0):
-            raise HTTPException(status_code=400, detail=f"Order must be at least ₹{coupon.get('min_amount', 0)} to use this coupon")
+            raise HTTPException(status_code=400, detail=f"Order must be at least â‚¹{coupon.get('min_amount', 0)} to use this coupon")
         discount = round(subtotal * (coupon["discount_pct"] / 100.0), 2)
         coupon_applied = {"code": coupon["code"], "discount_pct": coupon["discount_pct"], "discount": discount}
 
@@ -1071,6 +1202,18 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
                 logger.error(f"Stock rollback failed: {rollback_exc}")
         raise
 
+    # Fire-and-forget push notification for admins after successful order creation
+    try:
+        short_id = str(doc["_id"])[-6:].upper()
+        asyncio.create_task(
+            broadcast_push_to_admins(
+                title=f"New order #{short_id}",
+                body=f"₹{doc['total']} from {doc['user_name']} • {doc['payment_method']}",
+                url="/admin/orders",
+            )
+        )
+    except Exception:
+        pass
     return order_to_out(doc)
 
 
@@ -1088,6 +1231,18 @@ async def get_order(order_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Order not found")
     if user.get("role") != "admin" and doc.get("user_id") != user["id"]:
         raise HTTPException(status_code=403, detail="Access denied")
+    # Fire-and-forget push notification for admins after successful order creation
+    try:
+        short_id = str(doc["_id"])[-6:].upper()
+        asyncio.create_task(
+            broadcast_push_to_admins(
+                title=f"New order #{short_id}",
+                body=f"₹{doc['total']} from {doc['user_name']} • {doc['payment_method']}",
+                url="/admin/orders",
+            )
+        )
+    except Exception:
+        pass
     return order_to_out(doc)
 
 
@@ -1096,6 +1251,17 @@ async def admin_list_orders(_: dict = Depends(require_admin), status_filter: Opt
     q = {"status": status_filter} if status_filter else {}
     docs = await db.orders.find(q).sort("created_at", -1).to_list(1000)
     return [order_to_out(d) for d in docs]
+
+@api.get("/admin/orders/pending-count")
+async def admin_pending_order_count(_: dict = Depends(require_admin)):
+    docs = await db.orders.find(
+        {"status": "Pending"}
+    ).sort("created_at", -1).to_list(1)
+
+    return {
+        "count": await db.orders.count_documents({"status": "Pending"}),
+        "latest_id": str(docs[0]["_id"]) if docs else None,
+    }
 
 
 @api.patch("/admin/orders/{order_id}/status")
@@ -1114,6 +1280,18 @@ async def update_order_status(order_id: str, payload: OrderStatusUpdate, _: dict
     )
     doc["status"] = payload.status
     doc["status_history"] = history
+    # Fire-and-forget push notification for admins after successful order creation
+    try:
+        short_id = str(doc["_id"])[-6:].upper()
+        asyncio.create_task(
+            broadcast_push_to_admins(
+                title=f"New order #{short_id}",
+                body=f"₹{doc['total']} from {doc['user_name']} • {doc['payment_method']}",
+                url="/admin/orders",
+            )
+        )
+    except Exception:
+        pass
     return order_to_out(doc)
 
 
@@ -1627,7 +1805,7 @@ async def vendor_get_settings(user: dict = Depends(get_current_user)):
 async def vendor_update_settings(payload: VendorSettingsIn, user: dict = Depends(get_current_user)):
     vendor = await get_vendor_for_user(user)
     update = payload.model_dump(exclude_none=True)
-    # Vendors cannot set their own commission — silently drop
+    # Vendors cannot set their own commission â€” silently drop
     update.pop("commission_pct", None)
     if "min_order_amount" in update and update["min_order_amount"] < 0:
         raise HTTPException(status_code=400, detail="Min order must be >= 0")
@@ -1778,7 +1956,7 @@ def dp_to_out(u: dict) -> dict:
     }
 
 
-# Commission — admin sets per-vendor
+# Commission â€” admin sets per-vendor
 @api.patch("/admin/vendors/{vendor_id}/commission")
 async def admin_set_commission(vendor_id: str, payload: CommissionIn, _: dict = Depends(require_admin)):
     oid = safe_object_id(vendor_id)
@@ -1789,7 +1967,7 @@ async def admin_set_commission(vendor_id: str, payload: CommissionIn, _: dict = 
     return vendor_to_out(v)
 
 
-# Delivery partners — admin CRUD
+# Delivery partners â€” admin CRUD
 @api.get("/admin/delivery-partners")
 async def admin_list_dp(_: dict = Depends(require_admin)):
     docs = await db.users.find({"role": "delivery"}).sort("created_at", -1).to_list(1000)
@@ -2063,11 +2241,11 @@ async def admin_vendor_performance(_: dict = Depends(require_admin)):
     result = []
     for v in vendors:
         vid = str(v["_id"])
-        # Ratings — from reviews collection (product_slug OR vendor_id)
+        # Ratings â€” from reviews collection (product_slug OR vendor_id)
         vendor_reviews = await db.reviews.find({"vendor_id": vid}).to_list(1000)
         avg_rating = round(sum(r["rating"] for r in vendor_reviews) / len(vendor_reviews), 2) if vendor_reviews else None
 
-        # Orders — count line items owned by this vendor
+        # Orders â€” count line items owned by this vendor
         orders = await db.orders.find({"items.vendor_id": vid}).to_list(5000)
         total_orders = len(orders)
         delivered = 0
@@ -2100,7 +2278,7 @@ async def admin_vendor_performance(_: dict = Depends(require_admin)):
     return result
 
 
-# WhatsApp notification helper — generates a wa.me deep link that anyone
+# WhatsApp notification helper â€” generates a wa.me deep link that anyone
 # (admin, vendor, delivery boy) can click to send a status update. No paid API.
 @api.post("/notify/order-whatsapp")
 async def notify_order_whatsapp(payload: dict, user: dict = Depends(get_current_user)):
@@ -2135,7 +2313,7 @@ async def notify_order_whatsapp(payload: dict, user: dict = Depends(get_current_
                 label += f" ({i['variant_label']})"
             elif i.get("unit"):
                 label += f" ({i['unit']})"
-            line = f"- {label} x {i['quantity']} @ ₹{i['price']} = ₹{round(i['price']*i['quantity'],2)}"
+            line = f"- {label} x {i['quantity']} @ â‚¹{i['price']} = â‚¹{round(i['price']*i['quantity'],2)}"
             if i.get("note"):
                 line += f"\n  Note: {i['note']}"
             lines.append(line)
@@ -2148,32 +2326,32 @@ async def notify_order_whatsapp(payload: dict, user: dict = Depends(get_current_
     full_addr += f", {addr['area']}, {addr.get('city','Ambajogai')} - {addr['pincode']}"
 
     placed_detail = (
-        f"Hi {o['user_name']}, thank you for your order at Ambajogai Grocery Store! 🙏\n\n"
+        f"Hi {o['user_name']}, thank you for your order at Ambajogai Grocery Store! ðŸ™\n\n"
         f"*Order #{short_id}*\n"
         f"{items_block}\n\n"
-        f"Subtotal: ₹{o.get('subtotal', o['total'])}\n"
-        f"Delivery: {'FREE' if o.get('delivery_fee', 0) == 0 else '₹' + str(o.get('delivery_fee', 0))}"
-        + (f"\nDiscount: -₹{o.get('discount', 0)}" if o.get("discount", 0) else "")
-        + f"\n*Total: ₹{o['total']}*\n"
+        f"Subtotal: â‚¹{o.get('subtotal', o['total'])}\n"
+        f"Delivery: {'FREE' if o.get('delivery_fee', 0) == 0 else 'â‚¹' + str(o.get('delivery_fee', 0))}"
+        + (f"\nDiscount: -â‚¹{o.get('discount', 0)}" if o.get("discount", 0) else "")
+        + f"\n*Total: â‚¹{o['total']}*\n"
         f"Payment: {o['payment_method']}\n\n"
-        f"Delivering to: {addr['full_name']} · {addr['phone']}\n{full_addr}\n\n"
-        f"Estimated delivery: 30-45 minutes. We'll message you as soon as your order is on its way. 💚"
+        f"Delivering to: {addr['full_name']} Â· {addr['phone']}\n{full_addr}\n\n"
+        f"Estimated delivery: 30-45 minutes. We'll message you as soon as your order is on its way. ðŸ’š"
     )
 
     feedback_msg = (
-        f"Hi {o['user_name']}, hope you enjoyed your Ambajogai Grocery order #{short_id}! 🌿\n\n"
-        f"Could you share a quick rating (1-5 ⭐) and let us know what we did well and where we can improve?\n\n"
-        f"Just reply to this chat — it takes 30 seconds and helps us serve you better. Thank you!"
+        f"Hi {o['user_name']}, hope you enjoyed your Ambajogai Grocery order #{short_id}! ðŸŒ¿\n\n"
+        f"Could you share a quick rating (1-5 â­) and let us know what we did well and where we can improve?\n\n"
+        f"Just reply to this chat â€” it takes 30 seconds and helps us serve you better. Thank you!"
     )
 
     templates = {
         "placed": placed_detail,
-        "accepted": f"Hi {o['user_name']}, your Ambajogai Grocery order #{short_id} has been accepted and is being prepared. Total ₹{o['total']}.",
-        "dispatched": f"Hi {o['user_name']}, your Ambajogai Grocery order #{short_id} is out for delivery. Please keep the payment of ₹{o['total']} ready if paying COD.",
-        "delivered": f"Hi {o['user_name']}, your Ambajogai Grocery order #{short_id} has been delivered. Thanks for shopping with us! 🌿",
-        "payment": f"Hi {o['user_name']}, we've received your payment for order #{short_id} (₹{o['total']}). Thanks!",
+        "accepted": f"Hi {o['user_name']}, your Ambajogai Grocery order #{short_id} has been accepted and is being prepared. Total â‚¹{o['total']}.",
+        "dispatched": f"Hi {o['user_name']}, your Ambajogai Grocery order #{short_id} is out for delivery. Please keep the payment of â‚¹{o['total']} ready if paying COD.",
+        "delivered": f"Hi {o['user_name']}, your Ambajogai Grocery order #{short_id} has been delivered. Thanks for shopping with us! ðŸŒ¿",
+        "payment": f"Hi {o['user_name']}, we've received your payment for order #{short_id} (â‚¹{o['total']}). Thanks!",
         "feedback": feedback_msg,
-        "update": f"Hi {o['user_name']}, update on your Ambajogai Grocery order #{short_id} — current status: {o['status']}.",
+        "update": f"Hi {o['user_name']}, update on your Ambajogai Grocery order #{short_id} â€” current status: {o['status']}.",
     }
     message = templates.get(event, templates["update"])
     phone = o["address"]["phone"].replace(" ", "").replace("+", "").replace("-", "")
@@ -2246,7 +2424,7 @@ async def validate_coupon(code: str, subtotal: float = 0):
     if coupon.get("expires_at") and datetime.fromisoformat(coupon["expires_at"]) < now_utc():
         raise HTTPException(status_code=400, detail="Coupon expired")
     if subtotal < coupon.get("min_amount", 0):
-        raise HTTPException(status_code=400, detail=f"Order must be at least ₹{coupon.get('min_amount', 0)} to use this coupon")
+        raise HTTPException(status_code=400, detail=f"Order must be at least â‚¹{coupon.get('min_amount', 0)} to use this coupon")
     discount = round(subtotal * (coupon["discount_pct"] / 100.0), 2)
     return {"code": coupon["code"], "discount_pct": coupon["discount_pct"], "discount": discount, "min_amount": coupon.get("min_amount", 0)}
 
@@ -2434,3 +2612,5 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     client.close()
+
+
