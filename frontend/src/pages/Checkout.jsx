@@ -416,6 +416,7 @@ export default function Checkout() {
     } else {
       setSavedAddress(null);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
   /*
@@ -2245,3 +2246,4 @@ function PayOption({
     </button>
   );
 }
+
