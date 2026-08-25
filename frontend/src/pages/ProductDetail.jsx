@@ -267,9 +267,21 @@ export default function ProductDetail() {
   |--------------------------------------------------------------------------
   */
 
-  // Promotional badge is fixed at 10%. The actual discount is applied
-  // only after GROCERY10 is explicitly applied at checkout.
-  const discount = 10;
+  const discount =
+    displayMrp &&
+    Number(displayMrp) >
+      Number(displayPrice)
+      ? Math.round(
+          (
+            (
+              Number(displayMrp) -
+              Number(displayPrice)
+            ) /
+            Number(displayMrp)
+          ) *
+            100
+        )
+      : 0;
 
   /*
   |--------------------------------------------------------------------------
@@ -556,17 +568,13 @@ export default function ProductDetail() {
                     )}
                   </div>
 
-                  <span className="rounded-full bg-[#E07A5F]/10 px-2.5 py-0.5 text-sm font-semibold text-[#E07A5F]">
-                    {discount}% off
-                  </span>
+                  {discount > 0 && (
+                    <span className="rounded-full bg-[#E07A5F]/10 px-2.5 py-0.5 text-sm font-semibold text-[#E07A5F]">
+                      {discount}% off
+                    </span>
+                  )}
                 </>
               )}
-
-            {!(displayMrp && Number(displayMrp) > Number(displayPrice)) && (
-              <span className="rounded-full bg-[#E07A5F]/10 px-2.5 py-0.5 text-sm font-semibold text-[#E07A5F]">
-                {discount}% off
-              </span>
-            )}
           </div>
 
           {/* ===================================================

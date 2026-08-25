@@ -1,3 +1,4 @@
+import { playCheckoutBell } from "@/lib/audioAlert";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { NavLink, Routes, Route, Navigate } from "react-router-dom";
 import { api, formatINR, formatApiError } from "@/lib/api";
@@ -213,29 +214,7 @@ function AssignedOrders() {
   const audioRef = useRef(null);
 
   const playNewOrderSound = useCallback(() => {
-    try {
-      if (!audioRef.current) {
-        audioRef.current = new Audio(
-          "https://actions.google.com/sounds/v1/alarms/beep_short.ogg"
-        );
-
-        audioRef.current.volume = 1.0;
-        audioRef.current.preload = "auto";
-      }
-
-      audioRef.current.currentTime = 0;
-
-      const playPromise = audioRef.current.play();
-
-      if (playPromise !== undefined) {
-        playPromise.catch(() => {
-          // Browser may block autoplay until the delivery partner
-          // interacts with the page.
-        });
-      }
-    } catch (error) {
-      console.error("New order ringtone error:", error);
-    }
+    playCheckoutBell();
   }, []);
 
   const load = useCallback(async () => {

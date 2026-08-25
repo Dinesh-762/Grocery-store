@@ -26,5 +26,9 @@ python-multipart>=0.0.9
 jq>=1.6.0
 typer>=0.9.0
 cloudinary
-twilio==9.11.0
-pywebpush
+httpx>=0.27.0
+pywebpush>=2.0.0
+
+# NOTE: 'emergentintegrations==0.2.0' was removed — it is not imported anywhere
+# in server.py and is not published on public PyPI (404), so `pip install -r
+# requirements.txt` would fail outside the Emergent platform's private index.

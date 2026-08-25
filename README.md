@@ -1,195 +1,70 @@
-# Ambajogai Grocery Store
+# Getting Started with Create React App
 
-Production-ready full-stack grocery e-commerce for **Ambajogai Grocery Store**. Search, order, pay via UPI/COD, track deliveries, and stay in touch on WhatsApp — all in one modern web app.
+This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
 
-- **Frontend**: React 19 + React Router + Tailwind + shadcn/ui + Lucide icons + Sonner toasts
-- **Backend**: FastAPI + Motor (async MongoDB) + PyJWT + bcrypt
-- **Database**: MongoDB
-- **Auth**: Email + password with JWT bearer tokens (mock OTP endpoints included)
-- **Payments**: UPI QR (via `upi://` deep link + QR image) + Cash on Delivery
-- **WhatsApp**: `wa.me` deep links (floating button, order confirmations, help chat)
+## Available Scripts
 
-Everything is open-source and portable — clone, edit, and deploy anywhere.
+In the project directory, you can run:
 
----
+### `npm start`
 
-## Quick start (local)
+Runs the app in the development mode.\
+Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
 
-### Prerequisites
-- Node.js 18+ and Yarn
-- Python 3.11+
-- MongoDB 6+ running locally (or a MongoDB Atlas connection string)
+The page will reload when you make changes.\
+You may also see any lint errors in the console.
 
-### 1. Backend
-```bash
-cd backend
-pip install -r requirements.txt
-cp .env.example .env   # or edit /app/backend/.env directly
-uvicorn server:app --host 0.0.0.0 --port 8001 --reload
-```
+### `npm test`
 
-### 2. Frontend
-```bash
-cd frontend
-yarn install
-yarn start
-```
-The React app runs on port 3000 and calls the backend via `REACT_APP_BACKEND_URL/api`.
+Launches the test runner in the interactive watch mode.\
+See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
 
-### 3. Admin login
-- Email: `admin@ambajogai.com`
-- Password: `Admin@123`
-Change these in `backend/.env` before going to production.
+### `npm run build`
 
----
+Builds the app for production to the `build` folder.\
+It correctly bundles React in production mode and optimizes the build for the best performance.
 
-## Environment variables (`backend/.env`)
+The build is minified and the filenames include the hashes.\
+Your app is ready to be deployed!
 
-| Variable | Purpose |
-| --- | --- |
-| `MONGO_URL` | MongoDB connection string |
-| `DB_NAME` | Database name |
-| `JWT_SECRET` | Secret used to sign JWT tokens (change in prod!) |
-| `JWT_EXPIRE_DAYS` | JWT expiry (days) |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Seeded admin account credentials |
-| `STORE_NAME` | Store display name |
-| `STORE_WHATSAPP` | WhatsApp phone number in `+countrycodeXXXXXXXXXX` |
-| `STORE_UPI_ID` | UPI VPA used in the QR (e.g. `store@upi`) |
-| `STORE_UPI_NAME` | Name that appears in UPI app |
-| `CLOUDINARY_*` | Optional Cloudinary keys if you enable image upload |
+See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
 
-Frontend `.env` needs only `REACT_APP_BACKEND_URL`.
+### `npm run eject`
 
----
+**Note: this is a one-way operation. Once you `eject`, you can't go back!**
 
-## Project structure
+If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
 
-```
-app/
-├── backend/
-│   ├── server.py         # FastAPI app (auth, products, orders, admin, seed)
-│   ├── requirements.txt
-│   └── .env
-└── frontend/
-    ├── package.json
-    ├── tailwind.config.js
-    └── src/
-        ├── App.js           # Router
-        ├── index.css        # Design tokens + fonts
-        ├── lib/api.js       # Axios instance + helpers
-        ├── context/
-        │   ├── AuthContext.jsx
-        │   └── CartContext.jsx
-        ├── components/
-        │   ├── Header.jsx
-        │   ├── Footer.jsx
-        │   ├── ProductCard.jsx
-        │   ├── ProtectedRoute.jsx
-        │   ├── WhatsAppFloat.jsx
-        │   └── ui/          # shadcn primitives
-        └── pages/           # Home, Products, ProductDetail, Cart, Checkout,
-                             # Login, Register, Orders, OrderDetail, About,
-                             # Contact, Legal, Admin
-```
+Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
 
----
+You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
 
-## Key features
+## Learn More
 
-### Customer flow
-- Browse by category or search
-- Product detail with quantity selector
-- Persistent cart (localStorage)
-- Address + payment checkout (UPI QR / COD)
-- WhatsApp confirmation pops open after every order
-- Track live order status (Pending → Confirmed → Packed → Out For Delivery → Delivered)
-- My Orders history
+You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
 
-### Admin panel (`/admin`)
-- Dashboard: revenue, orders, low stock alerts, recent orders
-- Products: full CRUD with categories, MRP, stock, featured/popular flags
-- Orders: filter by status, expand items, update status inline
-- Customers: list of registered users
-- Categories: full CRUD
+To learn React, check out the [React documentation](https://reactjs.org/).
 
-### Security
-- Passwords hashed with **bcrypt**
-- **JWT** access tokens (default 7 days) stored in `localStorage`
-- Admin routes gated by role check on both frontend and backend
-- Input validation via Pydantic
+### Code Splitting
 
----
+This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
 
-## API overview
+### Analyzing the Bundle Size
 
-All endpoints prefixed with `/api`. Full list:
+This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
 
-### Auth
-- `POST /auth/register` `{ name, email, password, phone? }`
-- `POST /auth/login`    `{ email, password }`
-- `GET  /auth/me`       (Bearer token)
-- `POST /auth/otp/request` (mock)
-- `POST /auth/otp/verify`  (mock)
+### Making a Progressive Web App
 
-### Public
-- `GET  /categories`
-- `GET  /products?category=&q=&featured=&popular=&limit=`
-- `GET  /products/:slug`
-- `GET  /reviews?product_slug=`
-- `POST /reviews`
-- `GET  /store/info`
+This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
 
-### Authenticated (customer)
-- `POST /orders`
-- `GET  /orders/my`
-- `GET  /orders/:id`
+### Advanced Configuration
 
-### Admin
-- `POST /products` · `PUT /products/:id` · `DELETE /products/:id`
-- `POST /categories` · `DELETE /categories/:id`
-- `GET  /admin/dashboard`
-- `GET  /admin/orders?status=`
-- `PATCH /admin/orders/:id/status` `{ status }`
-- `GET  /admin/customers`
+This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
 
----
+### Deployment
 
-## Deployment
+This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
 
-The app has zero vendor lock-in. Common deployment targets:
+### `npm run build` fails to minify
 
-### Frontend (Vercel / Netlify / Hostinger static)
-```bash
-cd frontend
-yarn build
-# outputs to frontend/build — deploy that folder
-```
-Set env var `REACT_APP_BACKEND_URL=https://your-api-domain.com`.
-
-### Backend (Railway / Render / VPS)
-```bash
-cd backend
-pip install -r requirements.txt
-uvicorn server:app --host 0.0.0.0 --port $PORT
-```
-Set all env vars from `.env`. Point `MONGO_URL` to your MongoDB Atlas cluster.
-
-### Database (MongoDB Atlas — free tier is plenty)
-1. Create a free cluster on https://cloud.mongodb.com
-2. Whitelist your backend server IP (or 0.0.0.0/0 for testing)
-3. Copy the SRV connection string into `MONGO_URL`
-
----
-
-## Roadmap / Notes
-
-- Cloudinary upload endpoint & UI can be added — env vars are already scaffolded
-- Real SMS/Email OTP via Twilio/SendGrid can plug into `/api/auth/otp/*`
-- Payment gateway (Razorpay/Stripe) can replace the UPI QR flow
-- Wishlist API is stubbed on the frontend (`Wishlist Ready` button placement) — extend with a `wishlists` collection
-
----
-
-## License
-
-MIT — you fully own this project. Rip, remix, ship it however you like.
+This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)

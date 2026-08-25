@@ -31,9 +31,8 @@ const CGST_RATE = 0.025;
 const SGST_RATE = 0.025;
 const GST_RATE = 0.05;
 
-const DELIVERY_BASE_FEE = 16;
-const DELIVERY_RATE_AFTER_1_5_KM = 12;
-const DELIVERY_BASE_DISTANCE_KM = 1.5;
+const DELIVERY_RATE_PER_KM = 12;
+const DELIVERY_RATE_ABOVE_1_5_KM = 12;
 
 /*
 |--------------------------------------------------------------------------
@@ -47,9 +46,15 @@ const DELIVERY_BASE_DISTANCE_KM = 1.5;
 
 const STORE_LATITUDE = 18.7271336;
 const STORE_LONGITUDE = 76.3810922;
-const MAX_DELIVERY_DISTANCE_KM = 12;
-const GROCERY_COUPON_CODE = "GROCERY10";
-const SAVED_ADDRESS_KEY = "ambajogai_saved_address";
+
+/*
+|--------------------------------------------------------------------------
+| Ambajogai delivery serviceability
+|--------------------------------------------------------------------------
+*/
+const DELIVERY_ZONE_NAME = "Ambajogai";
+const SERVICEABILITY_MESSAGE =
+  "Sorry, we only deliver in Ambajogai.";
 
 /*
 |--------------------------------------------------------------------------
@@ -135,40 +140,37 @@ function calculateDeliveryFee(
     return 0;
   }
 
-  /*
-   * Orders >= ₹499 get free delivery.
-   */
-
-  if (
-    Number(subtotal) >= 499
-  ) {
+  // Orders >= 499 get free delivery.
+  if (Number(subtotal) >= 499) {
     return 0;
   }
 
   /*
    * Delivery pricing:
-   * Up to 1.5 km  -> ₹16 fixed
-   * Above 1.5 km -> ₹16 + ₹12 for every additional km
+   *
+   * 1 km   = 12
+   * 1.5 km = 15
+   * 2 km   = 24
+   * 3 km   = 36
+   * 4 km   = 48
+   *
+   * At 1.5 km, minimum charge is 15.
+   * Above 1.5 km, charge = distance x 12.
    */
 
-  if (
-    distanceKm <= DELIVERY_BASE_DISTANCE_KM
-  ) {
-    return DELIVERY_BASE_FEE;
+  if (distanceKm <= 1) {
+    return Math.round(
+      distanceKm * DELIVERY_RATE_PER_KM * 100
+    ) / 100;
   }
 
-  const additionalDistance =
-    distanceKm - DELIVERY_BASE_DISTANCE_KM;
+  if (distanceKm <= 1.5) {
+    return 15;
+  }
 
-  return (
-    Math.round(
-      (
-        DELIVERY_BASE_FEE +
-        additionalDistance *
-          DELIVERY_RATE_AFTER_1_5_KM
-      ) * 100
-    ) / 100
-  );
+  return Math.round(
+    distanceKm * DELIVERY_RATE_PER_KM * 100
+  ) / 100;
 }
 
 export default function Checkout() {
@@ -243,10 +245,6 @@ export default function Checkout() {
     notes: "",
   });
 
-  const [addressSaved, setAddressSaved] = useState(false);
-  const [serviceable, setServiceable] = useState(null);
-  const [serviceabilityMessage, setServiceabilityMessage] = useState("");
-
   /*
   |--------------------------------------------------------------------------
   | GPS
@@ -262,6 +260,163 @@ export default function Checkout() {
 
   const [locating, setLocating] =
     useState(false);
+
+  const [serviceabilityLoading, setServiceabilityLoading] =
+    useState(false);
+
+  const [serviceable, setServiceable] =
+    useState(null);
+
+  const [serviceabilityMessage, setServiceabilityMessage] =
+    useState("");
+
+  /*
+  |--------------------------------------------------------------------------
+  | Saved Address
+  |--------------------------------------------------------------------------
+  */
+
+  const [savedAddress, setSavedAddress] = useState(null);
+  const [savedAddressLoading, setSavedAddressLoading] = useState(false);
+  const [savedAddressBusy, setSavedAddressBusy] = useState(false);
+
+  /*
+  |--------------------------------------------------------------------------
+  | Saved Address API
+  |--------------------------------------------------------------------------
+  */
+
+  const loadSavedAddress = async () => {
+    if (!user) return;
+
+    setSavedAddressLoading(true);
+
+    try {
+      const { data } = await api.get("/auth/saved-address");
+
+      if (data?.saved && data?.address) {
+        setSavedAddress(data.address);
+
+        setForm((current) => ({
+          ...current,
+          full_name: data.address.full_name ?? current.full_name,
+          phone: data.address.phone ?? current.phone,
+          line1: data.address.line1 ?? current.line1,
+          landmark: data.address.landmark ?? current.landmark,
+          area: data.address.area ?? current.area,
+          pincode: data.address.pincode ?? current.pincode,
+        }));
+
+        if (
+          data.address.latitude !== null &&
+          data.address.latitude !== undefined &&
+          data.address.longitude !== null &&
+          data.address.longitude !== undefined
+        ) {
+          setLocation((current) => ({
+            ...current,
+            latitude: Number(data.address.latitude),
+            longitude: Number(data.address.longitude),
+          }));
+        }
+      } else {
+        setSavedAddress(null);
+      }
+    } catch (err) {
+      console.error("Failed to load saved address:", err);
+    } finally {
+      setSavedAddressLoading(false);
+    }
+  };
+
+  const saveCurrentAddress = async () => {
+    if (!user) {
+      toast.error("Please login to save your address.");
+      return;
+    }
+
+    if (
+      !form.full_name.trim() ||
+      !form.phone.trim() ||
+      !form.line1.trim() ||
+      !form.area.trim() ||
+      !form.pincode.trim()
+    ) {
+      toast.error("Please complete your delivery address first.");
+      return;
+    }
+
+    setSavedAddressBusy(true);
+
+    try {
+      const address = {
+        full_name: form.full_name.trim(),
+        phone: form.phone.trim(),
+        line1: form.line1.trim(),
+        landmark: form.landmark.trim(),
+        area: form.area.trim(),
+        city: "Ambajogai",
+        pincode: form.pincode.trim(),
+        latitude:
+          location.latitude !== null
+            ? Number(location.latitude)
+            : null,
+        longitude:
+          location.longitude !== null
+            ? Number(location.longitude)
+            : null,
+      };
+
+      const { data } = await api.put(
+        "/auth/saved-address",
+        address
+      );
+
+      setSavedAddress(data?.address ?? address);
+
+      toast.success("Address saved successfully.");
+    } catch (err) {
+      console.error("Failed to save address:", err);
+      toast.error(
+        formatApiError(
+          err,
+          "Unable to save address. Please try again."
+        )
+      );
+    } finally {
+      setSavedAddressBusy(false);
+    }
+  };
+
+  const deleteSavedAddress = async () => {
+    if (!user) return;
+
+    setSavedAddressBusy(true);
+
+    try {
+      await api.delete("/auth/saved-address");
+      setSavedAddress(null);
+      toast.success("Saved address deleted.");
+    } catch (err) {
+      console.error("Failed to delete saved address:", err);
+      toast.error(
+        formatApiError(
+          err,
+          "Unable to delete saved address."
+        )
+      );
+    } finally {
+      setSavedAddressBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (user) {
+      loadSavedAddress();
+    } else {
+      setSavedAddress(null);
+    }
+  }, [user?.id]);
 
   /*
   |--------------------------------------------------------------------------
@@ -280,53 +435,6 @@ export default function Checkout() {
       })
       .catch(() => {});
   }, []);
-
-  // Load the saved address for this account. It stays in place until the
-  // customer explicitly chooses Change Address. A local fallback supports
-  // older accounts that were saved before the backend endpoint existed.
-  useEffect(() => {
-    if (!user?.id) return;
-    const localKey = `${SAVED_ADDRESS_KEY}_${user.id}`;
-    let active = true;
-
-    const applySaved = (saved) => {
-      if (!active || !saved) return false;
-      const address = saved.form || saved;
-      setForm((current) => ({
-        ...current,
-        ...address,
-        full_name: address.full_name || user.name || current.full_name,
-        phone: address.phone || user.phone || current.phone,
-      }));
-      if (Number.isFinite(Number(address.latitude)) && Number.isFinite(Number(address.longitude))) {
-        setLocation({
-          latitude: Number(address.latitude),
-          longitude: Number(address.longitude),
-          accuracy: address.accuracy == null ? null : Number(address.accuracy),
-        });
-      }
-      setAddressSaved(true);
-      return true;
-    };
-
-    api.get("/auth/saved-address")
-      .then(({ data }) => {
-        if (!applySaved(data?.saved_address)) {
-          try {
-            const raw = localStorage.getItem(localKey);
-            if (raw) applySaved(JSON.parse(raw));
-          } catch {}
-        }
-      })
-      .catch(() => {
-        try {
-          const raw = localStorage.getItem(localKey);
-          if (raw) applySaved(JSON.parse(raw));
-        } catch {}
-      });
-
-    return () => { active = false; };
-  }, [user?.id, user?.name, user?.phone]);
 
   /*
   |--------------------------------------------------------------------------
@@ -361,59 +469,6 @@ export default function Checkout() {
       [key]:
         event.target.value,
     }));
-  };
-
-  const saveAddress = async () => {
-    if (!user?.id) {
-      toast.error("Please log in before saving your address.");
-      return;
-    }
-    const required = ["full_name", "phone", "line1", "area", "pincode"];
-    const missing = required.find((key) => !String(form[key] || "").trim());
-    if (missing) {
-      toast.error(`Please fill your ${missing.replace("_", " ")}.`);
-      return;
-    }
-    if (!/^\+?\d{10,15}$/.test(String(form.phone).replace(/\s/g, ""))) {
-      toast.error("Enter a valid mobile number.");
-      return;
-    }
-    if (!/^\d{6}$/.test(form.pincode)) {
-      toast.error("Enter a valid 6-digit pincode.");
-      return;
-    }
-    if (location.latitude === null || location.longitude === null) {
-      toast.error("Please verify your delivery location before saving the address.");
-      return;
-    }
-
-    const saved = {
-      ...form,
-      email: user.email || "",
-      latitude: Number(location.latitude),
-      longitude: Number(location.longitude),
-      accuracy: location.accuracy,
-    };
-    try {
-      await api.put("/auth/saved-address", saved);
-      localStorage.setItem(`${SAVED_ADDRESS_KEY}_${user.id}`, JSON.stringify(saved));
-      setAddressSaved(true);
-      toast.success("Address saved. It will stay saved until you change it.");
-    } catch (error) {
-      toast.error(formatApiError(error, "Could not save your address."));
-    }
-  };
-
-  const changeAddress = async () => {
-    if (user?.id) {
-      try { await api.delete("/auth/saved-address"); } catch {}
-      try { localStorage.removeItem(`${SAVED_ADDRESS_KEY}_${user.id}`); } catch {}
-    }
-    setAddressSaved(false);
-    setServiceable(null);
-    setServiceabilityMessage("");
-    setLocation({ latitude: null, longitude: null, accuracy: null });
-    toast.success("You can now enter a new delivery address.");
   };
 
   /*
@@ -572,36 +627,89 @@ export default function Checkout() {
       );
     }, [location]);
 
+  /*
+  |--------------------------------------------------------------------------
+  | Backend serviceability check
+  |--------------------------------------------------------------------------
+  |
+  | The frontend uses this for instant feedback, but the backend remains
+  | authoritative and validates the coordinates again when the order is
+  | submitted.
+  |
+  */
+
+  const checkServiceability = async (
+    latitude = location.latitude,
+    longitude = location.longitude
+  ) => {
+    if (
+      latitude === null ||
+      longitude === null ||
+      !Number.isFinite(Number(latitude)) ||
+      !Number.isFinite(Number(longitude))
+    ) {
+      setServiceable(null);
+      setServiceabilityMessage("");
+      return null;
+    }
+
+    setServiceabilityLoading(true);
+    setServiceable(null);
+    setServiceabilityMessage("");
+
+    try {
+      const { data } = await api.get(
+        "/delivery/serviceability",
+        {
+          params: {
+            latitude: Number(latitude),
+            longitude: Number(longitude),
+          },
+        }
+      );
+
+      const allowed = data?.serviceable === true;
+      setServiceable(allowed);
+      setServiceabilityMessage(
+        allowed
+          ? `Delivery available in ${data?.zone_name || DELIVERY_ZONE_NAME}.`
+          : data?.message || SERVICEABILITY_MESSAGE
+      );
+
+      return data;
+    } catch (error) {
+      console.error(
+        "SERVICEABILITY CHECK ERROR:",
+        error
+      );
+
+      setServiceable(false);
+      setServiceabilityMessage(
+        "We could not verify your delivery location. Please try again."
+      );
+
+      return null;
+    } finally {
+      setServiceabilityLoading(false);
+    }
+  };
+
   useEffect(() => {
-    if (location.latitude === null || location.longitude === null) {
+    if (
+      location.latitude === null ||
+      location.longitude === null
+    ) {
       setServiceable(null);
       setServiceabilityMessage("");
       return;
     }
 
-    let active = true;
-    api.get("/delivery/serviceability", {
-      params: { latitude: location.latitude, longitude: location.longitude },
-    }).then(({ data }) => {
-      if (!active) return;
-      setServiceable(Boolean(data?.serviceable));
-      setServiceabilityMessage(data?.message || "");
-    }).catch(() => {
-      // Fallback to the same Haversine calculation locally. The backend order
-      // endpoint remains the final source of truth. This prevents a temporary
-      // serviceability API/network issue from incorrectly rejecting Ambajogai.
-      const localServiceable = Number(estimatedDistance) <= MAX_DELIVERY_DISTANCE_KM;
-      if (!active) return;
-      setServiceable(localServiceable);
-      setServiceabilityMessage(
-        localServiceable
-          ? "Delivery is available in Ambajogai."
-          : "Please use a delivery location within Ambajogai."
-      );
-    });
-
-    return () => { active = false; };
-  }, [location.latitude, location.longitude, estimatedDistance]);
+    checkServiceability(
+      location.latitude,
+      location.longitude
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.latitude, location.longitude]);
 
   /*
   |--------------------------------------------------------------------------
@@ -809,8 +917,15 @@ export default function Checkout() {
       return "Please allow location access so delivery charges can be calculated.";
     }
 
-    if (serviceable === false || (serviceable === null && Number(estimatedDistance) > MAX_DELIVERY_DISTANCE_KM)) {
-      return "Please use a delivery location within Ambajogai.";
+    if (serviceable === false) {
+      return (
+        serviceabilityMessage ||
+        SERVICEABILITY_MESSAGE
+      );
+    }
+
+    if (serviceable !== true) {
+      return "Please verify that your delivery location is within Ambajogai before placing the order.";
     }
 
     if (
@@ -834,6 +949,20 @@ export default function Checkout() {
 
     if (error) {
       toast.error(error);
+      return;
+    }
+
+    // Fresh backend check immediately before creating the order.
+    const serviceability = await checkServiceability(
+      location.latitude,
+      location.longitude
+    );
+
+    if (!serviceability?.serviceable) {
+      toast.error(
+        serviceability?.message ||
+        SERVICEABILITY_MESSAGE
+      );
       return;
     }
 
@@ -1198,11 +1327,10 @@ ${
   */
 
   const applyCoupon = async () => {
-    const code = couponInput.trim().toUpperCase();
-    if (code !== GROCERY_COUPON_CODE) {
-      toast.error(`Use ${GROCERY_COUPON_CODE} to apply the 10% OFF offer.`);
-      return;
-    }
+    const code =
+      couponInput
+        .trim()
+        .toUpperCase();
 
     if (!code) {
       toast.error(
@@ -1320,7 +1448,6 @@ ${
                   "full_name"
                 )}
                 testid="addr-name"
-                  disabled={addressSaved}
               />
 
               <Field
@@ -1332,7 +1459,6 @@ ${
                   "phone"
                 )}
                 testid="addr-phone"
-                  disabled={addressSaved}
                 placeholder="+91..."
               />
 
@@ -1346,7 +1472,6 @@ ${
                     "line1"
                   )}
                   testid="addr-line"
-                  disabled={addressSaved}
                   placeholder="House / flat no, street"
                 />
               </div>
@@ -1360,7 +1485,6 @@ ${
                   "landmark"
                 )}
                 testid="addr-landmark"
-                  disabled={addressSaved}
               />
 
               <Field
@@ -1372,7 +1496,6 @@ ${
                   "area"
                 )}
                 testid="addr-area"
-                  disabled={addressSaved}
               />
 
               <Field
@@ -1384,7 +1507,6 @@ ${
                   "pincode"
                 )}
                 testid="addr-pincode"
-                  disabled={addressSaved}
                 placeholder="6-digit pincode"
               />
 
@@ -1403,20 +1525,76 @@ ${
               </div>
             </div>
 
-            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-              {!addressSaved ? (
-                <button type="button" onClick={saveAddress} className="btn-primary flex-1" data-testid="save-address">
-                  Save Address
-                </button>
-              ) : (
-                <button type="button" onClick={changeAddress} className="btn-secondary flex-1" data-testid="change-address">
-                  Change Address
-                </button>
+            {/* SAVED ADDRESS */}
+
+            <div className="mt-5 rounded-xl border border-[#1B4332]/20 bg-[#1B4332]/5 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+
+                <div>
+                  <div className="font-semibold text-[#1B4332]">
+                    Saved address
+                  </div>
+
+                  <p className="mt-1 text-xs text-[#4A4A4A]">
+                    Save this address to use it automatically on your next checkout.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+
+                  <button
+                    type="button"
+                    onClick={saveCurrentAddress}
+                    disabled={
+                      savedAddressBusy ||
+                      savedAddressLoading
+                    }
+                    className="rounded-full bg-[#1B4332] px-4 py-2 text-xs font-semibold text-white hover:bg-[#2D6A4F] disabled:opacity-50"
+                  >
+                    {savedAddressBusy
+                      ? "Saving..."
+                      : "Save address"}
+                  </button>
+
+                  {savedAddress && (
+                    <button
+                      type="button"
+                      onClick={deleteSavedAddress}
+                      disabled={savedAddressBusy}
+                      className="rounded-full border border-red-200 px-4 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
+                    >
+                      Delete saved
+                    </button>
+                  )}
+
+                </div>
+              </div>
+
+              {savedAddressLoading && (
+                <div className="mt-3 text-xs text-[#4A4A4A]">
+                  Loading saved address...
+                </div>
               )}
+
+              {savedAddress && !savedAddressLoading && (
+                <div className="mt-3 rounded-lg bg-white/70 p-3 text-xs text-[#4A4A4A]">
+                  <div className="font-semibold text-[#1B4332]">
+                    Saved address loaded
+                  </div>
+
+                  <div className="mt-1">
+                    {savedAddress.line1}
+                    {savedAddress.area
+                      ? `, ${savedAddress.area}`
+                      : ""}
+                    {savedAddress.pincode
+                      ? ` - ${savedAddress.pincode}`
+                      : ""}
+                  </div>
+                </div>
+              )}
+
             </div>
-            {addressSaved && (
-              <p className="mt-2 text-xs text-[#1B4332]">✓ Address saved for this account. It will remain saved until you change it.</p>
-            )}
 
             {/* LOCATION */}
 
@@ -1468,12 +1646,6 @@ ${
                         </div>
                       )}
                     </>
-                  )}
-
-                  {serviceable !== null && (
-                    <div className={`mt-2 text-xs font-semibold ${serviceable ? "text-[#1B4332]" : "text-red-600"}`}>
-                      {serviceable ? "✓ " : "⚠ "}{serviceabilityMessage}
-                    </div>
                   )}
 
                 </div>
@@ -1807,16 +1979,22 @@ ${
             {estimatedDistance !==
               null && (
               <div className="rounded-lg bg-[#8BA888]/10 px-3 py-2 text-xs text-[#1B4332]">
- {Number(discountedSubtotal) >= 499
-  ? "FREE delivery"
-  : estimatedDistance <= 1.5
-    ? "₹16 delivery up to 1.5 km"
-    : "₹16 + ₹12/km after 1.5 km"}
 
-{" · "}
+                {Number(
+                  discountedSubtotal
+                ) >= 499
+                  ? "FREE delivery"
+                  : estimatedDistance <=
+                    1.5
+                  ? `₹${DELIVERY_RATE_PER_KM}/km delivery`
+                  : `₹${DELIVERY_RATE_ABOVE_1_5_KM}/km delivery`}
 
-{estimatedDistance.toFixed(2)}{" "}
-km
+                {" · "}
+
+                {estimatedDistance.toFixed(
+                  2
+                )}{" "}
+                km
 
               </div>
             )}
@@ -1861,6 +2039,38 @@ km
 
           </div>
 
+          {/* DELIVERY SERVICEABILITY MESSAGE */}
+
+          {serviceabilityLoading && (
+            <div className="mt-4 flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 p-3 text-center text-sm text-blue-700">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Verifying delivery availability...
+            </div>
+          )}
+
+          {!serviceabilityLoading &&
+            serviceable === false && (
+            <div
+              className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-center text-sm text-red-700"
+              data-testid="outside-zone-message"
+            >
+              <strong>{serviceabilityMessage || SERVICEABILITY_MESSAGE}</strong>
+              <div className="mt-1 text-xs text-red-600">
+                Please use a delivery location within Ambajogai.
+              </div>
+            </div>
+          )}
+
+          {!serviceabilityLoading &&
+            serviceable === true && (
+            <div
+              className="mt-4 rounded-xl border border-green-200 bg-green-50 p-3 text-center text-sm text-green-700"
+              data-testid="serviceable-zone-message"
+            >
+              {serviceabilityMessage || `Delivery available in ${DELIVERY_ZONE_NAME}.`}
+            </div>
+          )}
+
           {/* MINIMUM ORDER MESSAGE */}
 
           {Number(subtotal || 0) <
@@ -1891,6 +2101,9 @@ km
             }
             disabled={
               submitting ||
+              locating ||
+              serviceabilityLoading ||
+              serviceable !== true ||
               location.latitude ===
                 null ||
               location.longitude ===
@@ -1910,6 +2123,14 @@ km
 
             {submitting
               ? "Placing order..."
+              : locating
+              ? "Detecting location..."
+              : serviceabilityLoading
+              ? "Verifying delivery area..."
+              : serviceable === false
+              ? "Outside delivery area"
+              : serviceable !== true
+              ? "Verify delivery location"
               : Number(
                   subtotal || 0
                 ) <
@@ -1941,7 +2162,6 @@ function Field({
   onChange,
   testid,
   placeholder,
-  disabled = false,
 }) {
   return (
     <div>
@@ -1956,8 +2176,7 @@ function Field({
         placeholder={
           placeholder
         }
-        className={`input-base ${disabled ? "bg-gray-100 text-gray-500" : ""}`}
-        disabled={disabled}
+        className="input-base"
         data-testid={testid}
       />
 

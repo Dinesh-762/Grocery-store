@@ -1,14 +1,10 @@
-﻿from pathlib import Path
-import os
-import asyncio
-import json as _json
-from pywebpush import webpush, WebPushException
-
-from dotenv import load_dotenv
-from twilio.rest import Client
+﻿from dotenv import load_dotenv
+from pathlib import Path
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
+
+import os
 import logging
 import uuid
 import re
@@ -25,6 +21,7 @@ from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import ReturnDocument
 import cloudinary
 import cloudinary.uploader
 from pydantic import BaseModel, Field, EmailStr, ConfigDict, BeforeValidator
@@ -39,25 +36,6 @@ DB_NAME = os.environ["DB_NAME"]
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_DAYS = int(os.environ.get("JWT_EXPIRE_DAYS", "7"))
-# ---------------------------------------------------------------------------
-# Twilio Verify
-# ---------------------------------------------------------------------------
-
-TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
-TWILIO_VERIFY_SERVICE_SID = os.environ.get("TWILIO_VERIFY_SERVICE_SID")
-
-twilio_client = None
-
-if (
-    TWILIO_ACCOUNT_SID
-    and TWILIO_AUTH_TOKEN
-    and TWILIO_VERIFY_SERVICE_SID
-):
-    twilio_client = Client(
-        TWILIO_ACCOUNT_SID,
-        TWILIO_AUTH_TOKEN,
-    )
 cloudinary.config(
     cloud_name=os.environ.get("CLOUDINARY_CLOUD_NAME"),
     api_key=os.environ.get("CLOUDINARY_API_KEY"),
@@ -222,15 +200,19 @@ class ProductIn(BaseModel):
     name: str
     slug: str
     description: str = ""
-    price: float
-    mrp: Optional[float] = None
+    price: float = Field(ge=0)
+    mrp: Optional[float] = Field(default=None, ge=0)
     unit: str = "1 pc"
     category_slug: str
     image: str
-    stock: int = 0
+    stock: int = Field(default=0, ge=0)
     featured: bool = False
     popular: bool = False
-    variants: Optional[List[dict]] = None  # [{label, price, unit}]
+    # Variants may include: label, price, mrp, unit, stock
+    variants: Optional[List[dict]] = None
+    # MRP = percentage; CUSTOM = fixed amount
+    commission_type: str = "MRP"
+    commission_value: float = Field(default=0, ge=0)
 
 
 class ProductOut(ProductIn):
@@ -239,6 +221,13 @@ class ProductOut(ProductIn):
     vendor_id: Optional[str] = None
     vendor_name: Optional[str] = None
     approval_status: str = "approved"  # approved | pending | rejected
+
+
+class DeliverySettingsIn(BaseModel):
+    service_area: str = Field(default="Ambajogai", min_length=2, max_length=100)
+    max_delivery_distance_km: float = Field(default=12.0, gt=0, le=100)
+    allowed_pincodes: List[str] = Field(default_factory=lambda: ["431517"])
+    delivery_status: bool = True
 
 
 class AddressIn(BaseModel):
@@ -270,7 +259,7 @@ class OrderIn(BaseModel):
     payment_method: str  # "UPI" or "COD"
     notes: Optional[str] = ""
     coupon_code: Optional[str] = None
-    # Checkout may send GPS either at the top level or inside address.
+    # Checkout also sends GPS at the top level. Keep both forms supported.
     latitude: Optional[float] = None
     longitude: Optional[float] = None
 
@@ -288,6 +277,121 @@ class ReviewIn(BaseModel):
     comment: str
     author_name: str
 
+# ---------------------------------------------------------------------------
+# ORDER NOTIFICATION HELPERS
+# ---------------------------------------------------------------------------
+
+async def create_order_notification(
+    user_id: str,
+    order_id: str,
+    title: str,
+    message: str,
+    notification_type: str = "order",
+):
+    """
+    Store an in-app notification for a user.
+    """
+
+    notification = {
+        "user_id": user_id,
+        "order_id": str(order_id),
+        "title": title,
+        "message": message,
+        "type": notification_type,
+        "read": False,
+        "created_at": iso_now(),
+    }
+
+    await db.notifications.insert_one(notification)
+
+
+async def notify_order_users(
+    order: dict,
+    title: str,
+    message: str,
+    notification_type: str = "order",
+):
+    """
+    Notify customer + vendor owners + assigned delivery boy.
+    """
+
+    order_id = str(order["_id"])
+
+    notified_users = set()
+
+    # ---------------------------------------------------------
+    # CUSTOMER
+    # ---------------------------------------------------------
+    customer_id = order.get("user_id")
+
+    if customer_id:
+        notified_users.add(customer_id)
+
+        await create_order_notification(
+            user_id=customer_id,
+            order_id=order_id,
+            title=title,
+            message=message,
+            notification_type=notification_type,
+        )
+
+    # ---------------------------------------------------------
+    # VENDORS
+    # ---------------------------------------------------------
+    vendor_ids = set()# Helpers
+    # --------------------------------------------------------------------------
+
+    for item in order.get("items", []):
+        vendor_id = item.get("vendor_id")
+
+        if vendor_id:
+            vendor_ids.add(vendor_id)
+
+    for vendor_id in vendor_ids:
+
+        vendor = await db.vendors.find_one({
+            "id": vendor_id
+        })
+
+        if not vendor:
+            try:
+                vendor = await db.vendors.find_one({
+                    "_id": safe_object_id(vendor_id)
+                })
+            except Exception:
+                vendor = None
+
+        if not vendor:
+            continue
+
+        owner_id = vendor.get("owner_id")
+
+        if owner_id and owner_id not in notified_users:
+
+            notified_users.add(owner_id)
+
+            await create_order_notification(
+                user_id=owner_id,
+                order_id=order_id,
+                title=title,
+                message=message,
+                notification_type=notification_type,
+            )
+
+    # ---------------------------------------------------------
+    # DELIVERY BOY
+    # ---------------------------------------------------------
+    delivery_partner_id = order.get("delivery_partner_id")
+
+    if delivery_partner_id and delivery_partner_id not in notified_users:
+
+        await create_order_notification(
+            user_id=delivery_partner_id,
+            order_id=order_id,
+            title=title,
+            message=message,
+            notification_type=notification_type,
+        )
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -322,8 +426,45 @@ def product_to_out(p: dict) -> dict:
         "vendor_id": p.get("vendor_id"),
         "vendor_name": p.get("vendor_name"),
         "approval_status": p.get("approval_status", "approved"),
+        "commission_type": p.get("commission_type", "MRP"),
+        "commission_value": p.get("commission_value", 0),
         "variants": p.get("variants") or [],
     }
+
+
+def validate_commission(commission_type: str, commission_value: float) -> tuple[str, float]:
+    commission_type = str(commission_type or "MRP").strip().upper()
+    commission_value = float(commission_value or 0)
+
+    if commission_type not in {"MRP", "CUSTOM"}:
+        raise HTTPException(status_code=400, detail="Invalid commission type. Use MRP or CUSTOM.")
+    if commission_value < 0:
+        raise HTTPException(status_code=400, detail="Commission value cannot be negative.")
+    if commission_type == "MRP" and commission_value > 100:
+        raise HTTPException(status_code=400, detail="MRP commission percentage cannot exceed 100%.")
+    return commission_type, round(commission_value, 2)
+
+
+def calculate_product_commission(product: dict, variant_label: Optional[str] = None) -> float:
+    commission_type = str(product.get("commission_type", "MRP") or "MRP").strip().upper()
+    commission_value = float(product.get("commission_value", 0) or 0)
+
+    if commission_type == "CUSTOM":
+        return round(commission_value, 2)
+
+    mrp = product.get("mrp")
+    if variant_label:
+        variants = product.get("variants") or []
+        selected_variant = next(
+            (v for v in variants if str(v.get("label", "")).strip() == str(variant_label).strip()),
+            None,
+        )
+        if selected_variant and selected_variant.get("mrp") is not None:
+            mrp = selected_variant.get("mrp")
+
+    if mrp is None:
+        return 0.0
+    return round(float(mrp) * commission_value / 100.0, 2)
 
 
 def category_to_out(c: dict) -> dict:
@@ -348,7 +489,7 @@ def order_to_out(o: dict) -> dict:
         "notes": o.get("notes", ""),
         "subtotal": o["subtotal"],
         "delivery_fee": o["delivery_fee"],
-        "delivery_distance_km": o.get("delivery_distance_km", 0),
+        "delivery_distance_km": o.get("delivery_distance_km"),
         "discount": o.get("discount", 0),
         "coupon": o.get("coupon"),
         "total": o["total"],
@@ -428,6 +569,67 @@ async def login(payload: LoginIn):
     return {"token": token, "user": user_to_out(user)}
 
 
+
+# ---------------------------------------------------------------------------
+# SAVED ADDRESS
+# ---------------------------------------------------------------------------
+
+@api.get("/auth/saved-address")
+async def get_saved_address(
+    user: dict = Depends(get_current_user),
+):
+    """Return the saved delivery address for the currently logged-in user."""
+    saved = await db.saved_addresses.find_one(
+        {"user_id": user["id"]},
+        {"_id": 0},
+    )
+
+    return {
+        "saved": bool(saved),
+        "address": saved.get("address") if saved else None,
+    }
+
+
+@api.put("/auth/saved-address")
+async def save_address(
+    address: AddressIn,
+    user: dict = Depends(get_current_user),
+):
+    """Create or replace the saved delivery address for the current user."""
+    await db.saved_addresses.update_one(
+        {"user_id": user["id"]},
+        {
+            "$set": {
+                "user_id": user["id"],
+                "address": address.model_dump(),
+                "updated_at": iso_now(),
+            }
+        },
+        upsert=True,
+    )
+
+    return {
+        "success": True,
+        "message": "Address saved successfully.",
+        "address": address.model_dump(),
+    }
+
+
+@api.delete("/auth/saved-address")
+async def delete_saved_address(
+    user: dict = Depends(get_current_user),
+):
+    """Delete the saved delivery address for the current user."""
+    result = await db.saved_addresses.delete_one(
+        {"user_id": user["id"]}
+    )
+
+    return {
+        "success": True,
+        "deleted": result.deleted_count > 0,
+    }
+
+
 @api.get("/auth/me", response_model=UserOut)
 async def me(user: dict = Depends(get_current_user)):
     return user
@@ -460,153 +662,67 @@ async def otp_verify(payload: OTPVerify):
 @api.post("/auth/password-reset/request")
 async def password_reset_request(payload: ForgotPasswordRequest):
     phone = payload.phone.strip()
-
     if not phone:
-        raise HTTPException(
-            status_code=400,
-            detail="Phone number is required"
-        )
+        raise HTTPException(status_code=400, detail="Phone number is required")
 
-    if not twilio_client:
-        logger.error("Twilio Verify is not configured.")
-        raise HTTPException(
-            status_code=500,
-            detail="OTP service is not configured."
-        )
-
-    # Indian mobile number -> E.164 format
-    if re.fullmatch(r"\d{10}", phone):
-        phone = f"+91{phone}"
-    elif not phone.startswith("+"):
-        raise HTTPException(
-            status_code=400,
-            detail="Please enter a valid mobile number."
-        )
-
-    # Check whether account exists
+    # Keep the response generic in production to avoid account enumeration.
     user = await db.users.find_one({"phone": phone})
+    code = f"{secrets.randbelow(1000000):06d}"
 
-    # Keep response generic to avoid account enumeration.
-    if not user:
-        return {
-            "success": True,
-            "message": "If an account exists with this phone number, an OTP has been sent."
-        }
-
-    try:
-        verification = await twilio_client.verify.v2 \
-            .services(TWILIO_VERIFY_SERVICE_SID) \
-            .verifications.create(
-                to=phone,
-                channel="sms",
-            )
-
-        logger.info(
-            f"[PASSWORD RESET OTP] Twilio verification started "
-            f"for phone ending {phone[-4:]}, "
-            f"status={verification.status}"
+    if user:
+        await db.password_reset_otps.update_one(
+            {"phone": phone},
+            {
+                "$set": {
+                    "code": code,
+                    "expires_at": (now_utc() + timedelta(minutes=5)).isoformat(),
+                    "attempts": 0,
+                }
+            },
+            upsert=True,
         )
+        logger.info(f"[PASSWORD RESET OTP] phone={phone} code={code}")
 
-    except Exception as exc:
-        logger.exception(
-            "Failed to send password reset OTP through Twilio."
-        )
-
-        raise HTTPException(
-            status_code=502,
-            detail="Unable to send OTP. Please try again."
-        )
-
-    return {
+    response = {
         "success": True,
-        "message": "OTP sent successfully."
+        "message": "If an account exists with this phone number, an OTP has been generated."
     }
+    # Existing project uses mock OTPs. Keep the code available for local/dev testing,
+    # but never expose it when APP_ENV=production.
+    if os.environ.get("APP_ENV", "development").lower() != "production" and user:
+        response["debug_code"] = code
+    return response
+
 
 @api.post("/auth/password-reset/verify")
 async def password_reset_verify(payload: PasswordResetOTPVerify):
     phone = payload.phone.strip()
-    code = payload.code.strip()
+    rec = await db.password_reset_otps.find_one({"phone": phone})
+    if not rec or rec.get("code") != payload.code:
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+    if datetime.fromisoformat(rec["expires_at"]) < now_utc():
+        await db.password_reset_otps.delete_one({"phone": phone})
+        raise HTTPException(status_code=400, detail="OTP expired")
 
-    if not phone:
-        raise HTTPException(
-            status_code=400,
-            detail="Phone number is required"
-        )
-
-    if not re.fullmatch(r"\d{6}", code):
-        raise HTTPException(
-            status_code=400,
-            detail="Please enter a valid 6-digit OTP."
-        )
-
-    if not twilio_client:
-        logger.error("Twilio Verify is not configured.")
-        raise HTTPException(
-            status_code=500,
-            detail="OTP service is not configured."
-        )
-
-    # Convert Indian 10-digit number to E.164 format
-    if re.fullmatch(r"\d{10}", phone):
-        phone = f"+91{phone}"
-    elif not phone.startswith("+"):
-        raise HTTPException(
-            status_code=400,
-            detail="Please enter a valid mobile number."
-        )
-
-    try:
-        verification_check = await twilio_client.verify.v2 \
-            .services(TWILIO_VERIFY_SERVICE_SID) \
-            .verification_checks.create(
-                to=phone,
-                code=code,
-            )
-
-    except Exception:
-        logger.exception(
-            "Twilio OTP verification failed."
-        )
-
-        raise HTTPException(
-            status_code=400,
-            detail="Unable to verify OTP. Please try again."
-        )
-
-    if verification_check.status != "approved":
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid or expired OTP."
-        )
-
-    # OTP is verified by Twilio.
-    # Now find the user and create the existing reset token.
     user = await db.users.find_one({"phone": phone})
-
     if not user:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid OTP."
-        )
+        await db.password_reset_otps.delete_one({"phone": phone})
+        raise HTTPException(status_code=400, detail="Invalid OTP")
 
     reset_token = secrets.token_urlsafe(32)
-    token_hash = hashlib.sha256(
-        reset_token.encode()
-    ).hexdigest()
-
+    token_hash = hashlib.sha256(reset_token.encode()).hexdigest()
     await db.password_reset_tokens.update_one(
         {"phone": phone},
         {
             "$set": {
                 "user_id": str(user["_id"]),
                 "token_hash": token_hash,
-                "expires_at": (
-                    now_utc() + timedelta(minutes=10)
-                ).isoformat(),
+                "expires_at": (now_utc() + timedelta(minutes=10)).isoformat(),
             }
         },
         upsert=True,
     )
+    await db.password_reset_otps.delete_one({"phone": phone})
 
     return {
         "success": True,
@@ -642,134 +758,6 @@ async def password_reset_confirm(payload: PasswordResetConfirm):
     await db.password_reset_tokens.delete_one({"_id": rec["_id"]})
 
     return {"success": True, "message": "Password reset successfully. Please log in with your new password."}
-
-
-
-# ---------------------------------------------------------------------------
-# Web Push (VAPID) — admin new-order notifications
-# ---------------------------------------------------------------------------
-
-VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
-VAPID_PRIVATE_KEY = (os.environ.get("VAPID_PRIVATE_KEY", "") or "").replace("\\n", "\n")
-VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:admin@ambajogai.com")
-
-
-class PushSubscriptionIn(BaseModel):
-    endpoint: str
-    keys: dict
-
-
-@api.get("/push/vapid-public-key")
-async def get_vapid_public_key():
-    return {"public_key": VAPID_PUBLIC_KEY}
-
-
-@api.post("/push/subscribe")
-async def push_subscribe(
-    payload: PushSubscriptionIn,
-    user: dict = Depends(get_current_user)
-):
-    if user.get("role") not in ("admin", "delivery"):
-        raise HTTPException(
-            status_code=403,
-            detail="Only admins and delivery boys can subscribe"
-        )
-
-    await db.push_subscriptions.update_one(
-        {"endpoint": payload.endpoint},
-        {
-            "$set": {
-                "user_id": user["id"],
-                "role": user.get("role"),
-                "endpoint": payload.endpoint,
-                "keys": payload.keys,
-                "updated_at": iso_now(),
-            }
-        },
-        upsert=True,
-    )
-
-    return {"success": True}
-
-
-@api.post("/push/unsubscribe")
-async def push_unsubscribe(
-    payload: dict,
-    user: dict = Depends(get_current_user)
-):
-    endpoint = payload.get("endpoint")
-
-    if endpoint:
-        await db.push_subscriptions.delete_one(
-            {
-                "endpoint": endpoint,
-                "user_id": user["id"],
-            }
-        )
-
-    return {"success": True}
-
-
-def _send_push_sync(sub: dict, message: dict) -> bool:
-    try:
-        webpush(
-            subscription_info={
-                "endpoint": sub["endpoint"],
-                "keys": sub["keys"],
-            },
-            data=_json.dumps(message),
-            vapid_private_key=VAPID_PRIVATE_KEY,
-            vapid_claims={"sub": VAPID_SUBJECT},
-            ttl=60,
-        )
-        return True
-
-    except WebPushException as e:
-        if e.response is not None and e.response.status_code in (404, 410):
-            return False
-        return False
-
-    except Exception:
-        return False
-
-
-async def broadcast_push_to_admins(
-    title: str,
-    body: str,
-    url: str = "/admin/orders"
-):
-    if not VAPID_PRIVATE_KEY or not VAPID_PUBLIC_KEY:
-        return
-
-    subs = await db.push_subscriptions.find(
-        {"role": "admin"}
-    ).to_list(500)
-
-    if not subs:
-        return
-
-    message = {
-        "title": title,
-        "body": body,
-        "url": url,
-    }
-
-    dead = []
-
-    for sub in subs:
-        ok = await asyncio.to_thread(
-            _send_push_sync,
-            sub,
-            message
-        )
-
-        if not ok:
-            dead.append(sub["endpoint"])
-
-    if dead:
-        await db.push_subscriptions.delete_many(
-            {"endpoint": {"$in": dead}}
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -848,9 +836,17 @@ async def create_product(payload: ProductIn, _: dict = Depends(require_admin)):
     exists = await db.products.find_one({"slug": payload.slug})
     if exists:
         raise HTTPException(status_code=400, detail="Slug already used")
+
+    commission_type, commission_value = validate_commission(
+        payload.commission_type, payload.commission_value
+    )
+
     doc = payload.model_dump()
+    doc["commission_type"] = commission_type
+    doc["commission_value"] = commission_value
     doc["created_at"] = iso_now()
-    doc["approval_status"] = "approved"  # admin-created products are pre-approved
+    doc["approval_status"] = "approved"
+
     res = await db.products.insert_one(doc)
     doc["_id"] = res.inserted_id
     return product_to_out(doc)
@@ -859,11 +855,37 @@ async def create_product(payload: ProductIn, _: dict = Depends(require_admin)):
 @api.put("/products/{prod_id}", response_model=ProductOut)
 async def update_product(prod_id: str, payload: ProductIn, _: dict = Depends(require_admin)):
     oid = safe_object_id(prod_id)
-    await db.products.update_one({"_id": oid}, {"$set": payload.model_dump()})
-    doc = await db.products.find_one({"_id": oid})
-    if not doc:
+
+    commission_type, commission_value = validate_commission(
+        payload.commission_type, payload.commission_value
+    )
+
+    update_data = payload.model_dump()
+    update_data["commission_type"] = commission_type
+    update_data["commission_value"] = commission_value
+
+    result = await db.products.update_one(
+        {"_id": oid}, {"$set": update_data}
+    )
+    if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Product not found")
+
+    doc = await db.products.find_one({"_id": oid})
     return product_to_out(doc)
+
+
+@api.post("/admin/products/commission-migrate")
+async def admin_migrate_product_commissions(_: dict = Depends(require_admin)):
+    """Backfill commission fields for legacy products without changing prices or stock."""
+    result = await db.products.update_many(
+        {"commission_type": {"$exists": False}},
+        {"$set": {"commission_type": "MRP", "commission_value": 0}},
+    )
+    return {
+        "success": True,
+        "matched": result.matched_count,
+        "modified": result.modified_count,
+    }
 
 
 @api.delete("/products/{prod_id}")
@@ -875,93 +897,210 @@ async def delete_product(prod_id: str, _: dict = Depends(require_admin)):
     return {"success": True}
 
 
-# ---------------------------------------------------------------------------\r\n# Orders / Delivery Pricing
+# ---------------------------------------------------------------------------
+# Orders / Delivery Pricing
 # ---------------------------------------------------------------------------
 
-# Delivery pricing:
-#   <= 1.5 km  -> â‚¹16 fixed
-#   > 1.5 km   -> â‚¹16 + â‚¹12 for every additional km
-#   subtotal >= â‚¹499 -> FREE delivery
-
-DELIVERY_BASE_FEE = 16.0
-DELIVERY_RATE_AFTER_1_5_KM = 12.0
-DELIVERY_BASE_DISTANCE_KM = 1.5
+# Delivery pricing requested for the grocery store:
+# <= 1.5 km  -> â‚¹12 per km
+# > 1.5 km   -> â‚¹15 per km
+# Orders >= â‚¹499 keep the existing free-delivery rule.
+DELIVERY_RATE_PER_KM = 12
+DELIVERY_RATE_ABOVE_1_5_KM = 12
 FREE_DELIVERY_THRESHOLD = 499.0
 
-MAX_DELIVERY_DISTANCE_KM = float(
-    os.environ.get("MAX_DELIVERY_DISTANCE_KM", "12.0")
-)
+def calculate_delivery_fee(distance_km: float, subtotal: float = 0.0) -> float:
+    """
+    Calculate delivery charge from actual GPS distance.
 
-STORE_LATITUDE = float(
-    os.environ.get("STORE_LATITUDE", "18.73")
-)
+    Pricing:
+      0-1.0 km       -> minimum ?12
+      1.0-1.5 km     -> smoothly increases ?12 -> ?15
+      >1.5 km        -> ?12 per km
 
-STORE_LONGITUDE = float(
-    os.environ.get("STORE_LONGITUDE", "76.38")
-)
+    Orders >= ?499 remain free as before.
+    """
+    distance = max(0.0, float(distance_km or 0.0))
+    subtotal_value = max(0.0, float(subtotal or 0.0))
 
-
-def calculate_distance_km(
-    lat1: float,
-    lon1: float,
-    lat2: float,
-    lon2: float,
-) -> float:
-    """Calculate great-circle distance between two GPS coordinates in km."""
-    import math
-
-    earth_radius_km = 6371.0
-
-    lat1_rad = math.radians(float(lat1))
-    lat2_rad = math.radians(float(lat2))
-
-    delta_lat = math.radians(float(lat2) - float(lat1))
-    delta_lon = math.radians(float(lon2) - float(lon1))
-
-    a = (
-        math.sin(delta_lat / 2) ** 2
-        + math.cos(lat1_rad)
-        * math.cos(lat2_rad)
-        * math.sin(delta_lon / 2) ** 2
-    )
-
-    a = min(1.0, max(0.0, a))
-
-    c = 2 * math.atan2(
-        math.sqrt(a),
-        math.sqrt(1 - a),
-    )
-
-    return round(earth_radius_km * c, 2)
-
-
-def calculate_delivery_fee(
-    distance_km: float,
-    subtotal: float = 0.0,
-) -> float:
-    """Calculate delivery fee using the â‚¹16 + â‚¹12/km rule."""
-
-    distance_km = max(0.0, float(distance_km))
-    subtotal = max(0.0, float(subtotal))
-
-    # Free delivery for eligible orders.
-    if subtotal >= FREE_DELIVERY_THRESHOLD:
+    if subtotal_value >= FREE_DELIVERY_THRESHOLD:
         return 0.0
 
-    # Up to 1.5 km = fixed â‚¹16.
-    if distance_km <= DELIVERY_BASE_DISTANCE_KM:
-        return DELIVERY_BASE_FEE
+    if distance <= 1.0:
+        fee = 12.0
+    elif distance <= 1.5:
+        # 1 km = ?12 and 1.5 km = ?15
+        fee = 12.0 + ((distance - 1.0) * 6.0)
+    else:
+        # 2 km = ?24, 3 km = ?36, etc.
+        fee = distance * 12.0
 
-    # Above 1.5 km:
-    # â‚¹16 + â‚¹12 for every additional km.
-    additional_distance = distance_km - DELIVERY_BASE_DISTANCE_KM
+    return round(fee, 2)
 
-    delivery_fee = (
-        DELIVERY_BASE_FEE
-        + (additional_distance * DELIVERY_RATE_AFTER_1_5_KM)
+MINIMUM_ORDER_VALUE = 100.0
+FREE_ORDER_LIMIT = 249.0
+FREE_ORDER_REQUIRED_ORDERS = 13
+PLATFORM_FEE = 10.0
+CGST_RATE = 0.025
+SGST_RATE = 0.025
+GST_RATE = 0.05
+
+
+# ---------------------------------------------------------------------------
+# Loyalty program (free-order reward)
+# ---------------------------------------------------------------------------
+# Every Delivered order whose final total is more than â‚¹{FREE_ORDER_LIMIT}
+# is "qualifying". After FREE_ORDER_REQUIRED_ORDERS qualifying orders in a
+# row, the customer earns 1 reward: their next order is free up to
+# â‚¹{FREE_ORDER_LIMIT}. Counting pauses once a reward is available (so a
+# customer can never bank more than one at a time) and only resumes â€” a
+# fresh 13-order cycle â€” once that reward is redeemed.
+#
+# Progress is stored on the user document (loyalty_qualifying_count,
+# loyalty_reward_available) so it survives restarts and can't be spoofed
+# from the client.
+
+async def record_loyalty_progress(order: dict) -> None:
+    """Advance a customer's loyalty progress after one of their orders is
+    marked Delivered. No-ops for orders at or below the qualifying limit,
+    and while a reward is already sitting unredeemed."""
+    try:
+        final_total = float(order.get("total", 0) or 0)
+    except (TypeError, ValueError):
+        return
+    if final_total <= FREE_ORDER_LIMIT:
+        return
+    user_id = order.get("user_id")
+    if not user_id:
+        return
+    try:
+        oid = ObjectId(user_id)
+    except Exception:
+        return
+    updated = await db.users.find_one_and_update(
+        {"_id": oid, "loyalty_reward_available": {"$ne": True}},
+        {"$inc": {"loyalty_qualifying_count": 1}},
+        return_document=ReturnDocument.AFTER,
     )
+    if updated and updated.get("loyalty_qualifying_count", 0) >= FREE_ORDER_REQUIRED_ORDERS:
+        await db.users.update_one(
+            {"_id": oid},
+            {"$set": {
+                "loyalty_qualifying_count": FREE_ORDER_REQUIRED_ORDERS,
+                "loyalty_reward_available": True,
+            }},
+        )
 
-    return round(delivery_fee, 2)
+# Ambajogai delivery-zone defaults. Values are persisted in MongoDB through
+# the admin Delivery Settings page; environment variables remain the fallback
+# so existing deployments keep working.
+MAX_DELIVERY_DISTANCE_KM = float(os.environ.get("MAX_DELIVERY_DISTANCE_KM", "12.0"))
+DELIVERY_ZONE_NAME = os.environ.get("DELIVERY_ZONE_NAME", "Ambajogai")
+DEFAULT_ALLOWED_PINCODES = [
+    p.strip() for p in os.environ.get("ALLOWED_DELIVERY_PINCODES", "431517").split(",") if p.strip()
+]
+DEFAULT_DELIVERY_STATUS = os.environ.get("DELIVERY_STATUS", "ON").upper() != "OFF"
+
+
+async def get_delivery_settings() -> dict:
+    """Return persisted delivery settings, falling back to environment defaults."""
+    doc = await db.store_settings.find_one({"_id": "delivery_zone"})
+    if doc:
+        return {
+            "service_area": doc.get("service_area", DELIVERY_ZONE_NAME),
+            "max_delivery_distance_km": float(doc.get("max_delivery_distance_km", MAX_DELIVERY_DISTANCE_KM)),
+            "allowed_pincodes": [str(p).strip() for p in (doc.get("allowed_pincodes") or DEFAULT_ALLOWED_PINCODES) if str(p).strip()],
+            "delivery_status": bool(doc.get("delivery_status", DEFAULT_DELIVERY_STATUS)),
+        }
+    return {
+        "service_area": DELIVERY_ZONE_NAME,
+        "max_delivery_distance_km": MAX_DELIVERY_DISTANCE_KM,
+        "allowed_pincodes": DEFAULT_ALLOWED_PINCODES,
+        "delivery_status": DEFAULT_DELIVERY_STATUS,
+    }
+
+
+@api.get("/admin/delivery-settings")
+async def admin_get_delivery_settings(_: dict = Depends(require_admin)):
+    """Return delivery-zone configuration for admins only."""
+    return await get_delivery_settings()
+
+
+@api.patch("/admin/delivery-settings")
+async def admin_update_delivery_settings(
+    payload: DeliverySettingsIn,
+    _: dict = Depends(require_admin),
+):
+    """Persist delivery-zone settings. Only admins can modify them."""
+    allowed = []
+    for value in payload.allowed_pincodes:
+        value = str(value).strip()
+        if value and value.isdigit() and len(value) in (5, 6):
+            allowed.append(value)
+    allowed = list(dict.fromkeys(allowed))
+    if not allowed:
+        raise HTTPException(status_code=400, detail="Add at least one valid delivery pincode.")
+
+    doc = {
+        "_id": "delivery_zone",
+        "service_area": payload.service_area.strip(),
+        "max_delivery_distance_km": round(float(payload.max_delivery_distance_km), 2),
+        "allowed_pincodes": allowed,
+        "delivery_status": bool(payload.delivery_status),
+        "updated_at": iso_now(),
+    }
+    await db.store_settings.replace_one({"_id": "delivery_zone"}, doc, upsert=True)
+    return await get_delivery_settings()
+
+
+@api.get("/delivery/serviceability")
+async def check_delivery_serviceability(
+    latitude: float,
+    longitude: float,
+    pincode: Optional[str] = None,
+):
+    """Validate GPS + optional pincode against the current delivery settings."""
+    try:
+        customer_lat = float(latitude)
+        customer_lon = float(longitude)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid latitude or longitude.")
+
+    if not (-90 <= customer_lat <= 90 and -180 <= customer_lon <= 180):
+        raise HTTPException(status_code=400, detail="Invalid latitude or longitude.")
+
+    settings = await get_delivery_settings()
+    store_lat = float(os.environ.get("STORE_LATITUDE", "18.73"))
+    store_lon = float(os.environ.get("STORE_LONGITUDE", "76.38"))
+    distance_km = calculate_distance_km(store_lat, store_lon, customer_lat, customer_lon)
+
+    normalized_pincode = str(pincode or "").strip()
+    pincode_allowed = (
+        not normalized_pincode
+        or not settings["allowed_pincodes"]
+        or normalized_pincode in settings["allowed_pincodes"]
+    )
+    serviceable = bool(settings["delivery_status"]) and distance_km <= settings["max_delivery_distance_km"] and pincode_allowed
+
+    if not settings["delivery_status"]:
+        message = f"Sorry! {settings['service_area']} delivery is currently unavailable."
+    elif not pincode_allowed:
+        message = f"Sorry! Ambajogai Grocery Store currently delivers only in the {settings['service_area']} area."
+    elif distance_km > settings["max_delivery_distance_km"]:
+        message = f"Sorry! Ambajogai Grocery Store currently delivers only in the {settings['service_area']} area."
+    else:
+        message = f"Delivery available in {settings['service_area']}."
+
+    return {
+        "serviceable": serviceable,
+        "service_area": settings["service_area"],
+        "distance_km": distance_km,
+        "max_delivery_distance_km": settings["max_delivery_distance_km"],
+        "pincode_allowed": pincode_allowed,
+        "delivery_status": settings["delivery_status"],
+        "allowed_pincodes": settings["allowed_pincodes"],
+        "message": message,
+    }
 
 
 def safe_object_id(id_str: str) -> ObjectId:
@@ -973,6 +1112,9 @@ def safe_object_id(id_str: str) -> ObjectId:
 
 @api.post("/orders")
 async def create_order(payload: OrderIn, user: dict = Depends(get_current_user)):
+    print("=== CREATE ORDER START ===")
+    print("USER:", user.get("email") if user else None)
+    print("ITEM COUNT:", len(payload.items) if payload.items else 0)
     if not payload.items:
         raise HTTPException(status_code=400, detail="Cart is empty")
 
@@ -1037,6 +1179,9 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
             "line_status": "Pending",
             "variant_label": it.variant_label,
             "note": (it.note or "").strip() or None,
+            "commission_type": str(prod.get("commission_type", "MRP")).upper(),
+            "commission_value": float(prod.get("commission_value", 0) or 0),
+            "commission_amount": calculate_product_commission(prod, it.variant_label),
         })
 
     # Enforce per-vendor min_order_amount
@@ -1052,13 +1197,20 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
 
     subtotal = round(sum(i["price"] * i["quantity"] for i in verified_items), 2)
 
-    # -----------------------------------------------------------------------
-    # Delivery distance + delivery fee
-    # -----------------------------------------------------------------------
-    # Checkout may send GPS at the top level or inside AddressIn.
+     # Enforce minimum order value
+    if subtotal < MINIMUM_ORDER_VALUE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Minimum order value is â‚¹{MINIMUM_ORDER_VALUE}. Please add â‚¹{MINIMUM_ORDER_VALUE - subtotal:.2f} more to your cart."
+        )
+
+    # ---------------------------------------------------------------
+    # Delivery distance
+    # ---------------------------------------------------------------
+    # Checkout currently sends GPS at the top level, while AddressIn also
+    # supports latitude/longitude. Accept either form for compatibility.
     customer_lat = payload.latitude
     customer_lon = payload.longitude
-
     if customer_lat is None:
         customer_lat = payload.address.latitude
     if customer_lon is None:
@@ -1067,43 +1219,91 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
     if customer_lat is None or customer_lon is None:
         raise HTTPException(
             status_code=400,
-            detail="Please allow location access so delivery distance and charges can be calculated.",
+            detail="Please allow location access so delivery charges can be calculated.",
         )
 
-    try:
-        customer_lat = float(customer_lat)
-        customer_lon = float(customer_lon)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="Invalid latitude or longitude.")
+    # Determine the delivery distance from every vendor represented in the
+    # order. For legacy/admin products without a vendor, use the main store
+    # coordinates. For a multi-vendor order, the farthest vendor determines
+    # the delivery charge so the customer is never undercharged.
+    store_lat = float(
+        os.environ.get(
+            "STORE_LATITUDE",
+            "18.7271336"
+       )
+   )
 
-    if not (-90 <= customer_lat <= 90 and -180 <= customer_lon <= 180):
-        raise HTTPException(status_code=400, detail="Invalid latitude or longitude.")
+    store_lon = float(
+        os.environ.get(
+            "STORE_LONGITUDE",
+            "76.3810922"
+       )
+   )
+    vendor_locations = {}
 
-    # Calculate the customer-to-store distance using the Haversine formula.
-    distance_km = calculate_distance_km(
-        STORE_LATITUDE,
-        STORE_LONGITUDE,
-        customer_lat,
-        customer_lon,
-    )
+    for item in verified_items:
+        vendor_id = item.get("vendor_id")
 
-    # Backend is the source of truth for the delivery zone.
-    if distance_km > MAX_DELIVERY_DISTANCE_KM:
+        if not vendor_id:
+            vendor_locations["__store__"] = (store_lat, store_lon)
+            continue
+
+        if vendor_id in vendor_locations:
+            continue
+
+        try:
+            vendor = await db.vendors.find_one({"_id": ObjectId(vendor_id)})
+        except Exception:
+            vendor = None
+
+        if not vendor:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Vendor not found for {item.get('name', 'this product')}."
+            )
+
+        vendor_lat = vendor.get("latitude")
+        vendor_lon = vendor.get("longitude")
+
+        # Keep old vendor records working: if a vendor has not configured
+        # GPS yet, fall back to the main store coordinates instead of making
+        # every existing product impossible to order.
+        if vendor_lat is None or vendor_lon is None:
+            vendor_locations[vendor_id] = (store_lat, store_lon)
+        else:
+            vendor_locations[vendor_id] = (float(vendor_lat), float(vendor_lon))
+
+        distances = [
+        calculate_distance_km(v_lat, v_lon, float(customer_lat), float(customer_lon))
+        for v_lat, v_lon in vendor_locations.values()
+    ]
+
+    distance_km = max(distances) if distances else 0.0
+
+    # ---------------------------------------------------------------
+    # Ambajogai-only delivery zone â€” final, backend-side check.
+    # This must not live on the frontend alone: a customer could bypass
+    # a frontend-only restriction via browser dev tools or a direct API
+    # call, so the backend is the source of truth (PDF Â§10, Critical).
+    # No order is created if the customer is outside the service area.
+    # ---------------------------------------------------------------
+    delivery_settings = await get_delivery_settings()
+    normalized_order_pincode = str(payload.address.pincode or "").strip()
+    if not delivery_settings["delivery_status"]:
+        raise HTTPException(status_code=400, detail=f"Sorry! {delivery_settings['service_area']} delivery is currently unavailable.")
+    if distance_km > delivery_settings["max_delivery_distance_km"]:
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"Sorry! We currently deliver only within "
-                f"{MAX_DELIVERY_DISTANCE_KM:g} km of the store. "
-                f"Your location is approximately {distance_km:.2f} km away."
-            ),
+            detail=f"Sorry! Ambajogai Grocery Store currently delivers only in the {delivery_settings['service_area']} area.",
         )
-
     delivery_fee = calculate_delivery_fee(distance_km, subtotal)
+    
 
-    # Keep the exact GPS coordinates used for the order.
+    # Store the coordinates actually used for this order so the admin/vendor
+    # panels and future delivery tracking have the original location data.
     order_address = payload.address.model_dump()
-    order_address["latitude"] = customer_lat
-    order_address["longitude"] = customer_lon
+    order_address["latitude"] = float(customer_lat)
+    order_address["longitude"] = float(customer_lon)
 
     # Apply coupon if provided
     discount = 0.0
@@ -1120,13 +1320,42 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         discount = round(subtotal * (coupon["discount_pct"] / 100.0), 2)
         coupon_applied = {"code": coupon["code"], "discount_pct": coupon["discount_pct"], "discount": discount}
 
-    total = round(max(0, subtotal + delivery_fee - discount), 2)
+    discounted_subtotal = max(0.0, subtotal - discount)
+
+    platform_fee = PLATFORM_FEE if discounted_subtotal > 0 else 0.0
+
+    taxable_amount = (
+        discounted_subtotal
+        + platform_fee
+        + delivery_fee
+    )
+
+    cgst = round(taxable_amount * CGST_RATE, 2)
+    sgst = round(taxable_amount * SGST_RATE, 2)
+    gst = round(cgst + sgst, 2)
+
+    total = round(
+        discounted_subtotal
+        + platform_fee
+        + delivery_fee
+        + gst,
+        2
+    )
+    product_commission_total = round(
+        sum(
+            float(item.get("commission_amount", 0) or 0) * int(item.get("quantity", 0) or 0)
+            for item in verified_items
+        ),
+        2,
+    )
+
     status_history = [{"status": "Pending", "at": iso_now()}]
     doc = {
         "user_id": user["id"],
         "user_email": user["email"],
         "user_name": user["name"],
         "items": verified_items,
+        "product_commission_total": product_commission_total,
         "address": order_address,
         "payment_method": payload.payment_method,
         "notes": payload.notes or "",
@@ -1135,6 +1364,10 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         "delivery_distance_km": distance_km,
         "discount": discount,
         "coupon": coupon_applied,
+        "platform_fee": platform_fee,
+        "cgst": cgst,
+        "sgst": sgst,
+        "gst": gst,
         "total": total,
         "status": "Pending",
         "status_history": status_history,
@@ -1202,18 +1435,6 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
                 logger.error(f"Stock rollback failed: {rollback_exc}")
         raise
 
-    # Fire-and-forget push notification for admins after successful order creation
-    try:
-        short_id = str(doc["_id"])[-6:].upper()
-        asyncio.create_task(
-            broadcast_push_to_admins(
-                title=f"New order #{short_id}",
-                body=f"₹{doc['total']} from {doc['user_name']} • {doc['payment_method']}",
-                url="/admin/orders",
-            )
-        )
-    except Exception:
-        pass
     return order_to_out(doc)
 
 
@@ -1221,6 +1442,37 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
 async def my_orders(user: dict = Depends(get_current_user)):
     docs = await db.orders.find({"user_id": user["id"]}).sort("created_at", -1).to_list(500)
     return [order_to_out(d) for d in docs]
+
+
+@api.get("/loyalty/status")
+async def loyalty_status(user: dict = Depends(get_current_user)):
+    doc = await db.users.find_one({"_id": ObjectId(user["id"])}) or {}
+    return {
+        "qualifying_order_count": min(
+            int(doc.get("loyalty_qualifying_count", 0) or 0), FREE_ORDER_REQUIRED_ORDERS
+        ),
+        "required_orders": FREE_ORDER_REQUIRED_ORDERS,
+        "reward_available": bool(doc.get("loyalty_reward_available", False)),
+        "reward_value": FREE_ORDER_LIMIT,
+    }
+
+
+@api.post("/loyalty/redeem")
+async def loyalty_redeem(user: dict = Depends(get_current_user)):
+    updated = await db.users.find_one_and_update(
+        {"_id": ObjectId(user["id"]), "loyalty_reward_available": True},
+        {"$set": {"loyalty_reward_available": False, "loyalty_qualifying_count": 0}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not updated:
+        raise HTTPException(status_code=400, detail="No free-order reward available to redeem.")
+    return {
+        "success": True,
+        "message": "Free-order reward redeemed. A new 13-order cycle has started.",
+        "qualifying_order_count": 0,
+        "required_orders": FREE_ORDER_REQUIRED_ORDERS,
+        "reward_available": False,
+    }
 
 
 @api.get("/orders/{order_id}")
@@ -1231,18 +1483,6 @@ async def get_order(order_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Order not found")
     if user.get("role") != "admin" and doc.get("user_id") != user["id"]:
         raise HTTPException(status_code=403, detail="Access denied")
-    # Fire-and-forget push notification for admins after successful order creation
-    try:
-        short_id = str(doc["_id"])[-6:].upper()
-        asyncio.create_task(
-            broadcast_push_to_admins(
-                title=f"New order #{short_id}",
-                body=f"₹{doc['total']} from {doc['user_name']} • {doc['payment_method']}",
-                url="/admin/orders",
-            )
-        )
-    except Exception:
-        pass
     return order_to_out(doc)
 
 
@@ -1251,17 +1491,6 @@ async def admin_list_orders(_: dict = Depends(require_admin), status_filter: Opt
     q = {"status": status_filter} if status_filter else {}
     docs = await db.orders.find(q).sort("created_at", -1).to_list(1000)
     return [order_to_out(d) for d in docs]
-
-@api.get("/admin/orders/pending-count")
-async def admin_pending_order_count(_: dict = Depends(require_admin)):
-    docs = await db.orders.find(
-        {"status": "Pending"}
-    ).sort("created_at", -1).to_list(1)
-
-    return {
-        "count": await db.orders.count_documents({"status": "Pending"}),
-        "latest_id": str(docs[0]["_id"]) if docs else None,
-    }
 
 
 @api.patch("/admin/orders/{order_id}/status")
@@ -1277,21 +1506,34 @@ async def update_order_status(order_id: str, payload: OrderStatusUpdate, _: dict
     await db.orders.update_one(
         {"_id": oid},
         {"$set": {"status": payload.status, "status_history": history}},
-    )
+      )
+      # ---------------------------------------------------------
+      # CUSTOMER NOTIFICATIONS
+      # ---------------------------------------------------------
+
+    if payload.status == "Accepted":
+
+          await create_order_notification(
+              user_id=doc["user_id"],
+              order_id=str(doc["_id"]),
+              title="Order Accepted",
+              message="Your order has been successfully accepted and is being prepared.",
+              notification_type="order_accepted",
+          )
+
+    elif payload.status == "Delivered":
+
+          await create_order_notification(
+              user_id=doc["user_id"],
+              order_id=str(doc["_id"]),
+              title="Order Delivered",
+              message="Your order has been delivered successfully. Thank you for shopping with us!",
+              notification_type="order_delivered",
+          )
+          if doc.get("status") != "Delivered":
+              await record_loyalty_progress(doc)
     doc["status"] = payload.status
     doc["status_history"] = history
-    # Fire-and-forget push notification for admins after successful order creation
-    try:
-        short_id = str(doc["_id"])[-6:].upper()
-        asyncio.create_task(
-            broadcast_push_to_admins(
-                title=f"New order #{short_id}",
-                body=f"₹{doc['total']} from {doc['user_name']} • {doc['payment_method']}",
-                url="/admin/orders",
-            )
-        )
-    except Exception:
-        pass
     return order_to_out(doc)
 
 
@@ -1411,6 +1653,8 @@ class VendorRegisterIn(BaseModel):
     business_description: str = ""
     business_address: str
     business_pincode: str
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     docs: VendorDocs = VendorDocs()
 
 
@@ -1434,6 +1678,8 @@ class VendorSettingsIn(BaseModel):
     business_description: Optional[str] = None
     business_address: Optional[str] = None
     business_pincode: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     shop_phone: Optional[str] = None
     shop_whatsapp: Optional[str] = None
     shop_logo: Optional[str] = None
@@ -1459,6 +1705,8 @@ def vendor_to_out(v: dict) -> dict:
         "business_description": v.get("business_description", ""),
         "business_address": v.get("business_address", ""),
         "business_pincode": v.get("business_pincode", ""),
+        "latitude": v.get("latitude"),
+        "longitude": v.get("longitude"),
         "docs": v.get("docs", {}),
         "status": v.get("status", "Pending"),
         "rejection_reason": v.get("rejection_reason", ""),
@@ -1626,6 +1874,9 @@ async def vendor_create_product(payload: ProductIn, user: dict = Depends(get_cur
     if exists:
         raise HTTPException(status_code=400, detail="Slug already used")
     doc = payload.model_dump()
+    # Product commission is an admin-controlled setting. Vendors cannot set it.
+    doc["commission_type"] = "MRP"
+    doc["commission_value"] = 0
     doc["created_at"] = iso_now()
     doc["vendor_id"] = str(vendor["_id"])
     doc["vendor_name"] = vendor["business_name"]
@@ -1644,7 +1895,10 @@ async def vendor_update_product(prod_id: str, payload: ProductIn, user: dict = D
         raise HTTPException(status_code=404, detail="Product not found")
     if existing.get("vendor_id") != str(vendor["_id"]):
         raise HTTPException(status_code=403, detail="Not your product")
-    await db.products.update_one({"_id": oid}, {"$set": payload.model_dump()})
+    update_data = payload.model_dump()
+    update_data.pop("commission_type", None)
+    update_data.pop("commission_value", None)
+    await db.products.update_one({"_id": oid}, {"$set": update_data})
     doc = await db.products.find_one({"_id": oid})
     return product_to_out(doc)
 
@@ -2046,6 +2300,79 @@ async def delivery_me(user: dict = Depends(require_delivery)):
     u = await db.users.find_one({"_id": ObjectId(user["id"])})
     return dp_to_out(u)
 
+# ---------------------------------------------------------------------------
+# NOTIFICATIONS
+# ---------------------------------------------------------------------------
+
+@api.get("/notifications")
+async def get_notifications(
+    user: dict = Depends(get_current_user)
+):
+    docs = await db.notifications.find({
+        "user_id": user["id"]
+    }).sort("created_at", -1).limit(50).to_list(50)
+
+    result = []
+
+    for n in docs:
+        result.append({
+            "id": str(n["_id"]),
+            "order_id": n.get("order_id"),
+            "title": n.get("title", ""),
+            "message": n.get("message", ""),
+            "type": n.get("type", "order"),
+            "read": n.get("read", False),
+            "created_at": n.get("created_at"),
+        })
+
+    return result
+
+
+@api.patch("/notifications/{notification_id}/read")
+async def mark_notification_read(
+    notification_id: str,
+    user: dict = Depends(get_current_user)
+):
+    oid = safe_object_id(notification_id)
+
+    result = await db.notifications.update_one(
+        {
+            "_id": oid,
+            "user_id": user["id"],
+        },
+        {
+            "$set": {
+                "read": True
+            }
+        }
+    )
+
+    if result.matched_count == 0:
+        raise HTTPException(
+            status_code=404,
+            detail="Notification not found"
+        )
+
+    return {"ok": True}
+
+
+@api.patch("/notifications/read-all")
+async def mark_all_notifications_read(
+    user: dict = Depends(get_current_user)
+):
+    await db.notifications.update_many(
+        {
+            "user_id": user["id"],
+            "read": False,
+        },
+        {
+            "$set": {
+                "read": True
+            }
+        }
+    )
+
+    return {"ok": True}
 
 @api.get("/delivery/orders")
 async def delivery_my_orders(user: dict = Depends(require_delivery)):
@@ -2080,14 +2407,31 @@ async def delivery_update_status(order_id: str, payload: OrderStatusUpdate, user
     for i in items:
         if i.get("line_status") not in ("Cancelled", "Delivered"):
             i["line_status"] = payload.status
-    await db.orders.update_one(
+        await db.orders.update_one(
         {"_id": oid},
         {"$set": {"status": payload.status, "status_history": history, "items": items}},
     )
+
+    # ---------------------------------------------------------
+    # CUSTOMER NOTIFICATION - ORDER DELIVERED
+    # ---------------------------------------------------------
+
+    if payload.status == "Delivered" and o.get("status") != "Delivered":
+
+        await create_order_notification(
+            user_id=o["user_id"],
+            order_id=str(o["_id"]),
+            title="Order Delivered",
+            message="Your order has been delivered successfully. Thank you for shopping with us!",
+            notification_type="order_delivered",
+        )
+        await record_loyalty_progress(o)
+
     o["status"] = payload.status
     o["status_history"] = history
     o["items"] = items
     return order_to_out(o)
+
 
 
 @api.get("/delivery/earnings")
@@ -2475,6 +2819,8 @@ async def store_info():
         "upi_name": os.environ.get("STORE_UPI_NAME", "Ambajogai Grocery Store"),
         "upi_qr": os.environ.get("STORE_UPI_QR", ""),
         "address": "Main Road, Ambajogai, Maharashtra 431517",
+        "latitude": float(os.environ.get("STORE_LATITUDE", "18.73")),
+        "longitude": float(os.environ.get("STORE_LONGITUDE", "76.38")),
         "email": os.environ.get("STORE_EMAIL", "ambajogaigrocerystores@gmail.com"),
     }
 
@@ -2498,38 +2844,417 @@ SEED_CATEGORIES = [
 ]
 
 SEED_PRODUCTS = [
-    # Fruits & Vegetables
-    {"name": "Fresh Tomato", "slug": "fresh-tomato", "price": 30, "mrp": 40, "unit": "1 kg", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1592924357228-91a4daadcfea?w=600&q=80", "stock": 50, "featured": True, "popular": True, "description": "Farm-fresh red tomatoes, hand-picked daily."},
-    {"name": "Onion", "slug": "onion", "price": 40, "mrp": 50, "unit": "1 kg", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1508747703725-719777637510?w=600&q=80", "stock": 80, "popular": True, "description": "Premium quality Nashik onions."},
-    {"name": "Banana", "slug": "banana", "price": 50, "mrp": 60, "unit": "1 dozen", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?w=600&q=80", "stock": 30, "featured": True, "description": "Ripe yellow bananas, rich in potassium."},
-    {"name": "Apple - Shimla", "slug": "apple-shimla", "price": 180, "mrp": 220, "unit": "1 kg", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1568702846914-96b305d2aaeb?w=600&q=80", "stock": 25, "featured": True, "popular": True, "description": "Crisp red apples straight from Himachal orchards."},
-    {"name": "Potato", "slug": "potato", "price": 25, "mrp": 30, "unit": "1 kg", "category_slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1518977676601-b53f82aba655?w=600&q=80", "stock": 100, "description": "Fresh farm potatoes."},
+    # ============================================================
+    # FRUITS & VEGETABLES
+    # ============================================================
 
-    # Dairy
-    {"name": "Amul Milk (Toned)", "slug": "amul-milk-toned", "price": 32, "mrp": 34, "unit": "500 ml", "category_slug": "dairy-bakery", "image": "https://images.unsplash.com/photo-1550583724-b2692b85b150?w=600&q=80", "stock": 60, "featured": True, "popular": True, "description": "Amul toned milk pouch, farm fresh."},
-    {"name": "Paneer", "slug": "paneer", "price": 90, "mrp": 100, "unit": "200 g", "category_slug": "dairy-bakery", "image": "https://images.unsplash.com/photo-1631452180519-c014fe946bc7?w=600&q=80", "stock": 20, "popular": True, "description": "Soft, fresh paneer perfect for curries."},
-    {"name": "Amul Butter", "slug": "amul-butter", "price": 55, "mrp": 60, "unit": "100 g", "category_slug": "dairy-bakery", "image": "https://images.unsplash.com/photo-1589985270826-4b7bb135bc9d?w=600&q=80", "stock": 40, "description": "Classic Amul butter for your daily needs."},
-    {"name": "Whole Wheat Bread", "slug": "whole-wheat-bread", "price": 45, "mrp": 50, "unit": "400 g", "category_slug": "dairy-bakery", "image": "https://images.unsplash.com/photo-1509440159596-0249088772ff?w=600&q=80", "stock": 35, "description": "Freshly baked whole wheat bread."},
+    {
+        "name": "Fresh Tomato",
+        "slug": "fresh-tomato",
+        "price": 30,
+        "mrp": 40,
+        "unit": "1 kg",
+        "category_slug": "fruits-vegetables",
+        "image": "https://images.unsplash.com/photo-1592924357228-91a4daadcfea?w=600&q=80",
+        "stock": 50,
+        "featured": True,
+        "popular": True,
+        "description": "Farm-fresh red tomatoes, hand-picked daily.",
+        "variants": [
+            {"label": "500g", "price": 20, "mrp": 25, "unit": "500g"},
+            {"label": "1kg", "price": 30, "mrp": 40, "unit": "1kg"},
+            {"label": "2kg", "price": 55, "mrp": 65, "unit": "2kg"},
+            {"label": "3kg", "price": 80, "mrp": 95, "unit": "3kg"},
+            {"label": "4kg", "price": 105, "mrp": 125, "unit": "4kg"},
+            {"label": "5kg", "price": 130, "mrp": 155, "unit": "5kg"},
+        ],
+    },
 
-    # Staples
-    {"name": "Basmati Rice", "slug": "basmati-rice", "price": 320, "mrp": 380, "unit": "5 kg", "category_slug": "staples-grains", "image": "https://images.unsplash.com/photo-1586201375761-83865001e31c?w=600&q=80", "stock": 15, "featured": True, "popular": True, "description": "Premium long-grain basmati rice."},
-    {"name": "Toor Dal", "slug": "toor-dal", "price": 165, "mrp": 190, "unit": "1 kg", "category_slug": "staples-grains", "image": "https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=600&q=80", "stock": 25, "popular": True, "description": "Fresh, unpolished toor dal."},
-    {"name": "Aashirvaad Atta", "slug": "aashirvaad-atta", "price": 340, "mrp": 400, "unit": "5 kg", "category_slug": "staples-grains", "image": "https://images.unsplash.com/photo-1568254183919-78a4f43a2877?w=600&q=80", "stock": 30, "featured": True, "description": "100% whole wheat atta for soft rotis."},
-    {"name": "Sunflower Oil", "slug": "sunflower-oil", "price": 210, "mrp": 240, "unit": "1 L", "category_slug": "staples-grains", "image": "https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=600&q=80", "stock": 40, "description": "Refined sunflower cooking oil."},
+    {
+        "name": "Onion",
+        "slug": "onion",
+        "price": 40,
+        "mrp": 50,
+        "unit": "1 kg",
+        "category_slug": "fruits-vegetables",
+        "image": "https://images.unsplash.com/photo-1508747703725-719777637510?w=600&q=80",
+        "stock": 80,
+        "popular": True,
+        "description": "Premium quality Nashik onions.",
+        "variants": [
+            {"label": "500g", "price": 20, "mrp": 25, "unit": "500g"},
+            {"label": "1kg", "price": 40, "mrp": 50, "unit": "1kg"},
+            {"label": "2kg", "price": 75, "mrp": 90, "unit": "2kg"},
+            {"label": "3kg", "price": 110, "mrp": 130, "unit": "3kg"},
+            {"label": "5kg", "price": 175, "mrp": 210, "unit": "5kg"},
+        ],
+    },
 
-    # Spices
-    {"name": "Turmeric Powder", "slug": "turmeric-powder", "price": 65, "mrp": 80, "unit": "200 g", "category_slug": "spices-masala", "image": "https://images.unsplash.com/photo-1615485500704-8e990f9900f7?w=600&q=80", "stock": 50, "description": "Pure haldi powder, ground fresh."},
-    {"name": "Red Chilli Powder", "slug": "red-chilli-powder", "price": 85, "mrp": 100, "unit": "200 g", "category_slug": "spices-masala", "image": "https://images.unsplash.com/photo-1509358271058-acd22cc93898?w=600&q=80", "stock": 40, "popular": True, "description": "Spicy red chilli powder."},
-    {"name": "Garam Masala", "slug": "garam-masala", "price": 95, "mrp": 110, "unit": "100 g", "category_slug": "spices-masala", "image": "https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=600&q=80", "stock": 30, "featured": True, "description": "Aromatic blend of ground whole spices."},
+    {
+        "name": "Banana",
+        "slug": "banana",
+        "price": 50,
+        "mrp": 60,
+        "unit": "1 dozen",
+        "category_slug": "fruits-vegetables",
+        "image": "https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?w=600&q=80",
+        "stock": 30,
+        "featured": True,
+        "description": "Ripe yellow bananas, rich in potassium.",
+        "variants": [
+            {"label": "6 pcs", "price": 25, "mrp": 30, "unit": "6 pcs"},
+            {"label": "12 pcs", "price": 50, "mrp": 60, "unit": "12 pcs"},
+            {"label": "24 pcs", "price": 95, "mrp": 115, "unit": "24 pcs"},
+        ],
+    },
 
-    # Snacks
-    {"name": "Parle-G Biscuits", "slug": "parle-g", "price": 10, "mrp": 12, "unit": "80 g", "category_slug": "snacks-beverages", "image": "https://images.unsplash.com/photo-1558961363-fa8fdf82db35?w=600&q=80", "stock": 200, "popular": True, "description": "The classic glucose biscuit."},
-    {"name": "Lay's Classic Salted", "slug": "lays-classic", "price": 20, "mrp": 20, "unit": "52 g", "category_slug": "snacks-beverages", "image": "https://images.unsplash.com/photo-1621939514649-280e2ee25f60?w=600&q=80", "stock": 100, "description": "Crispy potato chips."},
-    {"name": "Tata Tea Gold", "slug": "tata-tea-gold", "price": 275, "mrp": 310, "unit": "500 g", "category_slug": "snacks-beverages", "image": "https://images.unsplash.com/photo-1594631252845-29fc4cc8cde9?w=600&q=80", "stock": 25, "featured": True, "description": "Rich aroma and taste of premium tea."},
+    {
+        "name": "Apple - Shimla",
+        "slug": "apple-shimla",
+        "price": 180,
+        "mrp": 220,
+        "unit": "1 kg",
+        "category_slug": "fruits-vegetables",
+        "image": "https://images.unsplash.com/photo-1568702846914-96b305d2aaeb?w=600&q=80",
+        "stock": 25,
+        "featured": True,
+        "popular": True,
+        "description": "Crisp red apples straight from Himachal orchards.",
+        "variants": [
+            {"label": "500g", "price": 90, "mrp": 110, "unit": "500g"},
+            {"label": "1kg", "price": 180, "mrp": 220, "unit": "1kg"},
+            {"label": "2kg", "price": 350, "mrp": 420, "unit": "2kg"},
+        ],
+    },
 
-    # Personal care
-    {"name": "Dettol Soap", "slug": "dettol-soap", "price": 40, "mrp": 45, "unit": "125 g", "category_slug": "personal-care", "image": "https://images.unsplash.com/photo-1600857544200-b2f666a9a2ec?w=600&q=80", "stock": 60, "description": "Antibacterial protection soap."},
-    {"name": "Colgate Toothpaste", "slug": "colgate-toothpaste", "price": 95, "mrp": 110, "unit": "150 g", "category_slug": "personal-care", "image": "https://images.unsplash.com/photo-1607613009820-a29f7bb81c04?w=600&q=80", "stock": 45, "popular": True, "description": "Cavity protection for strong teeth."},
+    {
+        "name": "Potato",
+        "slug": "potato",
+        "price": 25,
+        "mrp": 30,
+        "unit": "1 kg",
+        "category_slug": "fruits-vegetables",
+        "image": "https://images.unsplash.com/photo-1518977676601-b53f82aba655?w=600&q=80",
+        "stock": 100,
+        "description": "Fresh farm potatoes.",
+        "variants": [
+            {"label": "500g", "price": 13, "mrp": 16, "unit": "500g"},
+            {"label": "1kg", "price": 25, "mrp": 30, "unit": "1kg"},
+            {"label": "2kg", "price": 48, "mrp": 58, "unit": "2kg"},
+            {"label": "5kg", "price": 115, "mrp": 140, "unit": "5kg"},
+        ],
+    },
+
+    # ============================================================
+    # DAIRY & BAKERY
+    # ============================================================
+
+    {
+        "name": "Amul Milk (Toned)",
+        "slug": "amul-milk-toned",
+        "price": 32,
+        "mrp": 34,
+        "unit": "500 ml",
+        "category_slug": "dairy-bakery",
+        "image": "https://images.unsplash.com/photo-1550583724-b2692b85b150?w=600&q=80",
+        "stock": 60,
+        "featured": True,
+        "popular": True,
+        "description": "Amul toned milk pouch, farm fresh.",
+        "variants": [
+            {"label": "500ml", "price": 32, "mrp": 34, "unit": "500ml"},
+            {"label": "1L", "price": 64, "mrp": 68, "unit": "1L"},
+            {"label": "2L", "price": 126, "mrp": 136, "unit": "2L"},
+        ],
+    },
+
+    {
+        "name": "Paneer",
+        "slug": "paneer",
+        "price": 90,
+        "mrp": 100,
+        "unit": "200 g",
+        "category_slug": "dairy-bakery",
+        "image": "https://images.unsplash.com/photo-1631452180519-c014fe946bc7?w=600&q=80",
+        "stock": 20,
+        "popular": True,
+        "description": "Soft, fresh paneer perfect for curries.",
+        "variants": [
+            {"label": "200g", "price": 90, "mrp": 100, "unit": "200g"},
+            {"label": "500g", "price": 220, "mrp": 250, "unit": "500g"},
+            {"label": "1kg", "price": 420, "mrp": 480, "unit": "1kg"},
+        ],
+    },
+
+    {
+        "name": "Amul Butter",
+        "slug": "amul-butter",
+        "price": 55,
+        "mrp": 60,
+        "unit": "100 g",
+        "category_slug": "dairy-bakery",
+        "image": "https://images.unsplash.com/photo-1589985270826-4b7bb135bc9d?w=600&q=80",
+        "stock": 40,
+        "description": "Classic Amul butter for your daily needs.",
+        "variants": [
+            {"label": "100g", "price": 55, "mrp": 60, "unit": "100g"},
+            {"label": "200g", "price": 105, "mrp": 120, "unit": "200g"},
+            {"label": "500g", "price": 255, "mrp": 290, "unit": "500g"},
+        ],
+    },
+
+    {
+        "name": "Whole Wheat Bread",
+        "slug": "whole-wheat-bread",
+        "price": 45,
+        "mrp": 50,
+        "unit": "400 g",
+        "category_slug": "dairy-bakery",
+        "image": "https://images.unsplash.com/photo-1509440159596-0249088772ff?w=600&q=80",
+        "stock": 35,
+        "description": "Freshly baked whole wheat bread.",
+        "variants": [
+            {"label": "400g", "price": 45, "mrp": 50, "unit": "400g"},
+            {"label": "800g", "price": 85, "mrp": 100, "unit": "800g"},
+        ],
+    },
+
+    # ============================================================
+    # STAPLES & GRAINS
+    # ============================================================
+
+    {
+        "name": "Basmati Rice",
+        "slug": "basmati-rice",
+        "price": 320,
+        "mrp": 380,
+        "unit": "5 kg",
+        "category_slug": "staples-grains",
+        "image": "https://images.unsplash.com/photo-1586201375761-83865001e31c?w=600&q=80",
+        "stock": 15,
+        "featured": True,
+        "popular": True,
+        "description": "Premium long-grain basmati rice.",
+        "variants": [
+            {"label": "1kg", "price": 70, "mrp": 85, "unit": "1kg"},
+            {"label": "5kg", "price": 320, "mrp": 380, "unit": "5kg"},
+            {"label": "10kg", "price": 620, "mrp": 740, "unit": "10kg"},
+        ],
+    },
+
+    {
+        "name": "Toor Dal",
+        "slug": "toor-dal",
+        "price": 165,
+        "mrp": 190,
+        "unit": "1 kg",
+        "category_slug": "staples-grains",
+        "image": "https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=600&q=80",
+        "stock": 25,
+        "popular": True,
+        "description": "Fresh, unpolished toor dal.",
+        "variants": [
+            {"label": "500g", "price": 85, "mrp": 100, "unit": "500g"},
+            {"label": "1kg", "price": 165, "mrp": 190, "unit": "1kg"},
+            {"label": "2kg", "price": 320, "mrp": 370, "unit": "2kg"},
+            {"label": "5kg", "price": 790, "mrp": 900, "unit": "5kg"},
+        ],
+    },
+
+    {
+        "name": "Aashirvaad Atta",
+        "slug": "aashirvaad-atta",
+        "price": 340,
+        "mrp": 400,
+        "unit": "5 kg",
+        "category_slug": "staples-grains",
+        "image": "https://images.unsplash.com/photo-1568254183919-78a4f43a2877?w=600&q=80",
+        "stock": 30,
+        "featured": True,
+        "description": "100% whole wheat atta for soft rotis.",
+        "variants": [
+            {"label": "1kg", "price": 75, "mrp": 90, "unit": "1kg"},
+            {"label": "5kg", "price": 340, "mrp": 400, "unit": "5kg"},
+            {"label": "10kg", "price": 660, "mrp": 780, "unit": "10kg"},
+        ],
+    },
+
+    {
+        "name": "Sunflower Oil",
+        "slug": "sunflower-oil",
+        "price": 210,
+        "mrp": 240,
+        "unit": "1 L",
+        "category_slug": "staples-grains",
+        "image": "https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=600&q=80",
+        "stock": 40,
+        "description": "Refined sunflower cooking oil.",
+        "variants": [
+            {"label": "500ml", "price": 110, "mrp": 125, "unit": "500ml"},
+            {"label": "1L", "price": 210, "mrp": 240, "unit": "1L"},
+            {"label": "2L", "price": 410, "mrp": 460, "unit": "2L"},
+            {"label": "5L", "price": 990, "mrp": 1150, "unit": "5L"},
+        ],
+    },
+
+    # ============================================================
+    # SPICES & MASALA
+    # ============================================================
+
+    {
+        "name": "Turmeric Powder",
+        "slug": "turmeric-powder",
+        "price": 65,
+        "mrp": 80,
+        "unit": "200 g",
+        "category_slug": "spices-masala",
+        "image": "https://images.unsplash.com/photo-1615485500704-8e990f9900f7?w=600&q=80",
+        "stock": 50,
+        "description": "Pure haldi powder, ground fresh.",
+        "variants": [
+            {"label": "100g", "price": 35, "mrp": 42, "unit": "100g"},
+            {"label": "200g", "price": 65, "mrp": 80, "unit": "200g"},
+            {"label": "500g", "price": 150, "mrp": 180, "unit": "500g"},
+            {"label": "1kg", "price": 285, "mrp": 340, "unit": "1kg"},
+        ],
+    },
+
+    {
+        "name": "Red Chilli Powder",
+        "slug": "red-chilli-powder",
+        "price": 85,
+        "mrp": 100,
+        "unit": "200 g",
+        "category_slug": "spices-masala",
+        "image": "https://images.unsplash.com/photo-1509358271058-acd22cc93898?w=600&q=80",
+        "stock": 40,
+        "popular": True,
+        "description": "Spicy red chilli powder.",
+        "variants": [
+            {"label": "100g", "price": 45, "mrp": 55, "unit": "100g"},
+            {"label": "200g", "price": 85, "mrp": 100, "unit": "200g"},
+            {"label": "500g", "price": 200, "mrp": 240, "unit": "500g"},
+            {"label": "1kg", "price": 380, "mrp": 450, "unit": "1kg"},
+        ],
+    },
+
+    {
+        "name": "Garam Masala",
+        "slug": "garam-masala",
+        "price": 95,
+        "mrp": 110,
+        "unit": "100 g",
+        "category_slug": "spices-masala",
+        "image": "https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=600&q=80",
+        "stock": 30,
+        "featured": True,
+        "description": "Aromatic blend of ground whole spices.",
+        "variants": [
+            {"label": "50g", "price": 50, "mrp": 60, "unit": "50g"},
+            {"label": "100g", "price": 95, "mrp": 110, "unit": "100g"},
+            {"label": "200g", "price": 180, "mrp": 215, "unit": "200g"},
+            {"label": "500g", "price": 420, "mrp": 500, "unit": "500g"},
+        ],
+    },
+
+    # ============================================================
+    # SNACKS & BEVERAGES
+    # ============================================================
+
+    {
+        "name": "Parle-G Biscuits",
+        "slug": "parle-g",
+        "price": 10,
+        "mrp": 12,
+        "unit": "80 g",
+        "category_slug": "snacks-beverages",
+        "image": "https://images.unsplash.com/photo-1558961363-fa8fdf82db35?w=600&q=80",
+        "stock": 200,
+        "popular": True,
+        "description": "The classic glucose biscuit.",
+        "variants": [
+            {"label": "50g", "price": 5, "mrp": 6, "unit": "50g"},
+            {"label": "80g", "price": 10, "mrp": 12, "unit": "80g"},
+            {"label": "200g", "price": 25, "mrp": 30, "unit": "200g"},
+            {"label": "800g", "price": 90, "mrp": 105, "unit": "800g"},
+        ],
+    },
+
+    {
+        "name": "Lay's Classic Salted",
+        "slug": "lays-classic",
+        "price": 20,
+        "mrp": 20,
+        "unit": "52 g",
+        "category_slug": "snacks-beverages",
+        "image": "https://images.unsplash.com/photo-1621939514649-280e2ee25f60?w=600&q=80",
+        "stock": 100,
+        "description": "Crispy potato chips.",
+        "variants": [
+            {"label": "26g", "price": 10, "mrp": 10, "unit": "26g"},
+            {"label": "52g", "price": 20, "mrp": 20, "unit": "52g"},
+            {"label": "95g", "price": 35, "mrp": 40, "unit": "95g"},
+        ],
+    },
+
+    {
+        "name": "Tata Tea Gold",
+        "slug": "tata-tea-gold",
+        "price": 275,
+        "mrp": 310,
+        "unit": "500 g",
+        "category_slug": "snacks-beverages",
+        "image": "https://images.unsplash.com/photo-1594631252845-29fc4cc8cde9?w=600&q=80",
+        "stock": 25,
+        "featured": True,
+        "description": "Rich aroma and taste of premium tea.",
+        "variants": [
+            {"label": "100g", "price": 60, "mrp": 70, "unit": "100g"},
+            {"label": "250g", "price": 145, "mrp": 165, "unit": "250g"},
+            {"label": "500g", "price": 275, "mrp": 310, "unit": "500g"},
+            {"label": "1kg", "price": 530, "mrp": 600, "unit": "1kg"},
+        ],
+    },
+
+    # ============================================================
+    # PERSONAL CARE
+    # ============================================================
+
+    {
+        "name": "Dettol Soap",
+        "slug": "dettol-soap",
+        "price": 40,
+        "mrp": 45,
+        "unit": "125 g",
+        "category_slug": "personal-care",
+        "image": "https://images.unsplash.com/photo-1600857544200-b2f666a9a2ec?w=600&q=80",
+        "stock": 60,
+        "description": "Antibacterial protection soap.",
+        "variants": [
+            {"label": "75g", "price": 28, "mrp": 32, "unit": "75g"},
+            {"label": "125g", "price": 40, "mrp": 45, "unit": "125g"},
+            {"label": "4 x 125g", "price": 150, "mrp": 180, "unit": "4 x 125g"},
+        ],
+    },
+
+    {
+        "name": "Colgate Toothpaste",
+        "slug": "colgate-toothpaste",
+        "price": 95,
+        "mrp": 110,
+        "unit": "150 g",
+        "category_slug": "personal-care",
+        "image": "https://images.unsplash.com/photo-1607613009820-a29f7bb81c04?w=600&q=80",
+        "stock": 45,
+        "popular": True,
+        "description": "Cavity protection for strong teeth.",
+        "variants": [
+            {"label": "50g", "price": 35, "mrp": 40, "unit": "50g"},
+            {"label": "100g", "price": 65, "mrp": 75, "unit": "100g"},
+            {"label": "150g", "price": 95, "mrp": 110, "unit": "150g"},
+            {"label": "300g", "price": 180, "mrp": 210, "unit": "300g"},
+        ],
+    },
 ]
 
 
@@ -2570,14 +3295,33 @@ async def seed_data():
 
     # Categories
     for c in SEED_CATEGORIES:
-        await db.categories.update_one({"slug": c["slug"]}, {"$setOnInsert": c}, upsert=True)
+        await db.categories.update_one(
+            {"slug": c["slug"]},
+            {"$setOnInsert": c},
+            upsert=True,
+        )
 
     # Products
     for p in SEED_PRODUCTS:
         p_doc = {**p, "created_at": iso_now()}
-        await db.products.update_one({"slug": p["slug"]}, {"$setOnInsert": p_doc}, upsert=True)
+
+        p_insert_doc = {**p_doc}
+        p_insert_doc.pop("variants", None)
+
+        await db.products.update_one(
+            {"slug": p["slug"]},
+            {
+                "$setOnInsert": p_insert_doc,
+                "$set": {
+                    "variants": p.get("variants", []),
+                },
+            },
+            upsert=True,
+        )
 
     # Reviews (seed a few if empty)
+
+
     if await db.reviews.count_documents({}) == 0:
         sample_reviews = [
             {"product_slug": None, "rating": 5, "comment": "Best grocery store in Ambajogai! Fresh vegetables delivered within 2 hours.", "author_name": "Rohit Deshmukh", "created_at": iso_now()},
@@ -2612,5 +3356,25 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     client.close()
+def calculate_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calculate great-circle distance between two GPS coordinates in km."""
+    from math import radians, sin, cos, asin, sqrt
+
+    lat1 = float(lat1)
+    lon1 = float(lon1)
+    lat2 = float(lat2)
+    lon2 = float(lon2)
+
+    dlat = radians(lat2 - lat1)
+    dlon = radians(lon2 - lon1)
+
+    a = (
+        sin(dlat / 2) ** 2
+        + cos(radians(lat1))
+        * cos(radians(lat2))
+        * sin(dlon / 2) ** 2
+    )
+
+    return 6371.0 * 2 * asin(sqrt(a))
 
 

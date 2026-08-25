@@ -124,10 +124,14 @@ export default function ProductCard({ product }) {
    * ---------------------------------------------------------------
    */
 
-  // Promotional badge is fixed at 10% for every product.
-  // This does NOT change the product price. The real 10% discount is applied
-  // only after the customer explicitly applies GROCERY10 at checkout.
-  const off = 10;
+  const off =
+    activeMrp > activePrice
+      ? Math.round(
+          ((activeMrp - activePrice) /
+            activeMrp) *
+            100
+        )
+      : 0;
 
   /*
    * ---------------------------------------------------------------

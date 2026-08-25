@@ -1,4 +1,4 @@
-﻿/* Ambajogai Grocery Store ΓÇö Service Worker for Web Push */
+/* Ambajogai Grocery Store — Service Worker for Web Push */
 /* eslint-disable no-restricted-globals */
 
 self.addEventListener("install", (event) => {

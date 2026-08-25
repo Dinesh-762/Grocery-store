@@ -1,5 +1,5 @@
+import { playCheckoutBell } from "@/lib/audioAlert";
 import Dashboard from "@/pages/Dashboard";
-import Catalogue from "@/pages/Catalogue";
 import VendorBottomNav from "@/components/VendorBottomNav";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { NavLink, Routes, Route, Navigate } from "react-router-dom";
@@ -100,8 +100,8 @@ export default function VendorDashboard() {
                 Catalogue now uses VProducts
                 instead of the old Catalogue component.
             */}
-            <Route path="catalogue" element={<Catalogue />} />
-            <Route path="products" element={<Catalogue />} />
+            <Route path="catalogue" element={<VProducts />} />
+            <Route path="products" element={<VProducts />} />
 
             <Route path="orders" element={<VOrders />} />
             <Route path="analytics" element={<VAnalytics />} />
@@ -960,21 +960,7 @@ function VOrders() {
   const audioRef = useRef(null);
 
   const playNewOrderSound = useCallback(() => {
-    try {
-      if (!audioRef.current) {
-        audioRef.current = new Audio(
-          "https://actions.google.com/sounds/v1/alarms/beep_short.ogg"
-        );
-        audioRef.current.volume = 1;
-      }
-
-      audioRef.current.currentTime = 0;
-      audioRef.current.play().catch(() => {
-        // Browser may block autoplay until user interacts with the page.
-      });
-    } catch (e) {
-      console.error("Order ringtone error:", e);
-    }
+    playCheckoutBell();
   }, []);
 
   const load = useCallback(async () => {

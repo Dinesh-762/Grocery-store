@@ -1,4 +1,4 @@
-﻿// Haversine distance in km between two lat/lng points
+// Haversine distance in km between two lat/lng points
 export function haversineKm(lat1, lng1, lat2, lng2) {
   const toRad = (v) => (v * Math.PI) / 180;
   const R = 6371;

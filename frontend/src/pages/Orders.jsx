@@ -3,7 +3,58 @@ import { Link } from "react-router-dom";
 import { api, formatINR, formatApiError } from "@/lib/api";
 import { useCart } from "@/context/CartContext";
 import { toast } from "sonner";
-import { Loader2, Package, ArrowRight, RotateCcw } from "lucide-react";
+import { Loader2, Package, ArrowRight, RotateCcw, Gift } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
+
+function LoyaltyProgress() {
+  const [loyalty, setLoyalty] = useState(null);
+
+  useEffect(() => {
+    api
+      .get("/loyalty/status")
+      .then(({ data }) => setLoyalty(data))
+      .catch(() => {});
+  }, []);
+
+  if (!loyalty) return null;
+
+  const { qualifying_order_count, required_orders, reward_available, reward_value } = loyalty;
+
+  return (
+    <div className="card-base mb-6 p-5" data-testid="loyalty-progress">
+      <div className="flex items-start gap-3">
+        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#1B4332]/10 text-[#1B4332]">
+          <Gift className="h-5 w-5" />
+        </div>
+        <div className="flex-1">
+          {reward_available ? (
+            <>
+              <div className="font-semibold text-[#1B4332]">
+                You've earned a free order (up to {formatINR(reward_value)})!
+              </div>
+              <p className="mt-1 text-sm text-[#4A4A4A]">
+                Redeem it on your next order — a new {required_orders}-order cycle starts right after.
+              </p>
+            </>
+          ) : (
+            <>
+              <div className="font-semibold">
+                {qualifying_order_count}/{required_orders} orders completed
+              </div>
+              <p className="mt-1 text-sm text-[#4A4A4A]">
+                Complete {required_orders} orders over {formatINR(reward_value)} to earn 1 free order (up to {formatINR(reward_value)}).
+              </p>
+              <Progress
+                className="mt-3"
+                value={(qualifying_order_count / required_orders) * 100}
+              />
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const STATUS_COLORS = {
   Pending: "bg-yellow-100 text-yellow-800",
@@ -56,6 +107,10 @@ export default function Orders() {
     <div className="container-app py-8" data-testid="orders-page">
       <h1 className="font-heading text-3xl font-bold sm:text-4xl">My orders</h1>
       <p className="mt-2 text-sm text-[#4A4A4A]">{orders.length} total order{orders.length !== 1 ? "s" : ""}</p>
+
+      <div className="mt-6">
+        <LoyaltyProgress />
+      </div>
 
       <div className="mt-8 space-y-4">
         {orders.map((o) => (
