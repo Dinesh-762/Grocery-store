@@ -11,6 +11,7 @@ export default function Checkout() {
   const { items, subtotal, deliveryFee, total: cartTotal, clearCart } = useCart();
   const { user } = useAuth();
   const navigate = useNavigate();
+<<<<<<< ours
   const [store, setStore] = useState({ upi_id: "ambajogai@upi", upi_name: "Ambajogai Grocery Store", whatsapp: "+918237214975", upi_qr: "/assets/upi-qr.jpeg" });
   const [payment, setPayment] = useState("UPI");
   const [submitting, setSubmitting] = useState(false);
@@ -27,6 +28,314 @@ export default function Checkout() {
 
   const detectMyLocation = () => {
     if (!navigator.geolocation) return toast.error("Geolocation not supported by your browser");
+=======
+
+  /*
+  |--------------------------------------------------------------------------
+  | Store information
+  |--------------------------------------------------------------------------
+  */
+
+  const [store, setStore] = useState({
+    upi_id: "ambajogai@upi",
+    upi_name:
+      "Ambajogai Grocery Store",
+    whatsapp: "+918237214975",
+    upi_qr: "/assets/upi-qr.jpeg",
+  });
+
+  /*
+  |--------------------------------------------------------------------------
+  | Payment
+  |--------------------------------------------------------------------------
+  */
+
+  const [payment, setPayment] =
+    useState("UPI");
+
+  const [submitting, setSubmitting] =
+    useState(false);
+
+  const [placed, setPlaced] =
+    useState(false);
+
+  /*
+  |--------------------------------------------------------------------------
+  | Coupon
+  |--------------------------------------------------------------------------
+  */
+
+  const [couponInput, setCouponInput] =
+    useState("");
+
+  const [coupon, setCoupon] =
+    useState(null);
+
+  const [couponBusy, setCouponBusy] =
+    useState(false);
+
+  /*
+  |--------------------------------------------------------------------------
+  | Delivery form
+  |--------------------------------------------------------------------------
+  */
+
+  const [form, setForm] = useState({
+    full_name:
+      user?.name || "",
+    phone:
+      user?.phone || "",
+    line1: "",
+    landmark: "",
+    area: "",
+    pincode: "",
+    notes: "",
+  });
+
+  /*
+  |--------------------------------------------------------------------------
+  | GPS
+  |--------------------------------------------------------------------------
+  */
+
+  const [location, setLocation] =
+    useState({
+      latitude: null,
+      longitude: null,
+      accuracy: null,
+    });
+
+  const [locating, setLocating] =
+    useState(false);
+
+  const [serviceabilityLoading, setServiceabilityLoading] =
+    useState(false);
+
+  const [serviceable, setServiceable] =
+    useState(null);
+
+  const [serviceabilityMessage, setServiceabilityMessage] =
+    useState("");
+
+  /*
+  |--------------------------------------------------------------------------
+  | Saved Address
+  |--------------------------------------------------------------------------
+  */
+
+  const [savedAddress, setSavedAddress] = useState(null);
+  const [savedAddressLoading, setSavedAddressLoading] = useState(false);
+  const [savedAddressBusy, setSavedAddressBusy] = useState(false);
+
+  /*
+  |--------------------------------------------------------------------------
+  | Saved Address API
+  |--------------------------------------------------------------------------
+  */
+
+  const loadSavedAddress = async () => {
+    if (!user) return;
+
+    setSavedAddressLoading(true);
+
+    try {
+      const { data } = await api.get("/auth/saved-address");
+
+      if (data?.saved && data?.address) {
+        setSavedAddress(data.address);
+
+        setForm((current) => ({
+          ...current,
+          full_name: data.address.full_name ?? current.full_name,
+          phone: data.address.phone ?? current.phone,
+          line1: data.address.line1 ?? current.line1,
+          landmark: data.address.landmark ?? current.landmark,
+          area: data.address.area ?? current.area,
+          pincode: data.address.pincode ?? current.pincode,
+        }));
+
+        if (
+          data.address.latitude !== null &&
+          data.address.latitude !== undefined &&
+          data.address.longitude !== null &&
+          data.address.longitude !== undefined
+        ) {
+          setLocation((current) => ({
+            ...current,
+            latitude: Number(data.address.latitude),
+            longitude: Number(data.address.longitude),
+          }));
+        }
+      } else {
+        setSavedAddress(null);
+      }
+    } catch (err) {
+      console.error("Failed to load saved address:", err);
+    } finally {
+      setSavedAddressLoading(false);
+    }
+  };
+
+  const saveCurrentAddress = async () => {
+    if (!user) {
+      toast.error("Please login to save your address.");
+      return;
+    }
+
+    if (
+      !form.full_name.trim() ||
+      !form.phone.trim() ||
+      !form.line1.trim() ||
+      !form.area.trim() ||
+      !form.pincode.trim()
+    ) {
+      toast.error("Please complete your delivery address first.");
+      return;
+    }
+
+    setSavedAddressBusy(true);
+
+    try {
+      const address = {
+        full_name: form.full_name.trim(),
+        phone: form.phone.trim(),
+        line1: form.line1.trim(),
+        landmark: form.landmark.trim(),
+        area: form.area.trim(),
+        city: "Ambajogai",
+        pincode: form.pincode.trim(),
+        latitude:
+          location.latitude !== null
+            ? Number(location.latitude)
+            : null,
+        longitude:
+          location.longitude !== null
+            ? Number(location.longitude)
+            : null,
+      };
+
+      const { data } = await api.put(
+        "/auth/saved-address",
+        address
+      );
+
+      setSavedAddress(data?.address ?? address);
+
+      toast.success("Address saved successfully.");
+    } catch (err) {
+      console.error("Failed to save address:", err);
+      toast.error(
+        formatApiError(
+          err,
+          "Unable to save address. Please try again."
+        )
+      );
+    } finally {
+      setSavedAddressBusy(false);
+    }
+  };
+
+  const deleteSavedAddress = async () => {
+    if (!user) return;
+
+    setSavedAddressBusy(true);
+
+    try {
+      await api.delete("/auth/saved-address");
+      setSavedAddress(null);
+      toast.success("Saved address deleted.");
+    } catch (err) {
+      console.error("Failed to delete saved address:", err);
+      toast.error(
+        formatApiError(
+          err,
+          "Unable to delete saved address."
+        )
+      );
+    } finally {
+      setSavedAddressBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (user) {
+      loadSavedAddress();
+    } else {
+      setSavedAddress(null);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
+  /*
+  |--------------------------------------------------------------------------
+  | Load store information
+  |--------------------------------------------------------------------------
+  */
+
+  useEffect(() => {
+    api
+      .get("/store/info")
+      .then(({ data }) => {
+        setStore((current) => ({
+          ...current,
+          ...data,
+        }));
+      })
+      .catch(() => {});
+  }, []);
+
+  /*
+  |--------------------------------------------------------------------------
+  | Redirect when cart is empty
+  |--------------------------------------------------------------------------
+  */
+
+  useEffect(() => {
+    if (
+      items.length === 0 &&
+      !submitting &&
+      !placed
+    ) {
+      navigate("/cart");
+    }
+  }, [
+    items.length,
+    submitting,
+    placed,
+    navigate,
+  ]);
+
+  /*
+  |--------------------------------------------------------------------------
+  | Update form
+  |--------------------------------------------------------------------------
+  */
+
+  const update = (key) => (event) => {
+    setForm((current) => ({
+      ...current,
+      [key]:
+        event.target.value,
+    }));
+  };
+
+  /*
+  |--------------------------------------------------------------------------
+  | GET CURRENT LOCATION
+  |--------------------------------------------------------------------------
+  */
+
+  const getCurrentLocation = () => {
+    if (
+      !navigator.geolocation
+    ) {
+      toast.error(
+        "Location is not supported by your browser."
+      );
+      return;
+    }
+
+>>>>>>> theirs
     setLocating(true);
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
@@ -562,3 +871,7 @@ function PayOption({ selected, onClick, title, sub, testid }) {
     </button>
   );
 }
+<<<<<<< ours
+=======
+
+>>>>>>> theirs
