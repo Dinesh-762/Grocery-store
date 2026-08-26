@@ -263,13 +263,21 @@ export default function ProductDetail() {
 
   /*
   |--------------------------------------------------------------------------
-  | Discount
+  | Product Discount
   |--------------------------------------------------------------------------
+  | Calculate the displayed discount from MRP vs selling price.
+  | Coupon discounts are handled separately at checkout.
   */
 
-  // Promotional badge is fixed at 10%. The actual discount is applied
-  // only after GROCERY10 is explicitly applied at checkout.
-  const discount = 10;
+  const discount =
+    displayMrp &&
+    Number(displayMrp) > Number(displayPrice)
+      ? Math.round(
+          ((Number(displayMrp) - Number(displayPrice)) /
+            Number(displayMrp)) *
+            100
+        )
+      : 0;
 
   /*
   |--------------------------------------------------------------------------
@@ -546,26 +554,16 @@ export default function ProductDetail() {
               {formatINR(displayPrice)}
             </div>
 
-            {displayMrp &&
-              Number(displayMrp) >
-                Number(displayPrice) && (
-                <>
-                  <div className="text-lg text-gray-400 line-through">
-                    {formatINR(
-                      displayMrp
-                    )}
-                  </div>
+            {discount > 0 && (
+              <>
+                <div className="text-lg text-gray-400 line-through">
+                  {formatINR(displayMrp)}
+                </div>
 
-                  <span className="rounded-full bg-[#E07A5F]/10 px-2.5 py-0.5 text-sm font-semibold text-[#E07A5F]">
-                    {discount}% off
-                  </span>
-                </>
-              )}
-
-            {!(displayMrp && Number(displayMrp) > Number(displayPrice)) && (
-              <span className="rounded-full bg-[#E07A5F]/10 px-2.5 py-0.5 text-sm font-semibold text-[#E07A5F]">
-                {discount}% off
-              </span>
+                <span className="rounded-full bg-[#E07A5F]/10 px-2.5 py-0.5 text-sm font-semibold text-[#E07A5F]">
+                  {discount}% off
+                </span>
+              </>
             )}
           </div>
 

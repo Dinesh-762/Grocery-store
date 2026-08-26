@@ -968,7 +968,8 @@ DELIVERY_PER_KM = 12.0
 MIN_ORDER_AMOUNT = 100.0
 PLATFORM_FEE = 10.0
 GST_RATE = 0.05
-CGST_RATE = 0.05
+CGST_RATE = 0.025
+SGST_RATE = 0.025
 FREE_DELIVERY_THRESHOLD = 499.0
 
 
@@ -1069,7 +1070,12 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         )
 
     # Distance-based delivery fee from Mandi Bazar, Ambajogai center
-    dist = payload.distance_km if payload.distance_km is not None else 0.0
+    dist = calculate_distance_km(
+        DELIVERY_CENTER_LAT,
+        DELIVERY_CENTER_LNG,
+        payload.address.latitude,
+        payload.address.longitude,
+    )
     delivery_fee = compute_delivery_fee(dist, subtotal)
 
     # Apply coupon if provided
@@ -1087,15 +1093,14 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         discount = round(subtotal * (coupon["discount_pct"] / 100.0), 2)
         coupon_applied = {"code": coupon["code"], "discount_pct": coupon["discount_pct"], "discount": discount}
 
-    taxable_amount = round(max(0, subtotal - discount), 2)
-    platform_fee = PLATFORM_FEE
-    gst = round(taxable_amount * GST_RATE, 2)
+    taxable_subtotal = round(max(0, subtotal - discount), 2)
+    platform_fee = PLATFORM_FEE if taxable_subtotal > 0 else 0.0
+    taxable_amount = round(taxable_subtotal + platform_fee + delivery_fee, 2)
     cgst = round(taxable_amount * CGST_RATE, 2)
+    sgst = round(taxable_amount * SGST_RATE, 2)
+    gst = round(cgst + sgst, 2)
 
-    total = round(
-        max(0, taxable_amount + delivery_fee + platform_fee + gst + cgst),
-        2
-    )
+    total = round(max(0, taxable_amount + gst), 2)
     status_history = [{"status": "Pending", "at": iso_now()}]
     doc = {
         "user_id": user["id"],
@@ -1110,6 +1115,7 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         "platform_fee": platform_fee,
         "gst": gst,
         "cgst": cgst,
+        "sgst": sgst,
         "discount": discount,
         "coupon": coupon_applied,
         "total": total,
@@ -2568,5 +2574,3 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     client.close()
-
-
