@@ -1,10 +1,11 @@
 import Dashboard from "@/pages/Dashboard";
 import Catalogue from "@/pages/Catalogue";
 import VendorBottomNav from "@/components/VendorBottomNav";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { NavLink, Routes, Route, Navigate } from "react-router-dom";
 import { api, formatINR, formatApiError } from "@/lib/api";
 import { toast } from "sonner";
+import { playAlert } from "@/lib/audioAlert";
 import { useAuth } from "@/context/AuthContext";
 import {
   LayoutDashboard,
@@ -199,7 +200,11 @@ export function VProducts() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+  load();
+  const interval = setInterval(load, 10000);
+  return () => clearInterval(interval);
+}, [load]);
 
   const del = async (id) => {
     if (!window.confirm("Delete this product?")) return;
@@ -445,15 +450,41 @@ function FF({ label, type = "text", value, onChange, ...rest }) {
 function VOrders() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const previousOrderIds = useRef(new Set());
+  const hasLoadedOnce = useRef(false);
 
   const load = useCallback(async () => {
-    setLoading(true);
-    const { data } = await api.get("/vendor/orders");
-    setOrders(data);
-    setLoading(false);
+    try {
+      const { data } = await api.get("/vendor/orders");
+
+      const currentOrderIds = new Set(data.map((order) => order.id));
+
+      if (hasLoadedOnce.current) {
+        const hasNewOrder = data.some(
+          (order) => !previousOrderIds.current.has(order.id)
+        );
+
+        if (hasNewOrder) {
+          playAlert();
+          toast.success("New order received!");
+        }
+      }
+
+      previousOrderIds.current = currentOrderIds;
+      hasLoadedOnce.current = true;
+      setOrders(data);
+    } catch (e) {
+      toast.error(formatApiError(e));
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+  load();
+  const interval = setInterval(load, 10000);
+  return () => clearInterval(interval);
+}, [load]);
 
   const setStatus = async (id, status) => {
     try {
@@ -856,4 +887,10 @@ function VMore() {
     </div>
   );
 }
+
+
+
+
+
+
 

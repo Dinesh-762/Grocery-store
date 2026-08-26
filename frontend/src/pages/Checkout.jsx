@@ -44,8 +44,8 @@ const DELIVERY_RATE_ABOVE_1_5_KM = 12;
 |
 */
 
-const STORE_LATITUDE = 18.7271336;
-const STORE_LONGITUDE = 76.3810922;
+const STORE_LATITUDE = 18.735994;
+const STORE_LONGITUDE = 76.3891403;
 
 /*
 |--------------------------------------------------------------------------
@@ -292,38 +292,29 @@ export default function Checkout() {
     setSavedAddressLoading(true);
 
     try {
-      const { data } = await api.get("/auth/saved-address");
+      const { data } = await api.get("/users/me/addresses");
 
-      if (data?.saved && data?.address) {
-        setSavedAddress(data.address);
+      const addresses = Array.isArray(data) ? data : [];
+      const address = addresses[addresses.length - 1] ?? null;
+
+      if (address) {
+        setSavedAddress(address);
 
         setForm((current) => ({
           ...current,
-          full_name: data.address.full_name ?? current.full_name,
-          phone: data.address.phone ?? current.phone,
-          line1: data.address.line1 ?? current.line1,
-          landmark: data.address.landmark ?? current.landmark,
-          area: data.address.area ?? current.area,
-          pincode: data.address.pincode ?? current.pincode,
+          full_name: address.full_name ?? current.full_name,
+          phone: address.phone ?? current.phone,
+          line1: address.line1 ?? current.line1,
+          landmark: address.landmark ?? current.landmark,
+          area: address.area ?? current.area,
+          pincode: address.pincode ?? current.pincode,
         }));
-
-        if (
-          data.address.latitude !== null &&
-          data.address.latitude !== undefined &&
-          data.address.longitude !== null &&
-          data.address.longitude !== undefined
-        ) {
-          setLocation((current) => ({
-            ...current,
-            latitude: Number(data.address.latitude),
-            longitude: Number(data.address.longitude),
-          }));
-        }
       } else {
         setSavedAddress(null);
       }
     } catch (err) {
       console.error("Failed to load saved address:", err);
+      setSavedAddress(null);
     } finally {
       setSavedAddressLoading(false);
     }
@@ -350,6 +341,7 @@ export default function Checkout() {
 
     try {
       const address = {
+        label: "Home",
         full_name: form.full_name.trim(),
         phone: form.phone.trim(),
         line1: form.line1.trim(),
@@ -357,22 +349,14 @@ export default function Checkout() {
         area: form.area.trim(),
         city: "Ambajogai",
         pincode: form.pincode.trim(),
-        latitude:
-          location.latitude !== null
-            ? Number(location.latitude)
-            : null,
-        longitude:
-          location.longitude !== null
-            ? Number(location.longitude)
-            : null,
       };
 
-      const { data } = await api.put(
-        "/auth/saved-address",
+      const { data } = await api.post(
+        "/users/me/addresses",
         address
       );
 
-      setSavedAddress(data?.address ?? address);
+      setSavedAddress(data ?? address);
 
       toast.success("Address saved successfully.");
     } catch (err) {
@@ -391,10 +375,17 @@ export default function Checkout() {
   const deleteSavedAddress = async () => {
     if (!user) return;
 
+    if (!savedAddress?.id) {
+      setSavedAddress(null);
+      return;
+    }
+
     setSavedAddressBusy(true);
 
     try {
-      await api.delete("/auth/saved-address");
+      await api.delete(
+        `/users/me/addresses/${savedAddress.id}`
+      );
       setSavedAddress(null);
       toast.success("Saved address deleted.");
     } catch (err) {
@@ -665,6 +656,10 @@ export default function Checkout() {
           params: {
             latitude: Number(latitude),
             longitude: Number(longitude),
+            accuracy:
+              location.accuracy !== null
+                ? Number(location.accuracy)
+                : undefined,
           },
         }
       );

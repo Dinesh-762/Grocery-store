@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 from pathlib import Path
 
+import math
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
@@ -321,6 +322,9 @@ class AddressIn(BaseModel):
     area: str
     city: str = "Ambajogai"
     pincode: str
+    latitude: Optional[float] = Field(default=None, ge=-90, le=90)
+    longitude: Optional[float] = Field(default=None, ge=-180, le=180)
+    accuracy: Optional[float] = Field(default=None, ge=0)
 
 
 class OrderItem(BaseModel):
@@ -875,6 +879,83 @@ async def delete_product(prod_id: str, _: dict = Depends(require_admin)):
 
 
 # ---------------------------------------------------------------------------
+# Delivery GPS / serviceability
+# ---------------------------------------------------------------------------
+
+DELIVERY_MAX_SERVICE_DISTANCE_KM = float(
+    os.environ.get("DELIVERY_MAX_SERVICE_DISTANCE_KM", "15")
+)
+GPS_MAX_ACCEPTED_ACCURACY_METERS = float(
+    os.environ.get("GPS_MAX_ACCEPTED_ACCURACY_METERS", "100")
+)
+
+
+def calculate_distance_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    earth_radius_km = 6371.0
+    d_lat = math.radians(lat2 - lat1)
+    d_lng = math.radians(lng2 - lng1)
+
+    a = (
+        math.sin(d_lat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(d_lng / 2) ** 2
+    )
+
+    return round(
+        earth_radius_km * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)),
+        3,
+    )
+
+
+@api.get("/delivery/serviceability")
+async def delivery_serviceability(
+    latitude: float,
+    longitude: float,
+    accuracy: Optional[float] = None,
+):
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        raise HTTPException(status_code=400, detail="Invalid GPS coordinates")
+
+    if accuracy is not None and (
+        not math.isfinite(accuracy) or accuracy < 0
+    ):
+        raise HTTPException(status_code=400, detail="Invalid GPS accuracy")
+
+    if accuracy is not None and accuracy > GPS_MAX_ACCEPTED_ACCURACY_METERS:
+        return {
+            "serviceable": False,
+            "message": (
+                f"GPS accuracy is too low ({round(accuracy)}m). "
+                "Please enable high-accuracy location and try again."
+            ),
+            "distance_km": None,
+            "accuracy_m": round(accuracy, 1),
+        }
+
+    distance_km = calculate_distance_km(
+        DELIVERY_CENTER_LAT,
+        DELIVERY_CENTER_LNG,
+        latitude,
+        longitude,
+    )
+
+    serviceable = distance_km <= DELIVERY_MAX_SERVICE_DISTANCE_KM
+
+    return {
+        "serviceable": serviceable,
+        "message": (
+            "Delivery is available at your location."
+            if serviceable
+            else "Sorry, this location is outside our Ambajogai delivery area."
+        ),
+        "distance_km": distance_km,
+        "accuracy_m": round(accuracy, 1) if accuracy is not None else None,
+        "max_distance_km": DELIVERY_MAX_SERVICE_DISTANCE_KM,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Orders
 # ---------------------------------------------------------------------------
 
@@ -882,17 +963,28 @@ DELIVERY_CENTER_LAT = float(os.environ.get("DELIVERY_CENTER_LAT", "18.735994"))
 DELIVERY_CENTER_LNG = float(os.environ.get("DELIVERY_CENTER_LNG", "76.3891403"))
 DELIVERY_NEAR_KM = 1.5
 DELIVERY_NEAR_FEE = 15.0
+DELIVERY_FIRST_KM_FEE = 15.0
 DELIVERY_PER_KM = 12.0
+MIN_ORDER_AMOUNT = 100.0
+PLATFORM_FEE = 10.0
+GST_RATE = 0.05
+CGST_RATE = 0.05
 FREE_DELIVERY_THRESHOLD = 499.0
 
 
 def compute_delivery_fee(distance_km: float, subtotal: float) -> float:
     if subtotal >= FREE_DELIVERY_THRESHOLD:
         return 0.0
+
     d = max(0.0, float(distance_km or 0))
+
     if d <= DELIVERY_NEAR_KM:
         return DELIVERY_NEAR_FEE
-    return round(DELIVERY_NEAR_FEE + (d - DELIVERY_NEAR_KM) * DELIVERY_PER_KM, 2)
+
+    return round(
+        DELIVERY_NEAR_FEE + ((d - DELIVERY_NEAR_KM) * DELIVERY_PER_KM),
+        2,
+    )
 
 
 def safe_object_id(id_str: str) -> ObjectId:
@@ -969,6 +1061,13 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
                 raise HTTPException(status_code=400, detail=f"Minimum order for {vend.get('business_name', 'this vendor')} is ₹{int(min_amt) if float(min_amt).is_integer() else round(min_amt, 2)}. Current subtotal for their items is ₹{sub:.2f}.")
 
     subtotal = round(sum(i["price"] * i["quantity"] for i in verified_items), 2)
+
+    if subtotal < MIN_ORDER_AMOUNT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Minimum order amount is ₹{int(MIN_ORDER_AMOUNT)}. Current subtotal is ₹{subtotal:.2f}."
+        )
+
     # Distance-based delivery fee from Mandi Bazar, Ambajogai center
     dist = payload.distance_km if payload.distance_km is not None else 0.0
     delivery_fee = compute_delivery_fee(dist, subtotal)
@@ -988,7 +1087,15 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         discount = round(subtotal * (coupon["discount_pct"] / 100.0), 2)
         coupon_applied = {"code": coupon["code"], "discount_pct": coupon["discount_pct"], "discount": discount}
 
-    total = round(max(0, subtotal + delivery_fee - discount), 2)
+    taxable_amount = round(max(0, subtotal - discount), 2)
+    platform_fee = PLATFORM_FEE
+    gst = round(taxable_amount * GST_RATE, 2)
+    cgst = round(taxable_amount * CGST_RATE, 2)
+
+    total = round(
+        max(0, taxable_amount + delivery_fee + platform_fee + gst + cgst),
+        2
+    )
     status_history = [{"status": "Pending", "at": iso_now()}]
     doc = {
         "user_id": user["id"],
@@ -1000,6 +1107,9 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         "notes": payload.notes or "",
         "subtotal": subtotal,
         "delivery_fee": delivery_fee,
+        "platform_fee": platform_fee,
+        "gst": gst,
+        "cgst": cgst,
         "discount": discount,
         "coupon": coupon_applied,
         "total": total,
@@ -2458,3 +2568,5 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     client.close()
+
+
