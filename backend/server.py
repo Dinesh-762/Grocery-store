@@ -885,10 +885,6 @@ async def delete_product(prod_id: str, _: dict = Depends(require_admin)):
 DELIVERY_MAX_SERVICE_DISTANCE_KM = float(
     os.environ.get("DELIVERY_MAX_SERVICE_DISTANCE_KM", "15")
 )
-GPS_MAX_ACCEPTED_ACCURACY_METERS = float(
-    os.environ.get("GPS_MAX_ACCEPTED_ACCURACY_METERS", "100")
-)
-
 
 def calculate_distance_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     earth_radius_km = 6371.0
@@ -921,17 +917,6 @@ async def delivery_serviceability(
         not math.isfinite(accuracy) or accuracy < 0
     ):
         raise HTTPException(status_code=400, detail="Invalid GPS accuracy")
-
-    if accuracy is not None and accuracy > GPS_MAX_ACCEPTED_ACCURACY_METERS:
-        return {
-            "serviceable": False,
-            "message": (
-                f"GPS accuracy is too low ({round(accuracy)}m). "
-                "Please enable high-accuracy location and try again."
-            ),
-            "distance_km": None,
-            "accuracy_m": round(accuracy, 1),
-        }
 
     distance_km = calculate_distance_km(
         DELIVERY_CENTER_LAT,
