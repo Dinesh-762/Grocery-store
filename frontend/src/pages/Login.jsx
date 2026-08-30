@@ -19,9 +19,31 @@ export default function Login() {
     setLoading(false);
     if (res.ok) {
       toast.success(`Welcome back, ${res.user.name.split(" ")[0]}!`);
-      const roleHome = res.user.role === "admin" ? "/admin" : res.user.role === "vendor" ? "/vendor" : res.user.role === "delivery" ? "/delivery" : "/";
-      const from = location.state?.from || roleHome;
-      navigate(from, { replace: true });
+      const roleHome =
+        res.user.role === "admin"
+          ? "/admin"
+          : res.user.role === "vendor"
+          ? "/vendor"
+          : res.user.role === "delivery"
+          ? "/delivery"
+          : "/";
+      let dest = location.state?.from || roleHome;
+
+      if (dest.startsWith("/admin") && res.user.role !== "admin") {
+        dest = roleHome;
+      } else if (dest.startsWith("/vendor") && res.user.role !== "vendor") {
+        dest = roleHome;
+      } else if (dest.startsWith("/delivery") && res.user.role !== "delivery") {
+        dest = roleHome;
+      }
+
+      const checkoutSelection = location.state?.selectedKeys;
+      navigate(dest, {
+        replace: true,
+        ...(checkoutSelection?.length
+          ? { state: { selectedKeys: checkoutSelection } }
+          : {}),
+      });
     } else {
       toast.error(res.error);
     }

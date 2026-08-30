@@ -29,15 +29,15 @@ export default function DeliveryPanel() {
       <h1 className="font-heading text-3xl font-bold sm:text-4xl">Delivery panel</h1>
       <p className="mt-2 text-sm text-[#4A4A4A]">Assigned orders, status updates, and earnings</p>
 
-      <div className="mt-8 grid gap-8 lg:grid-cols-[220px_1fr]">
-        <aside className="space-y-1">
+      <div className="mt-6 flex flex-col gap-6 sm:mt-8 lg:grid lg:grid-cols-[220px_1fr] lg:items-start lg:gap-8">
+        <aside className="panel-nav-mobile sticky-sidebar no-scrollbar flex gap-2 overflow-x-auto pb-1 lg:block lg:space-y-1 lg:overflow-y-auto lg:overflow-x-visible lg:pb-0">
           {links.map((l) => (
             <NavLink
               key={l.to}
               to={l.to}
               end={l.end}
               className={({ isActive }) =>
-                `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
+                `flex shrink-0 items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors lg:gap-3 ${
                   isActive ? "bg-[#1B4332] text-white" : "text-[#4A4A4A] hover:bg-gray-50"
                 }`
               }
@@ -49,7 +49,7 @@ export default function DeliveryPanel() {
           ))}
         </aside>
 
-        <div>
+        <div className="min-w-0">
           <Routes>
             <Route index element={<Dashboard />} />
             <Route path="orders" element={<AssignedOrders />} />
@@ -207,35 +207,58 @@ function AssignedOrders() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [alertMuted, setAlertMuted] = useState(() => localStorage.getItem("delivery_new_order_muted") === "1");
-  const lastSeenIdRef = useRef(localStorage.getItem("delivery_last_seen_order_id") || "");
+  const lastSeenAssignedAtRef = useRef(
+    localStorage.getItem("delivery_last_seen_assigned_at") || ""
+  );
 
   const load = useCallback(async () => {
-    setLoading(true);
-    const { data } = await api.get("/delivery/orders");
-    setOrders(data);
-    setLoading(false);
+    try {
+      const { data } = await api.get("/delivery/orders");
+      setOrders(Array.isArray(data) ? data : []);
+    } catch (e) {
+      toast.error(formatApiError(e, "Unable to load assigned orders."));
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
-  // Poll for newly assigned orders every 15s and play alert
+  // Poll for newly assigned orders and refresh the list every 15s
   useEffect(() => {
     let cancelled = false;
+    let initialized = Boolean(lastSeenAssignedAtRef.current);
+
     const check = async () => {
       try {
         const { data } = await api.get("/delivery/new-count");
-        if (cancelled || !data.latest_id) return;
-        if (lastSeenIdRef.current && data.latest_id !== lastSeenIdRef.current) {
-          if (!alertMuted) {
+        if (cancelled) return;
+
+        if (data.latest_assigned_at) {
+          const isNewAssignment =
+            initialized &&
+            lastSeenAssignedAtRef.current &&
+            data.latest_assigned_at !== lastSeenAssignedAtRef.current;
+
+          if (isNewAssignment && !alertMuted) {
             playAlert();
             toast.success("New delivery assigned!", { duration: 6000 });
           }
-          load();
+
+          lastSeenAssignedAtRef.current = data.latest_assigned_at;
+          localStorage.setItem(
+            "delivery_last_seen_assigned_at",
+            data.latest_assigned_at
+          );
+          initialized = true;
         }
-        lastSeenIdRef.current = data.latest_id;
-        localStorage.setItem("delivery_last_seen_order_id", data.latest_id);
       } catch { /* silent */ }
+
+      if (!cancelled) {
+        load();
+      }
     };
+
     check();
     const t = setInterval(check, 15000);
     return () => { cancelled = true; clearInterval(t); };

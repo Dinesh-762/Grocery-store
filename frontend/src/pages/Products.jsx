@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import ProductCard from "@/components/ProductCard";
-import { Search, SlidersHorizontal, Loader2 } from "lucide-react";
+import { Search, SlidersHorizontal, Loader2, ChevronDown } from "lucide-react";
 
 export default function Products() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -14,6 +14,11 @@ export default function Products() {
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchInput, setSearchInput] = useState(q);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  useEffect(() => {
+    setSearchInput(q);
+  }, [q]);
 
   useEffect(() => {
     api.get("/categories").then(({ data }) => setCategories(data)).catch(() => {});
@@ -55,9 +60,9 @@ export default function Products() {
   const activeCat = Array.isArray(categories) ? categories.find((c) => c.slug === category) : null;
 
   return (
-    <div className="container-app py-8" data-testid="products-page">
-      <div className="mb-6">
-        <h1 className="font-heading text-3xl font-bold sm:text-4xl">
+    <div className="container-app py-6 sm:py-8" data-testid="products-page">
+      <div className="mb-4 sm:mb-6">
+        <h1 className="font-heading text-2xl font-bold sm:text-3xl lg:text-4xl">
           {activeCat ? activeCat.name : q ? `Results for "${q}"` : "All products"}
         </h1>
         <p className="mt-2 text-sm text-[#4A4A4A]">
@@ -65,9 +70,24 @@ export default function Products() {
         </p>
       </div>
 
-      <div className="grid gap-8 lg:grid-cols-[220px_1fr]">
-        {/* Sidebar filters */}
-        <aside className="space-y-6" data-testid="filters-sidebar">
+      <button
+        type="button"
+        onClick={() => setFiltersOpen((v) => !v)}
+        className="mb-4 inline-flex w-full items-center justify-between rounded-xl border border-[#E5E5E5] bg-white px-4 py-3 text-sm font-semibold text-[#1B4332] lg:hidden"
+        data-testid="mobile-filters-toggle"
+      >
+        <span className="inline-flex items-center gap-2">
+          <SlidersHorizontal className="h-4 w-4" />
+          Filters & sort
+        </span>
+        <ChevronDown className={`h-4 w-4 transition-transform ${filtersOpen ? "rotate-180" : ""}`} />
+      </button>
+
+      <div className="grid gap-6 lg:grid-cols-[220px_1fr] lg:items-start lg:gap-8">
+        <aside
+          className={`sticky-sidebar space-y-6 ${filtersOpen ? "block" : "hidden"} lg:block`}
+          data-testid="filters-sidebar"
+        >
           <form onSubmit={submitSearch}>
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
@@ -86,10 +106,10 @@ export default function Products() {
               <SlidersHorizontal className="h-4 w-4" />
               Categories
             </div>
-            <div className="space-y-1">
+            <div className="no-scrollbar flex gap-2 overflow-x-auto pb-1 lg:flex-col lg:space-y-1 lg:overflow-visible lg:pb-0">
               <button
                 onClick={() => updateParam("category", "")}
-                className={`w-full rounded-lg px-3 py-2 text-left text-sm transition-colors ${
+                className={`shrink-0 rounded-lg px-3 py-2 text-left text-sm transition-colors lg:w-full ${
                   !category ? "bg-[#1B4332] text-white" : "text-[#4A4A4A] hover:bg-gray-50"
                 }`}
                 data-testid="filter-cat-all"
@@ -99,8 +119,11 @@ export default function Products() {
               {(Array.isArray(categories) ? categories : []).map((c) => (
                 <button
                   key={c.slug}
-                  onClick={() => updateParam("category", c.slug)}
-                  className={`w-full rounded-lg px-3 py-2 text-left text-sm transition-colors ${
+                  onClick={() => {
+                    updateParam("category", c.slug);
+                    setFiltersOpen(false);
+                  }}
+                  className={`shrink-0 rounded-lg px-3 py-2 text-left text-sm transition-colors lg:w-full ${
                     category === c.slug ? "bg-[#1B4332] text-white" : "text-[#4A4A4A] hover:bg-gray-50"
                   }`}
                   data-testid={`filter-cat-${c.slug}`}
@@ -127,8 +150,8 @@ export default function Products() {
           </div>
         </aside>
 
-        {/* Grid */}
-        <div>
+        {/* Grid — scrolls while filters stay fixed on desktop */}
+        <div className="min-w-0">
           {loading ? (
             <div className="flex min-h-[300px] items-center justify-center">
               <Loader2 className="h-8 w-8 animate-spin text-[#1B4332]" />

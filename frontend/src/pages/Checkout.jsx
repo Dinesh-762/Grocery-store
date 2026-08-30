@@ -1,9 +1,11 @@
-import { useState, useEffect, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { useNavigate, useLocation, Link } from "react-router-dom";
 import { toast } from "sonner";
-import { useCart } from "@/context/CartContext";
+import { useCart, lineKey } from "@/context/CartContext";
 import { useAuth } from "@/context/AuthContext";
 import { api, formatINR, formatApiError } from "@/lib/api";
+import CartFlowHeader, { SummaryCard, FlowSection } from "@/components/CartFlowHeader";
+import { computeDeliveryFee, setPricingSettings, getPricingSettings, FREE_DELIVERY_THRESHOLD, DELIVERY_NEAR_KM, DELIVERY_NEAR_FEE, DELIVERY_PER_KM } from "@/lib/deliveryFee";
 import {
   CreditCard,
   Truck,
@@ -13,6 +15,7 @@ import {
   Tag,
   X,
   Navigation,
+  ShoppingBag,
 } from "lucide-react";
 
 /*
@@ -30,9 +33,6 @@ const PLATFORM_FEE = 10;
 const CGST_RATE = 0.025;
 const SGST_RATE = 0.025;
 const GST_RATE = 0.05;
-
-const DELIVERY_RATE_PER_KM = 12;
-const DELIVERY_RATE_ABOVE_1_5_KM = 12;
 
 /*
 |--------------------------------------------------------------------------
@@ -129,56 +129,29 @@ function calculateDistanceKm(
 |--------------------------------------------------------------------------
 */
 
-function calculateDeliveryFee(
-  distanceKm,
-  subtotal = 0
-) {
-  if (
-    !Number.isFinite(distanceKm) ||
-    distanceKm <= 0
-  ) {
-    return 0;
-  }
-
-  // Orders >= 499 get free delivery.
-  if (Number(subtotal) >= 499) {
-    return 0;
-  }
-
-  /*
-   * Delivery pricing:
-   *
-   * 1 km   = 12
-   * 1.5 km = 15
-   * 2 km   = 24
-   * 3 km   = 36
-   * 4 km   = 48
-   *
-   * At 1.5 km, minimum charge is 15.
-   * Above 1.5 km, charge = distance x 12.
-   */
-
-  if (distanceKm <= 1) {
-    return Math.round(
-      distanceKm * DELIVERY_RATE_PER_KM * 100
-    ) / 100;
-  }
-
-  if (distanceKm <= 1.5) {
-    return 15;
-  }
-
-  return Math.round(
-    distanceKm * DELIVERY_RATE_PER_KM * 100
-  ) / 100;
-}
-
 export default function Checkout() {
   const {
-    items,
-    subtotal,
+    items: cartItems,
     clearCart,
+    removeItems,
   } = useCart();
+
+  const routerLocation = useLocation();
+  const selectedKeys = routerLocation.state?.selectedKeys;
+
+  const items = useMemo(() => {
+    if (!selectedKeys?.length) return cartItems;
+    const allowed = new Set(selectedKeys);
+    return cartItems.filter((it) => allowed.has(lineKey(it)));
+  }, [cartItems, selectedKeys]);
+
+  const subtotal = useMemo(
+    () =>
+      Math.round(
+        items.reduce((sum, it) => sum + it.price * it.quantity, 0) * 100
+      ) / 100,
+    [items]
+  );
 
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -196,6 +169,24 @@ export default function Checkout() {
     whatsapp: "+918237214975",
     upi_qr: "/assets/upi-qr.jpeg",
   });
+
+  const [pricingSettings, setPricingSettingsState] = useState(getPricingSettings());
+
+  useEffect(() => {
+    api.get("/pricing/settings")
+      .then(({ data }) => {
+        setPricingSettings(data);
+        setPricingSettingsState(data);
+      })
+      .catch(() => {});
+  }, []);
+
+  const freeDeliveryThreshold = Number(
+    pricingSettings?.free_delivery_threshold ?? FREE_DELIVERY_THRESHOLD
+  );
+  const deliveryNearKm = Number(pricingSettings?.delivery_near_km ?? DELIVERY_NEAR_KM);
+  const deliveryNearFee = Number(pricingSettings?.delivery_near_fee ?? DELIVERY_NEAR_FEE);
+  const deliveryPerKm = Number(pricingSettings?.delivery_per_km ?? DELIVERY_PER_KM);
 
   /*
   |--------------------------------------------------------------------------
@@ -247,7 +238,7 @@ export default function Checkout() {
 
   /*
   |--------------------------------------------------------------------------
-  | GPS
+  | Delivery address coordinates (from geocoding, not user GPS)
   |--------------------------------------------------------------------------
   */
 
@@ -260,6 +251,11 @@ export default function Checkout() {
 
   const [locating, setLocating] =
     useState(false);
+
+  const [geocoding, setGeocoding] =
+    useState(false);
+
+  const geocodeRequestId = useRef(0);
 
   const [serviceabilityLoading, setServiceabilityLoading] =
     useState(false);
@@ -309,6 +305,19 @@ export default function Checkout() {
           area: address.area ?? current.area,
           pincode: address.pincode ?? current.pincode,
         }));
+
+        if (
+          address.latitude != null &&
+          address.longitude != null &&
+          Number.isFinite(Number(address.latitude)) &&
+          Number.isFinite(Number(address.longitude))
+        ) {
+          setLocation({
+            latitude: Number(address.latitude),
+            longitude: Number(address.longitude),
+            accuracy: null,
+          });
+        }
       } else {
         setSavedAddress(null);
       }
@@ -349,6 +358,13 @@ export default function Checkout() {
         area: form.area.trim(),
         city: "Ambajogai",
         pincode: form.pincode.trim(),
+        ...(location.latitude !== null &&
+        location.longitude !== null
+          ? {
+              latitude: Number(location.latitude),
+              longitude: Number(location.longitude),
+            }
+          : {}),
       };
 
       const { data } = await api.post(
@@ -465,7 +481,109 @@ export default function Checkout() {
 
   /*
   |--------------------------------------------------------------------------
-  | GET CURRENT LOCATION
+  | Geocode delivery address when form fields change
+  |--------------------------------------------------------------------------
+  */
+
+  useEffect(() => {
+    const line1 = form.line1.trim();
+    const area = form.area.trim();
+    const pincode = form.pincode.trim();
+
+    if (
+      !line1 ||
+      !area ||
+      !/^\d{6}$/.test(pincode)
+    ) {
+      setLocation({
+        latitude: null,
+        longitude: null,
+        accuracy: null,
+      });
+      setServiceable(null);
+      setServiceabilityMessage("");
+      return;
+    }
+
+    const requestId =
+      ++geocodeRequestId.current;
+
+    const timer = setTimeout(async () => {
+      setGeocoding(true);
+      setServiceable(null);
+      setServiceabilityMessage("");
+
+      try {
+        const { data } = await api.get(
+          "/delivery/geocode",
+          {
+            params: {
+              line1,
+              area,
+              pincode,
+              city: "Ambajogai",
+            },
+          }
+        );
+
+        if (
+          requestId !==
+          geocodeRequestId.current
+        ) {
+          return;
+        }
+
+        setLocation({
+          latitude: Number(
+            data.latitude
+          ),
+          longitude: Number(
+            data.longitude
+          ),
+          accuracy: null,
+        });
+      } catch (error) {
+        if (
+          requestId !==
+          geocodeRequestId.current
+        ) {
+          return;
+        }
+
+        setLocation({
+          latitude: null,
+          longitude: null,
+          accuracy: null,
+        });
+        setServiceable(false);
+        setServiceabilityMessage(
+          formatApiError(
+            error,
+            "Could not locate this address. Please check the details."
+          )
+        );
+      } finally {
+        if (
+          requestId ===
+          geocodeRequestId.current
+        ) {
+          setGeocoding(false);
+        }
+      }
+    }, 800);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [
+    form.line1,
+    form.area,
+    form.pincode,
+  ]);
+
+  /*
+  |--------------------------------------------------------------------------
+  | GET CURRENT LOCATION (optional — fills address fields)
   |--------------------------------------------------------------------------
   */
 
@@ -545,8 +663,38 @@ export default function Checkout() {
           accuracy,
         });
 
+        api
+          .get(
+            "/delivery/reverse-geocode",
+            {
+              params: {
+                latitude,
+                longitude,
+              },
+            }
+          )
+          .then(({ data }) => {
+            setForm((current) => ({
+              ...current,
+              line1:
+                data.line1 ||
+                current.line1,
+              area:
+                data.area ||
+                current.area,
+              pincode:
+                data.pincode ||
+                current.pincode,
+            }));
+          })
+          .catch(() => {
+            /*
+             * Coordinates still set; user can edit address manually.
+             */
+          });
+
         toast.success(
-          "Location captured successfully!"
+          "Location captured! Address fields updated."
         );
 
         setLocating(false);
@@ -744,7 +892,7 @@ export default function Checkout() {
         return 0;
       }
 
-      return calculateDeliveryFee(
+      return computeDeliveryFee(
         estimatedDistance,
         Number(
           subtotal || 0
@@ -767,7 +915,7 @@ export default function Checkout() {
 
   const platformFee =
     discountedSubtotal > 0
-      ? PLATFORM_FEE
+      ? Number(pricingSettings?.platform_fee ?? PLATFORM_FEE)
       : 0;
 
   /*
@@ -789,10 +937,13 @@ export default function Checkout() {
   |--------------------------------------------------------------------------
   */
 
+  const cgstRate = Number(pricingSettings?.gst_rate ?? GST_RATE) / 2;
+  const sgstRate = Number(pricingSettings?.gst_rate ?? GST_RATE) / 2;
+
   const cgst =
     Math.round(
       taxableAmount *
-        CGST_RATE *
+        cgstRate *
         100
     ) / 100;
 
@@ -805,7 +956,7 @@ export default function Checkout() {
   const sgst =
     Math.round(
       taxableAmount *
-        SGST_RATE *
+        sgstRate *
         100
     ) / 100;
 
@@ -910,7 +1061,11 @@ export default function Checkout() {
       location.latitude === null ||
       location.longitude === null
     ) {
-      return "Please allow location access so delivery charges can be calculated.";
+      if (geocoding) {
+        return "Please wait while we verify your delivery address.";
+      }
+
+      return "Please enter a complete delivery address (address line, area, and pincode).";
     }
 
     if (serviceable === false) {
@@ -921,7 +1076,7 @@ export default function Checkout() {
     }
 
     if (serviceable !== true) {
-      return "Please verify that your delivery location is within Ambajogai before placing the order.";
+      return "Please wait while we verify that your delivery address is within Ambajogai.";
     }
 
     if (
@@ -990,7 +1145,7 @@ export default function Checkout() {
               item.variant_label ||
               null,
 
-            note: null,
+            note: item.note || null,
 
             vendor_id:
               item.vendor_id ||
@@ -1122,7 +1277,11 @@ export default function Checkout() {
        * Clear cart after successful order.
        */
 
-      clearCart();
+      if (selectedKeys?.length) {
+        removeItems(selectedKeys);
+      } else {
+        clearCart();
+      }
 
       toast.success(
         "Order placed successfully!"
@@ -1408,15 +1567,16 @@ ${
       className="container-app py-8"
       data-testid="checkout-page"
     >
-      <h1 className="font-heading text-3xl font-bold sm:text-4xl">
-        Checkout
-      </h1>
+      <CartFlowHeader active="checkout" backTo="/cart" backLabel="Back to cart" />
 
-      <p className="mt-2 text-sm text-[#4A4A4A]">
-        Review your delivery details and payment
-      </p>
+      <div className="mb-6">
+        <h1 className="font-heading text-2xl font-bold text-[#1B4332] sm:text-3xl">Complete your order</h1>
+        <p className="mt-1.5 text-sm text-[#4A4A4A]">
+          Enter delivery details, apply a coupon if you have one, and choose payment.
+        </p>
+      </div>
 
-      <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_380px]">
+      <div className="grid gap-6 lg:grid-cols-[1fr_400px] lg:gap-8">
 
         {/* LEFT */}
 
@@ -1424,15 +1584,7 @@ ${
 
           {/* DELIVERY ADDRESS */}
 
-          <section className="card-base p-6">
-            <div className="mb-4 flex items-center gap-2">
-              <MapPin className="h-5 w-5 text-[#1B4332]" />
-
-              <h2 className="font-heading text-lg font-semibold">
-                Delivery address
-              </h2>
-            </div>
-
+          <FlowSection step={1} title="Delivery address" icon={MapPin}>
             <div className="grid gap-4 sm:grid-cols-2">
 
               <Field
@@ -1602,19 +1754,27 @@ ${
                 <div className="flex-1">
 
                   <div className="font-semibold text-[#1B4332]">
-                    Delivery location
+                    Quick fill (optional)
                   </div>
 
                   <p className="mt-1 text-xs text-[#4A4A4A]">
-                    Allow location access so we can calculate your exact delivery charge.
+                    Use your current location to auto-fill the address above, or type
+                    any delivery address in Ambajogai (home, work, or a friend&apos;s place).
                   </p>
 
-                  {location.latitude !==
-                    null &&
+                  {geocoding && (
+                    <div className="mt-2 text-xs font-medium text-[#1B4332]">
+                      Looking up delivery address...
+                    </div>
+                  )}
+
+                  {!geocoding &&
+                    location.latitude !==
+                      null &&
                     location.longitude !==
                       null && (
                       <div className="mt-2 text-xs font-medium text-[#1B4332]">
-                        Location captured ✓
+                        Delivery address located ✓
                       </div>
                     )}
 
@@ -1670,20 +1830,11 @@ ${
 
               </div>
             </div>
-          </section>
+          </FlowSection>
 
           {/* COUPON */}
 
-          <section className="card-base p-6">
-
-            <div className="mb-4 flex items-center gap-2">
-              <Tag className="h-5 w-5 text-[#1B4332]" />
-
-              <h2 className="font-heading text-lg font-semibold">
-                Coupon
-              </h2>
-            </div>
-
+          <FlowSection step={2} title="Coupon code" icon={Tag}>
             {!coupon ? (
               <div className="flex gap-2">
 
@@ -1751,18 +1902,60 @@ ${
 
               </div>
             )}
-          </section>
+          </FlowSection>
 
           {/* PAYMENT */}
 
-          <section className="card-base p-6">
+          <FlowSection step={3} title="Payment" icon={CreditCard}>
+            <div
+              className="mb-5 overflow-hidden rounded-xl border border-[#E5E5E5] bg-gradient-to-br from-[#FAFAFA] to-white"
+              data-testid="checkout-cart-short"
+            >
+              <div className="flex items-center justify-between gap-2 border-b border-[#E5E5E5]/80 px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <ShoppingBag className="h-4 w-4 text-[#1B4332]" />
+                  <h3 className="text-sm font-semibold text-[#1B4332]">Your cart</h3>
+                  <span className="rounded-full bg-[#1B4332]/10 px-2 py-0.5 text-[10px] font-bold text-[#1B4332]">
+                    {items.reduce((n, it) => n + it.quantity, 0)} items
+                  </span>
+                </div>
+                <Link
+                  to="/cart"
+                  className="text-xs font-semibold text-[#E07A5F] hover:underline"
+                >
+                  Edit cart
+                </Link>
+              </div>
 
-            <div className="mb-4 flex items-center gap-2">
-              <CreditCard className="h-5 w-5 text-[#1B4332]" />
+              <ul className="max-h-44 space-y-2 overflow-auto p-3 sm:p-4">
+                {items.map((item) => (
+                  <li
+                    key={`pay-${item.product_id}-${item.variant_label || ""}-${item.note || ""}`}
+                    className="flex items-center gap-3 rounded-lg bg-white p-2 ring-1 ring-black/5"
+                  >
+                    <img
+                      src={item.image}
+                      alt=""
+                      className="h-11 w-11 shrink-0 rounded-lg object-cover"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-[#1B4332]">{item.name}</p>
+                      <p className="text-xs text-[#4A4A4A]">
+                        {item.variant_label ? `${item.variant_label} · ` : ""}
+                        Qty {item.quantity} × {formatINR(Number(item.price || 0))}
+                      </p>
+                    </div>
+                    <span className="shrink-0 text-sm font-bold text-[#1B4332]">
+                      {formatINR(Number(item.price || 0) * Number(item.quantity || 0))}
+                    </span>
+                  </li>
+                ))}
+              </ul>
 
-              <h2 className="font-heading text-lg font-semibold">
-                Payment
-              </h2>
+              <div className="flex items-center justify-between border-t border-dashed border-[#E5E5E5] bg-[#1B4332]/5 px-4 py-3 text-sm">
+                <span className="font-medium text-[#4A4A4A]">Cart subtotal</span>
+                <span className="font-heading text-lg font-bold text-[#1B4332]">{formatINR(subtotal)}</span>
+              </div>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
@@ -1849,86 +2042,40 @@ ${
               </div>
             )}
 
-          </section>
+          </FlowSection>
         </div>
 
         {/* RIGHT */}
 
-        <aside
-          className="card-base sticky top-24 h-fit p-6"
-          data-testid="checkout-summary"
-        >
+        <SummaryCard title="Order summary" icon={ShoppingBag} testId="checkout-summary">
+          <div className="max-h-56 space-y-2.5 overflow-auto pr-1 -mt-2">
 
-          <h2 className="font-heading text-lg font-semibold">
-            Order summary
-          </h2>
-
-          <div className="mt-4 max-h-64 space-y-3 overflow-auto pr-1">
-
-            {items.map(
-              (item) => (
+            {items.map((item) => (
                 <div
                   key={`${item.product_id}-${item.variant_label || ""}`}
-                  className="flex gap-3"
+                  className="flex items-center gap-3 rounded-xl bg-[#FAFAFA] p-2.5 ring-1 ring-black/5"
                 >
-
                   <img
-                    src={
-                      item.image
-                    }
+                    src={item.image}
                     alt=""
-                    className="h-12 w-12 rounded-lg object-cover"
+                    className="h-11 w-11 shrink-0 rounded-lg object-cover"
                   />
-
-                  <div className="flex-1 text-sm">
-
-                    <div className="font-medium">
-                      {
-                        item.name
-                      }
-                    </div>
-
+                  <div className="min-w-0 flex-1 text-sm">
+                    <div className="truncate font-medium text-[#1B4332]">{item.name}</div>
                     {item.variant_label && (
-                      <div className="mt-0.5 text-xs font-bold text-[#1B4332]">
-                        Weight:{" "}
-                        {
-                          item.variant_label
-                        }
+                      <div className="text-[10px] font-bold uppercase tracking-wide text-[#8BA888]">
+                        {item.variant_label}
                       </div>
                     )}
-
-                    <div className="mt-0.5 text-xs text-[#4A4A4A]">
-                      Qty{" "}
-                      {
-                        item.quantity
-                      }{" "}
-                      ×{" "}
-                      {formatINR(
-                        Number(
-                          item.price ||
-                            0
-                        )
-                      )}
+                    <div className="text-xs text-[#4A4A4A]">
+                      Qty {item.quantity} × {formatINR(Number(item.price || 0))}
                     </div>
-
                   </div>
-
-                  <div className="text-sm font-semibold">
-                    {formatINR(
-                      Number(
-                        item.price ||
-                          0
-                      ) *
-                        Number(
-                          item.quantity ||
-                            0
-                        )
-                    )}
+                  <div className="shrink-0 text-sm font-bold text-[#1B4332]">
+                    {formatINR(Number(item.price || 0) * Number(item.quantity || 0))}
                   </div>
-
                 </div>
-              )
-            )}
+              ))}
 
           </div>
 
@@ -1978,12 +2125,12 @@ ${
 
                 {Number(
                   discountedSubtotal
-                ) >= 499
+                ) >= freeDeliveryThreshold
                   ? "FREE delivery"
                   : estimatedDistance <=
-                    1.5
-                  ? `₹${DELIVERY_RATE_PER_KM}/km delivery`
-                  : `₹${DELIVERY_RATE_ABOVE_1_5_KM}/km delivery`}
+                    deliveryNearKm
+                  ? `₹${deliveryNearFee} up to ${deliveryNearKm} km`
+                  : `₹${deliveryNearFee} + ₹${deliveryPerKm}/km beyond ${deliveryNearKm} km`}
 
                 {" · "}
 
@@ -2052,7 +2199,7 @@ ${
             >
               <strong>{serviceabilityMessage || SERVICEABILITY_MESSAGE}</strong>
               <div className="mt-1 text-xs text-red-600">
-                Please use a delivery location within Ambajogai.
+                Please enter a delivery address within Ambajogai (you can order for home, work, or someone else).
               </div>
             </div>
           )}
@@ -2097,7 +2244,7 @@ ${
             }
             disabled={
               submitting ||
-              locating ||
+              geocoding ||
               serviceabilityLoading ||
               serviceable !== true ||
               location.latitude ===
@@ -2119,14 +2266,14 @@ ${
 
             {submitting
               ? "Placing order..."
-              : locating
-              ? "Detecting location..."
+              : geocoding
+              ? "Locating address..."
               : serviceabilityLoading
               ? "Verifying delivery area..."
               : serviceable === false
               ? "Outside delivery area"
               : serviceable !== true
-              ? "Verify delivery location"
+              ? "Enter delivery address"
               : Number(
                   subtotal || 0
                 ) <
@@ -2140,7 +2287,7 @@ ${
             We&apos;ll send order confirmation via WhatsApp.
           </p>
 
-        </aside>
+        </SummaryCard>
       </div>
     </div>
   );

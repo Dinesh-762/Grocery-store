@@ -1,11 +1,12 @@
-import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { api, formatApiError } from "@/lib/api";
 import { Store, Loader2, CheckCircle2 } from "lucide-react";
 
 export default function BecomeVendor() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [f, setF] = useState({
@@ -17,10 +18,23 @@ export default function BecomeVendor() {
     business_description: "",
     business_address: "",
     business_pincode: "",
+    business_category: "",
+    gst_number: "",
+    pan_number: "",
+    referral_code: searchParams.get("ref") || "",
+    account_holder_name: "",
+    bank_name: "",
+    account_number: "",
+    ifsc_code: "",
     aadhar_url: "",
     gst_url: "",
     shop_license_url: "",
   });
+
+  useEffect(() => {
+    const ref = searchParams.get("ref");
+    if (ref) setF((prev) => ({ ...prev, referral_code: ref }));
+  }, [searchParams]);
 
   const up = (k) => (e) => setF({ ...f, [k]: e.target.value });
 
@@ -39,6 +53,16 @@ export default function BecomeVendor() {
         business_description: f.business_description.trim(),
         business_address: f.business_address.trim(),
         business_pincode: f.business_pincode.trim(),
+        business_category: f.business_category.trim(),
+        gst_number: f.gst_number.trim(),
+        pan_number: f.pan_number.trim(),
+        referral_code: f.referral_code.trim() || undefined,
+        bank_details: f.account_number ? {
+          account_holder_name: f.account_holder_name.trim(),
+          bank_name: f.bank_name.trim(),
+          account_number: f.account_number.trim(),
+          ifsc_code: f.ifsc_code.trim(),
+        } : undefined,
         docs: {
           aadhar_url: f.aadhar_url.trim(),
           gst_url: f.gst_url.trim(),
@@ -99,7 +123,11 @@ export default function BecomeVendor() {
           <FormSection title="Business details">
             <Grid>
               <F label="Business name" value={f.business_name} onChange={up("business_name")} required testid="v-biz-name" />
+              <F label="Business category" value={f.business_category} onChange={up("business_category")} placeholder="Vegetables, Dairy, Spices..." testid="v-biz-cat" />
               <F label="Pincode" value={f.business_pincode} onChange={up("business_pincode")} required placeholder="431517" testid="v-biz-pincode" />
+              <F label="GST number (optional)" value={f.gst_number} onChange={up("gst_number")} testid="v-gst-num" />
+              <F label="PAN number (optional)" value={f.pan_number} onChange={up("pan_number")} testid="v-pan" />
+              <F label="Referral code (optional)" value={f.referral_code} onChange={up("referral_code")} testid="v-ref" />
               <div className="sm:col-span-2">
                 <F label="Business address" value={f.business_address} onChange={up("business_address")} required testid="v-biz-address" />
               </div>
@@ -110,7 +138,16 @@ export default function BecomeVendor() {
             </Grid>
           </FormSection>
 
-          <FormSection title="Verification documents (image URLs)" subtitle="Provide public/hosted image URLs of your documents. Full file upload will be enabled once Cloudinary is wired.">
+          <FormSection title="Bank details (for payouts)" subtitle="Required before your first payout. You can also add these later in the Vendor Dashboard.">
+            <Grid>
+              <F label="Account holder name" value={f.account_holder_name} onChange={up("account_holder_name")} testid="v-bank-name" />
+              <F label="Bank name" value={f.bank_name} onChange={up("bank_name")} testid="v-bank-bank" />
+              <F label="Account number" value={f.account_number} onChange={up("account_number")} testid="v-bank-acct" />
+              <F label="IFSC code" value={f.ifsc_code} onChange={up("ifsc_code")} placeholder="SBIN0001234" testid="v-bank-ifsc" />
+            </Grid>
+          </FormSection>
+
+          <FormSection title="Verification documents (image URLs)" subtitle="Provide public/hosted image URLs of your documents.">
             <Grid>
               <F label="Aadhar image URL" value={f.aadhar_url} onChange={up("aadhar_url")} testid="v-aadhar" />
               <F label="GST certificate URL" value={f.gst_url} onChange={up("gst_url")} testid="v-gst" />

@@ -1,11 +1,20 @@
 import Dashboard from "@/pages/Dashboard";
 import Catalogue from "@/pages/Catalogue";
 import VendorBottomNav from "@/components/VendorBottomNav";
+import { VendorGate } from "@/pages/VendorVerification";
+import VendorWallet from "@/pages/VendorWallet";
+import VendorPayouts from "@/pages/VendorPayouts";
+import VendorBank from "@/pages/VendorBank";
+import VendorRefer from "@/pages/VendorRefer";
+import VendorNotifications from "@/pages/VendorNotifications";
+import VendorSupport from "@/pages/VendorSupport";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { NavLink, Routes, Route, Navigate } from "react-router-dom";
 import { api, formatINR, formatApiError } from "@/lib/api";
+import { vendorLineTotal, vendorOrderTotal } from "@/lib/vendorPricing";
 import { toast } from "sonner";
 import { playAlert } from "@/lib/audioAlert";
+import { ImageSourcePicker } from "@/components/ImageSourcePicker";
 import { useAuth } from "@/context/AuthContext";
 import {
   LayoutDashboard,
@@ -23,42 +32,35 @@ import {
   Settings,
   Store,
   Palmtree,
+  Wallet,
+  Banknote,
+  Gift,
+  Bell,
+  Landmark,
+  LifeBuoy,
 } from "lucide-react";
 
-const ORDER_STATUSES = ["Pending", "Accepted", "Preparing", "Packed", "Ready", "Out For Delivery", "Delivered", "Cancelled"];
+const VENDOR_ORDER_STATUSES = ["Pending", "Accepted", "Preparing", "Packed", "Ready"];
+const RIDER_ADMIN_STATUSES = ["Out For Delivery", "Delivered", "Cancelled"];
 
 const vendorLinks = [
-  { 
-    to: "/vendor", 
-    label: "Dashboard", 
-    icon: LayoutDashboard, 
-    end: true 
-  },
-  { 
-    to: "/vendor/catalogue", 
-    label: "Catalogue", 
-    icon: Package 
-  },
-  { 
-    to: "/vendor/orders", 
-    label: "Orders", 
-    icon: ShoppingBag 
-  },
-  { 
-    to: "/vendor/more", 
-    label: "More", 
-    icon: Settings 
-  },
+  { to: "/vendor", label: "Dashboard", icon: LayoutDashboard, end: true },
+  { to: "/vendor/catalogue", label: "Catalogue", icon: Package },
+  { to: "/vendor/orders", label: "Orders", icon: ShoppingBag },
+  { to: "/vendor/wallet", label: "Wallet", icon: Wallet },
+  { to: "/vendor/analytics", label: "Analytics", icon: BarChart3 },
+  { to: "/vendor/support", label: "Support", icon: LifeBuoy },
+  { to: "/vendor/more", label: "More", icon: Settings },
 ];
 
 export default function VendorDashboard() {
   return (
-    <div className="container-app py-8" data-testid="vendor-page">
-      <h1 className="font-heading text-3xl font-bold sm:text-4xl">Vendor panel</h1>
+    <div className="container-app py-6 sm:py-8" data-testid="vendor-page">
+      <h1 className="page-title">Vendor panel</h1>
       <p className="mt-2 text-sm text-[#4A4A4A]">Manage your catalogue, inventory, and orders</p>
 
-      <div className="mt-8 grid gap-8 lg:grid-cols-[220px_1fr]">
-        <aside className="hidden lg:block space-y-1">
+      <div className="mt-6 flex flex-col gap-6 sm:mt-8 lg:grid lg:grid-cols-[220px_1fr] lg:items-start lg:gap-8">
+        <aside className="sticky-sidebar hidden space-y-1 lg:block">
           {vendorLinks.map((l) => (
             <NavLink
               key={l.to}
@@ -77,17 +79,25 @@ export default function VendorDashboard() {
           ))}
         </aside>
 
-        <div className="pb-20 lg:pb-0">
-          <Routes>
-            <Route index element={<Dashboard />} />
-            <Route path="catalogue" element={<Catalogue />} />
-            <Route path="products" element={<Catalogue />} />
-            <Route path="orders" element={<VOrders />} />
-            <Route path="analytics" element={<VAnalytics />} />
-            <Route path="settings" element={<VSettings />} />
-            <Route path="more" element={<VMore />} />
-            <Route path="*" element={<Navigate to="/vendor" replace />} />
-          </Routes>
+        <div className="min-w-0 pb-20 lg:pb-0">
+          <VendorGate>
+            <Routes>
+              <Route index element={<Dashboard />} />
+              <Route path="catalogue" element={<Catalogue />} />
+              <Route path="products" element={<Catalogue />} />
+              <Route path="orders" element={<VOrders />} />
+              <Route path="analytics" element={<VAnalytics />} />
+              <Route path="wallet" element={<VendorWallet />} />
+              <Route path="payouts" element={<VendorPayouts />} />
+              <Route path="bank" element={<VendorBank />} />
+              <Route path="refer" element={<VendorRefer />} />
+              <Route path="notifications" element={<VendorNotifications />} />
+              <Route path="support" element={<VendorSupport />} />
+              <Route path="settings" element={<VSettings />} />
+              <Route path="more" element={<VMore />} />
+              <Route path="*" element={<Navigate to="/vendor" replace />} />
+            </Routes>
+          </VendorGate>
         </div>
         <VendorBottomNav />
       </div>
@@ -188,23 +198,38 @@ export function VProducts() {
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [editing, setEditing] = useState(null);
   const [showForm, setShowForm] = useState(false);
-  
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const [p, c] = await Promise.all([api.get("/vendor/products"), api.get("/categories")]);
-    setProducts(p.data);
-    setCategories(c.data);
-    setLoading(false);
+  const load = useCallback(async ({ silent = false } = {}) => {
+    if (silent) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+    try {
+      const [p, c] = await Promise.all([api.get("/vendor/products"), api.get("/categories")]);
+      setProducts(p.data);
+      setCategories(c.data);
+    } catch {
+      // Keep existing list visible during background refresh failures
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, []);
 
   useEffect(() => {
-  load();
-  const interval = setInterval(load, 10000);
-  return () => clearInterval(interval);
-}, [load]);
+    load();
+  }, [load]);
+
+  // Poll for new products, but never interrupt an open add/edit form
+  useEffect(() => {
+    if (showForm) return undefined;
+    const interval = setInterval(() => load({ silent: true }), 10000);
+    return () => clearInterval(interval);
+  }, [load, showForm]);
 
   const del = async (id) => {
     if (!window.confirm("Delete this product?")) return;
@@ -220,7 +245,10 @@ export function VProducts() {
   return (
     <div data-testid="vendor-products">
       <div className="mb-6 flex items-center justify-between">
-        <h2 className="font-heading text-2xl font-semibold">Products ({products.length})</h2>
+        <h2 className="font-heading text-2xl font-semibold">
+          Products ({products.length})
+          {refreshing && <Loader2 className="ml-2 inline h-4 w-4 animate-spin text-[#8BA888]" />}
+        </h2>
         <button onClick={() => { setEditing(null); setShowForm(true); }} className="btn-primary" data-testid="vendor-add-product">
           <Plus className="h-4 w-4" /> Add product
         </button>
@@ -255,7 +283,10 @@ export function VProducts() {
                         </div>
                       </div>
                     </td>
-                    <td className="px-4 py-3 font-semibold">{formatINR(p.price)}</td>
+                    <td className="px-4 py-3 font-semibold" title="Your price per unit">
+                      {formatINR(p.base_price ?? p.price)}
+                      <span className="ml-1 text-[10px] font-normal text-[#4A4A4A]">base</span>
+                    </td>
                     <td className="px-4 py-3">
                       <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${p.stock <= 5 ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"}`}>
                         {p.stock}
@@ -305,52 +336,18 @@ function VProductForm({ initial, categories, onClose, onSaved }) {
     }
   );
   const [saving, setSaving] = useState(false);
-  const [preview, setPreview] = useState(initial?.image || "");
-  const [uploading, setUploading] = useState(false);
 
-const uploadImage = async (file) => {
-  if (!file) return;
+  const update = (k, v) => {
+    setForm((f) => ({ ...f, [k]: v }));
+  };
 
-  const formData = new FormData();
-  formData.append("file", file);
-
-  try {
-    setUploading(true);
-
-    const res = await api.post("/upload/image", formData, {
-      headers: {
-        "Content-Type": "multipart/form-data",
-      },
-    });
-
-    update("image", res.data.url);
-    setPreview(res.data.url);
-    console.log("Uploaded URL:", res.data.url);
-
-    toast.success("Image uploaded successfully");
-  } catch (error) {
-  console.log("Upload Error:", error);
-  console.log("Response:", error.response?.data);
-
-  toast.error(error.response?.data?.detail || "Image upload failed");
-
-  } finally {
-    setUploading(false);
-  }
-};
-
-const update = (k, v) => {
-  console.log("Updating:", k, v);
-
-  setForm((f) => {
-    const newForm = { ...f, [k]: v };
-    console.log("New Form:", newForm);
-    return newForm;
-  });
-};
-const save = async (e) => {
-  e.preventDefault();
-  setSaving(true);
+  const save = async (e) => {
+    e.preventDefault();
+    if (!form.image?.trim()) {
+      toast.error("Please add a product image (upload a file or paste an image URL).");
+      return;
+    }
+    setSaving(true);
 
   try {
     const payload = {
@@ -391,7 +388,10 @@ const save = async (e) => {
             <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Description</label>
             <textarea value={form.description} onChange={(e) => update("description", e.target.value)} rows={2} className="input-base resize-none" />
           </div>
-          <FF label="Price (₹)" type="number" value={form.price} onChange={(v) => update("price", v)} required />
+          <FF label="Base price (₹)" type="number" value={form.price} onChange={(v) => update("price", v)} required />
+          <p className="sm:col-span-2 -mt-2 text-xs text-[#4A4A4A]">
+            Set the price you want to receive for this product. This is what you will see on orders and payouts.
+          </p>
           <FF label="MRP (₹)" type="number" value={form.mrp || ""} onChange={(v) => update("mrp", v)} />
           <FF label="Unit (250g/500g/1kg)" value={form.unit} onChange={(v) => update("unit", v)} placeholder="1 kg" />
           <div>
@@ -400,30 +400,15 @@ const save = async (e) => {
               {categories.map((c) => <option key={c.slug} value={c.slug}>{c.name}</option>)}
             </select>
           </div>
-<div className="sm:col-span-2">
-  <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">
-    Product Image
-  </label>
-
-  <input
-    type="file"
-    accept="image/*"
-    onChange={(e) => uploadImage(e.target.files?.[0])}
-    className="input-base"
-  />
-
-  {uploading ? (
-    <p className="mt-2 text-sm text-[#1B4332]">Uploading image...</p>
-  ) : null}
-
-  {preview ? (
-    <img
-      src={preview}
-      alt="Preview"
-      className="mt-3 h-24 w-24 rounded-lg object-cover"
-    />
-  ) : null}
-</div>
+          <div className="sm:col-span-2">
+            <ImageSourcePicker
+              label="Product image"
+              value={form.image}
+              onChange={(url) => update("image", url)}
+              required
+              testIdPrefix="v-product-image"
+            />
+          </div>
           <FF label="Stock" type="number" value={form.stock} onChange={(v) => update("stock", v)} required />
           <div className="sm:col-span-2 flex justify-end gap-3 pt-2">
             <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
@@ -499,7 +484,11 @@ function VOrders() {
 
   return (
     <div className="space-y-4" data-testid="vendor-orders">
-      {orders.map((o) => (
+      {orders.map((o) => {
+        const currentStatus = o.my_status === "Mixed" ? "Pending" : o.my_status;
+        const vendorLocked = RIDER_ADMIN_STATUSES.includes(currentStatus);
+        const orderTotal = vendorOrderTotal(o.items);
+        return (
         <div key={o.id} className="card-base p-5" data-testid={`vendor-order-${o.id}`}>
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
@@ -513,16 +502,23 @@ function VOrders() {
               </div>
             </div>
             <div className="text-right">
-              <div className="font-heading text-xl font-bold text-[#1B4332]">{formatINR(o.my_subtotal)}</div>
+              <div className="font-heading text-xl font-bold text-[#1B4332]">{formatINR(orderTotal)}</div>
+              <div className="text-[10px] text-[#4A4A4A]">Your amount (base price)</div>
               <div className="mt-2">
-                <select
-                  value={o.my_status === "Mixed" ? "Pending" : o.my_status}
-                  onChange={(e) => setStatus(o.id, e.target.value)}
-                  className="input-base w-44 text-sm"
-                  data-testid={`v-status-${o.id}`}
-                >
-                  {ORDER_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
+                {vendorLocked ? (
+                  <span className="inline-block rounded-full bg-gray-100 px-3 py-1.5 text-xs font-semibold text-[#4A4A4A]">
+                    {currentStatus} · handled by rider/admin
+                  </span>
+                ) : (
+                  <select
+                    value={VENDOR_ORDER_STATUSES.includes(currentStatus) ? currentStatus : "Pending"}
+                    onChange={(e) => setStatus(o.id, e.target.value)}
+                    className="input-base w-44 text-sm"
+                    data-testid={`v-status-${o.id}`}
+                  >
+                    {VENDOR_ORDER_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                )}
               </div>
               <div className="mt-1 text-xs text-[#4A4A4A]">Overall: {o.overall_status}</div>
             </div>
@@ -533,7 +529,7 @@ function VOrders() {
                 <img src={it.image} alt="" className="h-8 w-8 rounded object-cover" />
                 <span className="flex-1">{it.name} <span className="text-xs text-[#4A4A4A]">({it.unit})</span></span>
                 <span className="text-[#4A4A4A]">×{it.quantity}</span>
-                <span className="font-semibold">{formatINR(it.price * it.quantity)}</span>
+                <span className="font-semibold">{formatINR(vendorLineTotal(it))}</span>
                 {it.line_status && it.line_status !== o.my_status && (
                   <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-[#4A4A4A]">{it.line_status}</span>
                 )}
@@ -541,7 +537,8 @@ function VOrders() {
             ))}
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -558,15 +555,13 @@ function VAnalytics() {
   const kpis = [
     { label: "Today's orders", value: data.today_orders },
     { label: "This week", value: data.week_orders },
-    { label: "This month (₹)", value: `₹${data.month_revenue}` },
-    { label: "Total revenue (₹)", value: `₹${data.total_revenue}` },
+    { label: "This month (₹)", value: formatINR(data.month_sales ?? data.month_revenue ?? 0) },
+    { label: "Total sales (₹)", value: formatINR(data.total_sales ?? data.total_revenue ?? 0) },
   ];
 
   const earningsRow = [
-    { label: "Gross sales", value: `₹${data.total_revenue}`, color: "text-[#1B4332]" },
-    { label: `Commission (${data.commission_pct}%)`, value: `- ₹${data.commission_deducted}`, color: "text-[#E07A5F]" },
-    { label: "Net earnings", value: `₹${data.net_earnings}`, color: "text-[#1B4332]" },
-    { label: "Pending payment", value: `₹${data.pending_payment}`, color: "text-[#F4A261]" },
+    { label: "Your sales", value: formatINR(data.total_sales ?? data.total_revenue ?? 0), color: "text-[#1B4332]" },
+    { label: "Pending payment", value: formatINR(data.pending_payment ?? 0), color: "text-[#F4A261]" },
   ];
 
   return (
@@ -582,8 +577,8 @@ function VAnalytics() {
 
       <div className="card-base p-6" data-testid="earnings-breakdown">
         <h3 className="font-heading text-lg font-semibold">Earnings breakdown</h3>
-        <p className="mt-1 text-xs text-[#4A4A4A]">Based on your delivered orders. Payouts are settled by the admin.</p>
-        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <p className="mt-1 text-xs text-[#4A4A4A]">Your product prices on delivered orders only.</p>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
           {earningsRow.map((r) => (
             <div key={r.label} className="rounded-xl border border-[#E5E5E5] p-4">
               <div className="text-xs uppercase tracking-wider text-[#4A4A4A]">{r.label}</div>
@@ -607,7 +602,7 @@ function VAnalytics() {
                     <div className="text-sm font-semibold">{s.name}</div>
                     <div className="text-xs text-[#4A4A4A]">{s.unit} · sold {s.qty}</div>
                   </div>
-                  <div className="text-sm font-semibold text-[#1B4332]">₹{s.revenue}</div>
+                  <div className="text-sm font-semibold text-[#1B4332]">{formatINR(s.revenue)}</div>
                 </div>
               ))}
             </div>
@@ -624,10 +619,10 @@ function VAnalytics() {
                 <div key={o.id} className="flex items-center justify-between border-b border-dashed pb-2 last:border-0 last:pb-0">
                   <div>
                     <div className="text-sm font-semibold">#{o.id.slice(-6).toUpperCase()}</div>
-                    <div className="text-xs text-[#4A4A4A]">{o.customer_name} · {o.items_count} item(s)</div>
+                    <div className="text-xs text-[#4A4A4A]">{o.customer_name} · {o.items_count ?? o.items?.length ?? 0} item(s)</div>
                   </div>
                   <div className="text-right">
-                    <div className="text-sm font-semibold text-[#1B4332]">₹{o.my_subtotal}</div>
+                    <div className="text-sm font-semibold text-[#1B4332]">{formatINR(vendorOrderTotal(o.items ?? []))}</div>
                     <div className="text-xs text-[#4A4A4A]">{o.overall_status}</div>
                   </div>
                 </div>
@@ -856,10 +851,12 @@ function VMore() {
   const tiles = [
     { to: "/vendor/analytics", title: "Analytics", body: "Sales trends, best-sellers, earnings breakdown", available: true, icon: BarChart3, color: "bg-[#1B4332]" },
     { to: "/vendor/settings", title: "Shop Settings", body: "Business profile, hours, vacation mode, delivery radius", available: true, icon: Settings, color: "bg-[#E07A5F]" },
-    { to: "/vendor/settings", title: "Business Details", body: "Update your name, address, description, logo", available: true, icon: Store, color: "bg-[#8BA888]" },
-    { to: null, title: "Bank Details", body: "Payout account setup — coming soon", available: false, icon: Store, color: "bg-[#F4A261]" },
-    { to: "/vendor/analytics", title: "Commission & Earnings", body: "See platform commission and net earnings", available: true, icon: BarChart3, color: "bg-[#1B4332]" },
-    { to: "/contact", title: "Support", body: "Need help? Chat with the Ambajogai team", available: true, icon: Store, color: "bg-[#8BA888]" },
+    { to: "/vendor/bank", title: "Bank Details", body: "Payout account for earnings transfer", available: true, icon: Landmark, color: "bg-[#F4A261]" },
+    { to: "/vendor/payouts", title: "Payouts", body: "Request and track payout transfers", available: true, icon: Banknote, color: "bg-[#8BA888]" },
+    { to: "/vendor/refer", title: "Refer & Earn", body: "Invite vendors and earn referral rewards", available: true, icon: Gift, color: "bg-[#E07A5F]" },
+    { to: "/vendor/notifications", title: "Notifications", body: "Orders, payouts, and account updates", available: true, icon: Bell, color: "bg-[#1B4332]" },
+    { to: "/vendor/support", title: "Support", body: "Need help? Contact the Ambajogai vendor team", available: true, icon: LifeBuoy, color: "bg-[#8BA888]" },
+    { to: "/vendor/analytics", title: "Sales & Earnings", body: "Track your sales and payment status", available: true, icon: BarChart3, color: "bg-[#1B4332]" },
   ];
   const { logout } = useAuth();
   return (

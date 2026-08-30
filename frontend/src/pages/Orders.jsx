@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
 import { api, formatINR, formatApiError } from "@/lib/api";
 import { useCart } from "@/context/CartContext";
@@ -16,23 +16,81 @@ const STATUS_COLORS = {
   Cancelled: "bg-red-100 text-red-800",
 };
 
+const OPEN_STATUSES = new Set([
+  "Pending",
+  "Accepted",
+  "Preparing",
+  "Packed",
+  "Ready",
+  "Out For Delivery",
+]);
+
 export default function Orders() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const { addItem } = useCart();
+  const ordersRef = useRef([]);
+
+  const loadOrders = useCallback(async () => {
+    try {
+      const { data } = await api.get("/orders/my");
+      const next = Array.isArray(data) ? data : [];
+      ordersRef.current = next;
+      setOrders(next);
+      setError("");
+    } catch (err) {
+      ordersRef.current = [];
+      setOrders([]);
+      setError(formatApiError(err, "Could not load your orders"));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    api
-      .get("/orders/my")
-      .then(({ data }) => setOrders(data))
-      .catch(() => setOrders([]))
-      .finally(() => setLoading(false));
-  }, []);
+    let cancelled = false;
+
+    const refresh = async () => {
+      if (cancelled) return;
+      await loadOrders();
+    };
+
+    refresh();
+
+    const t = setInterval(() => {
+      const hasOpen = ordersRef.current.some((order) =>
+        OPEN_STATUSES.has(order.status)
+      );
+      if (hasOpen || ordersRef.current.length === 0) {
+        refresh();
+      }
+    }, 20000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [loadOrders]);
 
   if (loading) {
     return (
       <div className="container-app flex min-h-[50vh] items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-[#1B4332]" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="container-app py-16" data-testid="orders-error">
+        <div className="mx-auto max-w-md rounded-2xl border border-red-200 bg-white p-10 text-center">
+          <h1 className="font-heading text-2xl font-bold text-red-800">Could not load orders</h1>
+          <p className="mt-2 text-sm text-[#4A4A4A]">{error}</p>
+          <button type="button" onClick={() => { setLoading(true); loadOrders(); }} className="btn-primary mt-6">
+            Try again
+          </button>
+        </div>
       </div>
     );
   }
@@ -52,10 +110,25 @@ export default function Orders() {
     );
   }
 
+  const hasLiveOrders = orders.some((order) => OPEN_STATUSES.has(order.status));
+
   return (
     <div className="container-app py-8" data-testid="orders-page">
-      <h1 className="font-heading text-3xl font-bold sm:text-4xl">My orders</h1>
-      <p className="mt-2 text-sm text-[#4A4A4A]">{orders.length} total order{orders.length !== 1 ? "s" : ""}</p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="font-heading text-3xl font-bold sm:text-4xl">My orders</h1>
+          <p className="mt-2 text-sm text-[#4A4A4A]">{orders.length} total order{orders.length !== 1 ? "s" : ""}</p>
+        </div>
+        {hasLiveOrders && (
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-semibold text-green-700">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-green-500" />
+            </span>
+            Live · refreshes every 20s
+          </span>
+        )}
+      </div>
 
       <div className="mt-8 space-y-4">
         {orders.map((o) => (

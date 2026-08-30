@@ -21,16 +21,8 @@ api.interceptors.response.use(
   (r) => r,
   (err) => {
     if (err?.response?.status === 401) {
-      const path = window.location.pathname;
-
-      if (
-        path.startsWith("/checkout") ||
-        path.startsWith("/orders") ||
-        path.startsWith("/admin") ||
-        path.startsWith("/profile")
-      ) {
-        localStorage.removeItem("ambajogai_token");
-      }
+      localStorage.removeItem("ambajogai_token");
+      window.dispatchEvent(new Event("ambajogai:session-expired"));
     }
 
     return Promise.reject(err);

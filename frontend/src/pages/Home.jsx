@@ -13,22 +13,25 @@ export default function Home() {
   const [popular, setPopular] = useState([]);
   const [allProducts, setAllProducts] = useState([]);
   const [reviews, setReviews] = useState([]);
+  const [offers, setOffers] = useState([]);
 
   useEffect(() => {
     (async () => {
       try {
-        const [cRes, fRes, pRes, aRes, rRes] = await Promise.all([
+        const [cRes, fRes, pRes, aRes, rRes, oRes] = await Promise.all([
           api.get("/categories"),
           api.get("/products?featured=true&limit=8"),
           api.get("/products?popular=true&limit=8"),
           api.get("/products?limit=200"),
           api.get("/reviews?limit=6"),
+          api.get("/offers"),
         ]);
         setCategories(cRes.data);
         setFeatured(fRes.data);
         setPopular(pRes.data);
         setAllProducts(aRes.data);
         setReviews(rRes.data);
+        setOffers(oRes.data);
       } catch {
         /* ignore fetch errors on home */
       }
@@ -68,12 +71,12 @@ export default function Home() {
           <div className="absolute inset-0 bg-gradient-to-r from-[#1B4332]/85 via-[#1B4332]/60 to-transparent" />
         </div>
 
-        <div className="container-app relative py-20 sm:py-28 lg:py-32">
+        <div className="container-app relative py-16 sm:py-24 lg:py-32">
           <div className="max-w-2xl">
-            <span className="inline-flex items-center gap-2 rounded-full border border-white/30 bg-white/10 px-3 py-1 text-xs font-medium text-white backdrop-blur-sm">
-              <Sparkles className="h-3.5 w-3.5" /> Local & Fresh, Delivered in 30–45 minutes
+            <span className="inline-flex max-w-full items-center gap-2 rounded-full border border-white/30 bg-white/10 px-3 py-1 text-[11px] font-medium text-white backdrop-blur-sm sm:text-xs">
+              <Sparkles className="h-3.5 w-3.5 shrink-0" /> Local & Fresh, Delivered in 30–45 minutes
             </span>
-            <h1 className="mt-6 font-heading text-4xl font-bold text-white sm:text-5xl lg:text-6xl">
+            <h1 className="mt-4 font-heading text-3xl font-bold text-white sm:mt-6 sm:text-5xl lg:text-6xl">
               Ambajogai&apos;s freshest
               <span className="block text-[#E07A5F]">groceries at your door.</span>
             </h1>
@@ -81,19 +84,21 @@ export default function Home() {
               Farm-picked vegetables, dairy, staples, spices and pantry essentials — hand-selected daily and delivered fast across town.
             </p>
 
-            <form onSubmit={submitSearch} className="mt-8 max-w-lg" data-testid="hero-search-form">
-              <div className="relative flex overflow-hidden rounded-full bg-white p-1.5 shadow-xl">
-                <Search className="pointer-events-none absolute left-5 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search rice, atta, dal, milk…"
-                  className="flex-1 bg-transparent pl-12 pr-3 text-sm outline-none placeholder:text-gray-400"
-                  data-testid="hero-search-input"
-                />
+            <form onSubmit={submitSearch} className="mt-6 max-w-lg sm:mt-8" data-testid="hero-search-form">
+              <div className="flex flex-col gap-2 rounded-2xl bg-white p-2 shadow-xl sm:flex-row sm:items-center sm:rounded-full sm:p-1.5">
+                <div className="relative min-w-0 flex-1">
+                  <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400 sm:left-5" />
+                  <input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search rice, atta, dal, milk…"
+                    className="w-full bg-transparent py-2.5 pl-11 pr-3 text-sm outline-none placeholder:text-gray-400 sm:pl-12"
+                    data-testid="hero-search-input"
+                  />
+                </div>
                 <button
                   type="submit"
-                  className="rounded-full bg-[#1B4332] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#2D6A4F]"
+                  className="w-full rounded-xl bg-[#1B4332] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#2D6A4F] sm:w-auto sm:rounded-full sm:py-2"
                   data-testid="hero-search-submit"
                 >
                   Search
@@ -101,7 +106,7 @@ export default function Home() {
               </div>
             </form>
 
-            <div className="mt-8 flex flex-wrap gap-6">
+            <div className="mt-6 flex flex-col gap-3 sm:mt-8 sm:flex-row sm:flex-wrap sm:gap-6">
               {[
                 { icon: Truck, text: "Free delivery over ₹499" },
                 { icon: Clock, text: "Delivered in 30–45 min" },
@@ -118,33 +123,46 @@ export default function Home() {
       </section>
 
       {/* OFFERS BANNER */}
-      <section className="container-app -mt-8 relative z-10">
-        <div className="grid gap-4 md:grid-cols-3">
-          {[
-            { title: "10% off", sub: "on your first order", color: "bg-[#E07A5F]" },
-            { title: "Free delivery", sub: "orders above ₹499", color: "bg-[#1B4332]" },
-            { title: "COD available", sub: "pay on delivery", color: "bg-[#8BA888]" },
-          ].map((o) => (
-            <div
-              key={o.title}
-              className={`${o.color} rounded-2xl p-5 text-white shadow-md transition-transform hover:-translate-y-0.5`}
-            >
-              <div className="font-heading text-xl font-bold">{o.title}</div>
-              <div className="mt-1 text-sm opacity-90">{o.sub}</div>
-            </div>
-          ))}
-        </div>
-      </section>
+      {offers.length > 0 && (
+        <section className="container-app relative z-10 -mt-6 sm:-mt-8">
+          <div className="grid gap-3 sm:grid-cols-2 sm:gap-4 md:grid-cols-3">
+            {offers.map((o) => {
+              const inner = (
+                <div
+                  className="rounded-2xl p-5 text-white shadow-md transition-transform hover:-translate-y-0.5"
+                  style={{ backgroundColor: o.bg_color || "#1B4332" }}
+                >
+                  <div className="font-heading text-xl font-bold">{o.title}</div>
+                  <div className="mt-1 text-sm opacity-90">{o.subtitle}</div>
+                </div>
+              );
+              if (o.link) {
+                const isExternal = /^https?:\/\//i.test(o.link);
+                return isExternal ? (
+                  <a key={o.id} href={o.link} target="_blank" rel="noopener noreferrer" data-testid={`offer-${o.id}`}>
+                    {inner}
+                  </a>
+                ) : (
+                  <Link key={o.id} to={o.link} data-testid={`offer-${o.id}`}>
+                    {inner}
+                  </Link>
+                );
+              }
+              return <div key={o.id} data-testid={`offer-${o.id}`}>{inner}</div>;
+            })}
+          </div>
+        </section>
+      )}
 
       {/* CATEGORIES */}
-      <section className="container-app py-16">
+      <section className="container-app py-10 sm:py-16">
         <SectionHeading title="Shop by Category" subtitle="Everything you need under one roof" cta={{ to: "/products", label: "See all" }} />
-        <div className="mt-8 grid grid-cols-3 gap-4 sm:grid-cols-4 lg:grid-cols-6">
+        <div className="no-scrollbar mt-6 flex gap-3 overflow-x-auto pb-2 sm:mt-8 sm:grid sm:grid-cols-3 sm:gap-4 sm:overflow-visible sm:pb-0 lg:grid-cols-6">
           {categories.map((c) => (
             <Link
               key={c.slug}
               to={`/products?category=${c.slug}`}
-              className="card-base group flex flex-col items-center gap-3 p-4 text-center hover:border-[#8BA888]"
+              className="card-base group flex w-[120px] shrink-0 flex-col items-center gap-2 p-3 text-center hover:border-[#8BA888] sm:w-auto sm:gap-3 sm:p-4"
               data-testid={`category-${c.slug}`}
             >
               <div className="aspect-square w-full overflow-hidden rounded-xl bg-gray-50">

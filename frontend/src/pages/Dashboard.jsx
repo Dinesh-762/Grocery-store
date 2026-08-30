@@ -25,26 +25,12 @@ export default function Dashboard() {
   }
 
   const stats = [
-    {
-      label: "Revenue",
-      value: formatINR(data.revenue),
-      color: "bg-[#1B4332]",
-    },
-    {
-      label: "Total orders",
-      value: data.total_orders,
-      color: "bg-[#E07A5F]",
-    },
-    {
-      label: "Pending items",
-      value: data.pending_orders,
-      color: "bg-[#F4A261]",
-    },
-    {
-      label: "Products live",
-      value: data.approved_products,
-      color: "bg-[#8BA888]",
-    },
+    { label: "Base sales", value: formatINR(data.base_sales ?? 0), color: "bg-[#1B4332]" },
+    { label: "Available balance", value: formatINR(data.wallet?.available_balance ?? 0), color: "bg-[#8BA888]" },
+    { label: "Total orders", value: data.total_orders, color: "bg-[#E07A5F]" },
+    { label: "Pending orders", value: data.pending_orders, color: "bg-[#F4A261]" },
+    { label: "Delivered", value: data.delivered_orders ?? 0, color: "bg-[#1B4332]" },
+    { label: "Products live", value: data.approved_products, color: "bg-[#8BA888]" },
   ];
 
   return (

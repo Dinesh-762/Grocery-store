@@ -106,6 +106,22 @@ h6,
   .container-app {
     @apply mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8;
   }
+  .page-title {
+    @apply font-heading text-2xl font-bold sm:text-3xl lg:text-4xl;
+  }
+  .site-header {
+    @apply sticky top-0 z-50 border-b border-[#E5E5E5]/60 bg-[#FDFBF7]/95 backdrop-blur-md;
+  }
+  .sticky-sidebar {
+    @apply lg:sticky lg:top-16 lg:z-20 lg:max-h-[calc(100vh-4rem)] lg:self-start lg:overflow-y-auto;
+  }
+  /* Sticky left rail for admin/vendor/delivery panels — title + nav stay put while content scrolls */
+  .panel-rail {
+    @apply sticky top-14 z-20 self-start sm:top-14 lg:top-16 lg:max-h-[calc(100vh-4rem)] lg:overflow-y-auto;
+  }
+  .panel-nav-mobile {
+    @apply -mx-4 flex gap-2 overflow-x-auto bg-[#FDFBF7]/95 px-4 py-2 backdrop-blur-sm sm:-mx-6 sm:px-6 lg:mx-0 lg:block lg:space-y-1 lg:overflow-x-visible lg:overflow-y-visible lg:bg-transparent lg:p-0 lg:backdrop-blur-none;
+  }
 }
 
 /* Animations */

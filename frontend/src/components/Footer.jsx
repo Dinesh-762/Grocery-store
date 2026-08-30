@@ -10,15 +10,15 @@ export default function Footer() {
   }, []);
 
   return (
-    <footer className="mt-24 bg-[#1B4332] text-white" data-testid="site-footer">
-      <div className="container-app py-16">
-        <div className="grid gap-10 md:grid-cols-2 lg:grid-cols-4">
+    <footer className="mt-12 bg-[#1B4332] text-white sm:mt-24" data-testid="site-footer">
+      <div className="container-app py-10 sm:py-16">
+        <div className="grid gap-8 sm:grid-cols-2 sm:gap-10 lg:grid-cols-4">
           <div>
             <div className="flex items-center gap-2">
               <span className="grid h-9 w-9 place-items-center rounded-full bg-white text-[#1B4332]">
                 <Leaf className="h-5 w-5" />
               </span>
-              <span className="font-heading text-xl font-bold">Ambajogai Grocery</span>
+              <span className="font-heading text-lg font-bold sm:text-xl">Ambajogai Grocery</span>
             </div>
             <p className="mt-4 text-sm leading-relaxed text-white/70">
               Your neighbourhood grocery store — bringing farm-fresh produce and daily essentials to your doorstep across Ambajogai.

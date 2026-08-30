@@ -24,7 +24,7 @@ const links = [
     icon: Package,
   },
   {
-    to: "/vendor/settings",
+    to: "/vendor/more",
     label: "More",
     icon: Menu,
   },

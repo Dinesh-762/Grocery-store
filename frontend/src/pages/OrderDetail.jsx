@@ -1,33 +1,73 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { api, formatINR } from "@/lib/api";
-import { Loader2, CheckCircle2, Circle, MapPin, Phone, MessageCircle, Package } from "lucide-react";
+import { Loader2, CheckCircle2, Circle, MapPin, Phone, MessageCircle, Package, Truck } from "lucide-react";
 
 const STATUSES = ["Pending", "Accepted", "Preparing", "Packed", "Ready", "Out For Delivery", "Delivered"];
+const TERMINAL_STATUSES = new Set(["Delivered", "Cancelled"]);
+const POLL_MS = 20000;
 
 export default function OrderDetail() {
   const { id } = useParams();
   const [order, setOrder] = useState(null);
   const [loading, setLoading] = useState(true);
   const [store, setStore] = useState({ whatsapp: "+918237214975" });
+  const statusRef = useRef(null);
 
   useEffect(() => {
     api.get("/store/info").then(({ data }) => setStore(data)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
-    const fetchOrder = () =>
-      api
-        .get(`/orders/${id}`)
-        .then(({ data }) => { if (!cancelled) setOrder(data); })
-        .catch(() => { if (!cancelled) setOrder((o) => o || null); })
-        .finally(() => { if (!cancelled) setLoading(false); });
-    fetchOrder();
-    // Live timeline: refresh every 20s while the order is still open
-    const t = setInterval(() => {
-      if (!order || ["Delivered", "Cancelled"].includes(order.status)) return;
-      fetchOrder();
-    }, 20000);
-    return () => { cancelled = true; clearInterval(t); };
-  }, [id, order]);
+    let pollTimer = null;
+
+    const fetchOrder = async (showLoader = false) => {
+      if (showLoader) setLoading(true);
+
+      try {
+        const { data } = await api.get(`/orders/${id}`);
+        if (cancelled) return;
+        setOrder(data);
+        statusRef.current = data.status;
+      } catch {
+        if (!cancelled && showLoader) {
+          setOrder(null);
+        }
+      } finally {
+        if (!cancelled && showLoader) {
+          setLoading(false);
+        }
+      }
+    };
+
+    const schedulePoll = () => {
+      pollTimer = setTimeout(async () => {
+        if (cancelled) return;
+
+        if (TERMINAL_STATUSES.has(statusRef.current)) {
+          return;
+        }
+
+        await fetchOrder(false);
+
+        if (!cancelled && !TERMINAL_STATUSES.has(statusRef.current)) {
+          schedulePoll();
+        }
+      }, POLL_MS);
+    };
+
+    fetchOrder(true).then(() => {
+      if (!cancelled && !TERMINAL_STATUSES.has(statusRef.current)) {
+        schedulePoll();
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      if (pollTimer) clearTimeout(pollTimer);
+    };
+  }, [id]);
 
   if (loading) {
     return (
@@ -146,6 +186,16 @@ export default function OrderDetail() {
         </section>
 
         <aside className="space-y-6">
+          {order.delivery_partner_name && (
+            <section className="card-base p-6">
+              <h3 className="font-heading text-sm font-semibold uppercase tracking-wider text-[#8BA888]">Delivery partner</h3>
+              <div className="mt-3 flex items-center gap-2 text-sm font-semibold text-[#1B4332]">
+                <Truck className="h-4 w-4" />
+                {order.delivery_partner_name}
+              </div>
+            </section>
+          )}
+
           <section className="card-base p-6">
             <h3 className="font-heading text-sm font-semibold uppercase tracking-wider text-[#8BA888]">Delivery to</h3>
             <div className="mt-3 space-y-1 text-sm">
@@ -164,6 +214,12 @@ export default function OrderDetail() {
             <div className="mt-4 space-y-2 border-t border-dashed pt-4 text-sm">
               <Row label="Subtotal" value={formatINR(order.subtotal)} />
               <Row label="Delivery" value={order.delivery_fee === 0 ? "FREE" : formatINR(order.delivery_fee)} />
+              {(order.platform_fee ?? 0) > 0 && (
+                <Row label="Platform fee" value={formatINR(order.platform_fee)} />
+              )}
+              {(order.gst ?? 0) > 0 && (
+                <Row label="GST (5%)" value={formatINR(order.gst)} />
+              )}
               {order.discount > 0 && (
                 <Row
                   label={`Coupon${order.coupon?.code ? ` (${order.coupon.code})` : ""}`}

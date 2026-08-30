@@ -53,6 +53,11 @@ export function CartProvider({ children }) {
     setItems((prev) => prev.filter((p) => lineKey(p) !== key));
   };
 
+  const removeItems = (keys) => {
+    const drop = new Set(keys);
+    setItems((prev) => prev.filter((p) => !drop.has(lineKey(p))));
+  };
+
   const setQuantity = (key, quantity) => {
     setItems((prev) =>
       prev
@@ -80,6 +85,7 @@ export function CartProvider({ children }) {
         items,
         addItem,
         removeItem,
+        removeItems,
         setQuantity,
         clearCart,
         subtotal,

@@ -29,6 +29,24 @@ export function AuthProvider({ children }) {
     bootstrap();
   }, [bootstrap]);
 
+  useEffect(() => {
+    const onSessionExpired = () => {
+      setUser(null);
+    };
+
+    window.addEventListener(
+      "ambajogai:session-expired",
+      onSessionExpired
+    );
+
+    return () => {
+      window.removeEventListener(
+        "ambajogai:session-expired",
+        onSessionExpired
+      );
+    };
+  }, []);
+
   const login = async (email, password) => {
     try {
       const { data } = await api.post("/auth/login", { email, password });
@@ -56,8 +74,24 @@ export function AuthProvider({ children }) {
     setUser(null);
   };
 
+  const setUserDirect = (nextUser) => {
+    setUser(nextUser);
+  };
+
+  const refreshUser = useCallback(async () => {
+    try {
+      const { data } = await api.get("/auth/me");
+      setUser(data);
+      return { ok: true, user: data };
+    } catch (err) {
+      return { ok: false, error: formatApiError(err) };
+    }
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout }}>
+    <AuthContext.Provider
+      value={{ user, loading, login, register, logout, setUser: setUserDirect, refreshUser }}
+    >
       {children}
     </AuthContext.Provider>
   );

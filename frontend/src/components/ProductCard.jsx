@@ -181,12 +181,10 @@ export default function ProductCard({ product }) {
     }
 
     addItem(
-      product,
+      { ...product, price: activePrice, unit: activeUnit },
       1,
       null,
-      selectedVariant?.label || null,
-      activePrice,
-      activeUnit
+      selectedVariant?.label || null
     );
   };
 

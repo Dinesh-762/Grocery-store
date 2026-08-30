@@ -1,9 +1,10 @@
-﻿import { Link, NavLink, useNavigate } from "react-router-dom";
+﻿import { Link, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useState, useEffect } from "react";
-import { ShoppingCart, User, Search, Menu, X, LogOut, LayoutDashboard, Package, Leaf, Store, Truck } from "lucide-react";
-import { api } from "@/lib/api";
+import { ShoppingCart, User, Search, Menu, X, LogOut, LayoutDashboard, Package, Leaf, Store, Truck, UserCircle } from "lucide-react";
+import { api, formatINR } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useCart } from "@/context/CartContext";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,6 +25,7 @@ export default function Header() {
   const { user, logout } = useAuth();
   const { count } = useCart();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [suggestions, setSuggestions] = useState([]);
@@ -37,6 +39,10 @@ export default function Header() {
   setSearch("");
   setMobileOpen(false);
   };
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
+
   useEffect(() => {
   if (search.trim().length === 0) {
     setSuggestions([]);
@@ -60,60 +66,68 @@ export default function Header() {
   return () => clearTimeout(timer);
 }, [search]);
 
+  const userInitials = (user?.name || user?.email || "U")
+    .split(/\s+/)
+    .map((p) => p[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+
   return (
     <header
-     className="border-b border-[#E5E5E5]/60 bg-[#FDFBF7] backdrop-blur-md"
+      className="site-header"
       data-testid="site-header"
     >
-      <div className="container-app flex h-16 items-center justify-between gap-4">
-        <Link to="/" className="flex items-center gap-2" data-testid="brand-logo">
-          <span className="grid h-9 w-9 place-items-center rounded-full bg-[#1B4332] text-white">
-            <Leaf className="h-5 w-5" />
+      <div className="container-app flex h-14 items-center justify-between gap-2 sm:h-16 sm:gap-4">
+        <Link to="/" className="flex min-w-0 items-center gap-2" data-testid="brand-logo">
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#1B4332] text-white sm:h-9 sm:w-9">
+            <Leaf className="h-4 w-4 sm:h-5 sm:w-5" />
           </span>
-          <span className="font-heading text-lg font-bold text-[#1B4332] sm:text-xl">
+          <span className="truncate font-heading text-base font-bold text-[#1B4332] sm:text-lg lg:text-xl">
             Ambajogai <span className="hidden text-[#E07A5F] sm:inline">Grocery</span>
           </span>
         </Link>
 
-        <form onSubmit={submitSearch} className="hidden max-w-md flex-1 md:block" data-testid="header-search-form">
-          {showSuggestions && suggestions.length > 0 && (
-  <div className="absolute left-0 right-0 top-full z-50 mt-2 rounded-xl border bg-white shadow-xl">
-    {suggestions.map((item) => (
-      <button
-        key={item.id}
-        onClick={() => {
-          navigate(`/products/${item.slug}`);
-          setSearch("");
-          setSuggestions([]);
-          setShowSuggestions(false);
-        }}
-        className="flex w-full items-center gap-3 px-4 py-3 hover:bg-gray-50"
-      >
-        <img
-          src={item.image}
-          className="h-10 w-10 rounded object-cover"
-          alt={item.name}
-        />
-
-        <div className="text-left">
-          <div className="font-medium">{item.name}</div>
-          <div className="text-sm text-gray-500">
-            â‚¹{item.price}
-          </div>
-        </div>
-      </button>
-    ))}
-  </div>
-)}
+        <form onSubmit={submitSearch} className="relative hidden max-w-md flex-1 md:block" data-testid="header-search-form">
           <div className="relative">
             <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search for rice, dal, milk, snacksâ€¦"
+              onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+              onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
+              placeholder="Search for rice, dal, milk, snacks…"
               className="input-base pl-12"
               data-testid="header-search-input"
             />
+            {showSuggestions && suggestions.length > 0 && (
+              <div className="absolute left-0 right-0 top-full z-50 mt-2 overflow-hidden rounded-xl border bg-white shadow-xl">
+                {suggestions.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      navigate(`/products/${item.slug}`);
+                      setSearch("");
+                      setSuggestions([]);
+                      setShowSuggestions(false);
+                    }}
+                    className="flex w-full items-center gap-3 px-4 py-3 hover:bg-gray-50"
+                  >
+                    <img
+                      src={item.image}
+                      className="h-10 w-10 rounded object-cover"
+                      alt={item.name}
+                    />
+                    <div className="text-left">
+                      <div className="font-medium">{item.name}</div>
+                      <div className="text-sm text-gray-500">{formatINR(item.price)}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </form>
 
@@ -157,10 +171,17 @@ export default function Header() {
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button
-                  className="hidden h-10 items-center gap-2 rounded-full border border-[#E5E5E5] bg-white px-3 text-sm font-medium text-[#1B4332] transition-colors hover:bg-[#F3F4F6] sm:flex"
+                  className="hidden h-10 items-center gap-2 rounded-full border border-[#E5E5E5] bg-white px-2.5 text-sm font-medium text-[#1B4332] transition-colors hover:bg-[#F3F4F6] sm:flex sm:px-3"
                   data-testid="user-menu-trigger"
                 >
-                  <User className="h-4 w-4" />
+                  {user.profile_photo ? (
+                    <Avatar className="h-7 w-7">
+                      <AvatarImage src={user.profile_photo} alt={user.name} />
+                      <AvatarFallback className="text-[10px]">{userInitials}</AvatarFallback>
+                    </Avatar>
+                  ) : (
+                    <User className="h-4 w-4" />
+                  )}
                   <span className="max-w-[100px] truncate">{(user.name || user.email || "User").split(" ")[0]}</span>
                 </button>
               </DropdownMenuTrigger>
@@ -170,6 +191,11 @@ export default function Header() {
                   <div className="text-xs text-gray-500">{user.email}</div>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
+                <DropdownMenuItem asChild>
+                  <Link to="/profile" data-testid="menu-profile" className="cursor-pointer">
+                    <UserCircle className="mr-2 h-4 w-4" /> My Profile
+                  </Link>
+                </DropdownMenuItem>
                 <DropdownMenuItem asChild>
                   <Link to="/orders" data-testid="menu-my-orders" className="cursor-pointer">
                     <Package className="mr-2 h-4 w-4" /> My Orders
@@ -234,14 +260,14 @@ export default function Header() {
 
       {mobileOpen && (
         <div className="border-t border-[#E5E5E5]/60 bg-white lg:hidden" data-testid="mobile-menu">
-          <div className="container-app space-y-4 py-4">
+          <div className="container-app max-h-[calc(100dvh-3.5rem)] space-y-4 overflow-y-auto py-4">
             <form onSubmit={submitSearch}>
               <div className="relative">
                 <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
                 <input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search productsâ€¦"
+                  placeholder="Search products…"
                   className="input-base pl-11"
                   data-testid="mobile-search-input"
                 />
@@ -268,6 +294,13 @@ export default function Header() {
               {user ? (
                 <>
                   <Link
+                    to="/profile"
+                    onClick={() => setMobileOpen(false)}
+                    className="rounded-lg px-3 py-2 text-sm font-medium text-[#4A4A4A] hover:bg-gray-50"
+                  >
+                    My Profile
+                  </Link>
+                  <Link
                     to="/orders"
                     onClick={() => setMobileOpen(false)}
                     className="rounded-lg px-3 py-2 text-sm font-medium text-[#4A4A4A] hover:bg-gray-50"
@@ -281,6 +314,24 @@ export default function Header() {
                       className="rounded-lg px-3 py-2 text-sm font-medium text-[#4A4A4A] hover:bg-gray-50"
                     >
                       Admin Panel
+                    </Link>
+                  )}
+                  {user.role === "vendor" && (
+                    <Link
+                      to="/vendor"
+                      onClick={() => setMobileOpen(false)}
+                      className="rounded-lg px-3 py-2 text-sm font-medium text-[#4A4A4A] hover:bg-gray-50"
+                    >
+                      Vendor Panel
+                    </Link>
+                  )}
+                  {user.role === "delivery" && (
+                    <Link
+                      to="/delivery"
+                      onClick={() => setMobileOpen(false)}
+                      className="rounded-lg px-3 py-2 text-sm font-medium text-[#4A4A4A] hover:bg-gray-50"
+                    >
+                      Delivery Panel
                     </Link>
                   )}
                   <button

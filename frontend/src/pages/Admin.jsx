@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { NavLink, Routes, Route, Navigate } from "react-router-dom";
 import { api, formatINR, formatApiError } from "@/lib/api";
+import { ExportMenu } from "@/components/ExportMenu";
+import { ImageSourcePicker } from "@/components/ImageSourcePicker";
 import { toast } from "sonner";
 import { playAlert } from "@/lib/audioAlert";
 
@@ -47,7 +49,12 @@ import {
   Truck,
   BarChart3,
   Award,
+  Megaphone,
+  DollarSign,
+  Banknote,
 } from "lucide-react";
+import AdminPricing from "@/pages/admin/AdminPricing";
+import AdminPayouts from "@/pages/admin/AdminPayouts";
 
 const adminLinks = [
   { to: "/admin", label: "Dashboard", icon: LayoutDashboard, end: true },
@@ -55,8 +62,11 @@ const adminLinks = [
   { to: "/admin/products", label: "Products", icon: Package },
   { to: "/admin/orders", label: "Orders", icon: ShoppingBag },
   { to: "/admin/vendors", label: "Vendors", icon: Store },
+  { to: "/admin/pricing", label: "Pricing", icon: DollarSign },
+  { to: "/admin/payouts", label: "Payouts", icon: Banknote },
   { to: "/admin/delivery", label: "Delivery Boys", icon: Truck },
   { to: "/admin/coupons", label: "Coupons", icon: Ticket },
+  { to: "/admin/offers", label: "Offers", icon: Megaphone },
   { to: "/admin/customers", label: "Customers", icon: Users },
   { to: "/admin/categories", label: "Categories", icon: Tag },
 ];
@@ -64,38 +74,50 @@ const adminLinks = [
 export default function Admin() {
   return (
     <div className="container-app py-8" data-testid="admin-page">
-      <h1 className="font-heading text-3xl font-bold sm:text-4xl">Admin panel</h1>
-      <p className="mt-2 text-sm text-[#4A4A4A]">Manage products, orders, and store operations</p>
+      <div className="lg:hidden">
+        <h1 className="font-heading text-3xl font-bold sm:text-4xl">Admin panel</h1>
+        <p className="mt-2 text-sm text-[#4A4A4A]">Manage products, orders, and store operations</p>
+      </div>
 
-      <div className="mt-8 grid gap-8 lg:grid-cols-[220px_1fr]">
-        <aside className="space-y-1">
-          {adminLinks.map((l) => (
-            <NavLink
-              key={l.to}
-              to={l.to}
-              end={l.end}
-              className={({ isActive }) =>
-                `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
-                  isActive ? "bg-[#1B4332] text-white" : "text-[#4A4A4A] hover:bg-gray-50"
-                }`
-              }
-              data-testid={`admin-nav-${l.label.toLowerCase()}`}
-            >
-              <l.icon className="h-4 w-4" />
-              {l.label}
-            </NavLink>
-          ))}
-        </aside>
+      <div className="mt-6 lg:mt-0 lg:grid lg:grid-cols-[220px_1fr] lg:items-start lg:gap-8">
+        <div className="panel-rail no-scrollbar">
+          <div className="hidden lg:block">
+            <h1 className="font-heading text-3xl font-bold sm:text-4xl">Admin panel</h1>
+            <p className="mt-2 text-sm text-[#4A4A4A]">Manage products, orders, and store operations</p>
+          </div>
 
-        <div>
+          <aside className="panel-nav-mobile no-scrollbar mt-0 pb-1 lg:mt-6">
+            {adminLinks.map((l) => (
+              <NavLink
+                key={l.to}
+                to={l.to}
+                end={l.end}
+                className={({ isActive }) =>
+                  `flex shrink-0 items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors lg:gap-3 ${
+                    isActive ? "bg-[#1B4332] text-white" : "text-[#4A4A4A] hover:bg-gray-50"
+                  }`
+                }
+                data-testid={`admin-nav-${l.label.toLowerCase()}`}
+              >
+                <l.icon className="h-4 w-4" />
+                {l.label}
+              </NavLink>
+            ))}
+          </aside>
+        </div>
+
+        <div className="min-w-0 mt-6 lg:mt-0">
           <Routes>
             <Route index element={<Dashboard />} />
             <Route path="analytics" element={<Analytics />} />
             <Route path="products" element={<ProductsAdmin />} />
             <Route path="orders" element={<OrdersAdmin />} />
             <Route path="vendors" element={<VendorsAdmin />} />
+            <Route path="pricing" element={<AdminPricing />} />
+            <Route path="payouts" element={<AdminPayouts />} />
             <Route path="delivery" element={<DeliveryAdmin />} />
             <Route path="coupons" element={<CouponsAdmin />} />
+            <Route path="offers" element={<OffersAdmin />} />
             <Route path="customers" element={<Customers />} />
             <Route path="categories" element={<Categories />} />
             <Route path="*" element={<Navigate to="/admin" replace />} />
@@ -109,17 +131,52 @@ export default function Admin() {
 /* ================= DASHBOARD ================= */
 function Dashboard() {
   const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  useEffect(() => {
-    api.get("/admin/dashboard").then(({ data }) => setData(data)).catch(() => {});
+  const load = useCallback(() => {
+    setLoading(true);
+    setError("");
+
+    api
+      .get("/admin/dashboard")
+      .then(({ data: dashboard }) => {
+        setData(dashboard);
+      })
+      .catch((err) => {
+        setData(null);
+        setError(formatApiError(err, "Unable to load admin dashboard."));
+      })
+      .finally(() => {
+        setLoading(false);
+      });
   }, []);
 
-  if (!data) {
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  if (loading) {
     return (
       <div className="flex min-h-[300px] items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-[#1B4332]" />
       </div>
     );
+  }
+
+  if (error) {
+    return (
+      <div className="card-base p-8 text-center" data-testid="dashboard-error">
+        <p className="text-sm text-red-700">{error}</p>
+        <button type="button" onClick={load} className="btn-primary mt-4">
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  if (!data) {
+    return null;
   }
 
   const stats = [
@@ -131,6 +188,61 @@ function Dashboard() {
 
   return (
     <div className="space-y-8" data-testid="dashboard">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="font-heading text-2xl font-semibold">Overview</h2>
+        <ExportMenu
+          exports={[
+            {
+              label: "Dashboard summary",
+              filename: "dashboard-summary.csv",
+              title: "Dashboard Summary",
+              rows: [
+                { metric: "Revenue (delivered)", value: data.revenue },
+                { metric: "Total orders", value: data.total_orders },
+                { metric: "Approved vendors", value: data.total_vendors ?? 0 },
+                { metric: "Customers", value: data.total_users },
+                { metric: "Pending vendors", value: data.pending_vendors ?? 0 },
+                { metric: "Pending products", value: data.pending_products ?? 0 },
+              ],
+              columns: [
+                { key: "metric", label: "Metric" },
+                { key: "value", label: "Value" },
+              ],
+            },
+            {
+              label: "Low stock",
+              filename: "low-stock.csv",
+              title: "Low Stock Products",
+              rows: data.low_stock,
+              columns: [
+                { key: "name", label: "Product" },
+                { key: "unit", label: "Unit" },
+                { key: "stock", label: "Stock" },
+              ],
+            },
+            {
+              label: "Recent orders",
+              filename: "recent-orders.csv",
+              title: "Recent Orders",
+              rows: data.recent_orders.map((o) => ({
+                id: o.id,
+                customer: o.user_name,
+                total: o.total,
+                status: o.status,
+                items: o.items?.length ?? 0,
+              })),
+              columns: [
+                { key: "id", label: "Order ID" },
+                { key: "customer", label: "Customer" },
+                { key: "total", label: "Total" },
+                { key: "status", label: "Status" },
+                { key: "items", label: "Items" },
+              ],
+            },
+          ]}
+        />
+      </div>
+
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {stats.map((s) => (
           <div key={s.label} className="card-base p-5">
@@ -272,23 +384,52 @@ function ProductsAdmin() {
 
   return (
     <div data-testid="products-admin">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="font-heading text-2xl font-semibold">Products ({products.length})</h2>
           <p className="mt-1 text-xs text-[#4A4A4A]">
             Manage pricing, variants, MRP and product commission.
           </p>
         </div>
-        <button
-          onClick={() => {
-            setEditing(null);
-            setShowForm(true);
-          }}
-          className="btn-primary"
-          data-testid="admin-add-product"
-        >
-          <Plus className="h-4 w-4" /> Add product
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <ExportMenu
+            filename="products.csv"
+            rows={products.map((p) => ({
+              name: p.name,
+              slug: p.slug,
+              vendor: p.vendor_name || "Store",
+              price: p.price,
+              mrp: p.mrp ?? "",
+              stock: p.stock,
+              category: p.category_slug,
+              approval: p.approval_status || "approved",
+              commission_type: p.commission_type || "MRP",
+              commission_value: p.commission_value ?? 0,
+            }))}
+            columns={[
+              { key: "name", label: "Name" },
+              { key: "slug", label: "Slug" },
+              { key: "vendor", label: "Vendor" },
+              { key: "price", label: "Price" },
+              { key: "mrp", label: "MRP" },
+              { key: "stock", label: "Stock" },
+              { key: "category", label: "Category" },
+              { key: "approval", label: "Approval" },
+              { key: "commission_type", label: "Commission Type" },
+              { key: "commission_value", label: "Commission Value" },
+            ]}
+          />
+          <button
+            onClick={() => {
+              setEditing(null);
+              setShowForm(true);
+            }}
+            className="btn-primary"
+            data-testid="admin-add-product"
+          >
+            <Plus className="h-4 w-4" /> Add product
+          </button>
+        </div>
       </div>
 
       <div className="card-base overflow-hidden">
@@ -470,6 +611,11 @@ function ProductForm({ initial, categories, onClose, onSaved }) {
       return;
     }
 
+    if (!String(form.image || "").trim()) {
+      toast.error("Product image is required.");
+      return;
+    }
+
     setSaving(true);
     try {
       const payload = {
@@ -540,7 +686,13 @@ function ProductForm({ initial, categories, onClose, onSaved }) {
           </div>
 
           <div className="sm:col-span-2">
-            <FField label="Image URL" value={form.image} onChange={(v) => update("image", v)} required data-testid="product-image" />
+            <ImageSourcePicker
+              label="Product image"
+              value={form.image}
+              onChange={(v) => update("image", v)}
+              required
+              testIdPrefix="product-image"
+            />
           </div>
 
           <FField label="Stock" type="number" min="0" step="1" value={form.stock} onChange={(v) => update("stock", v)} required data-testid="product-stock" />
@@ -669,47 +821,67 @@ function OrdersAdmin() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [o, d] = await Promise.all([
-      api.get(`/admin/orders${filter ? `?status=${encodeURIComponent(filter)}` : ""}`),
-      api.get("/admin/delivery-partners"),
-    ]);
-    setOrders(o.data);
-    setDps(d.data.filter((x) => x.active));
-    setLoading(false);
+    try {
+      const [o, d] = await Promise.all([
+        api.get(`/admin/orders${filter ? `?status_filter=${encodeURIComponent(filter)}` : ""}`),
+        api.get("/admin/delivery-partners"),
+      ]);
+      setOrders(o.data);
+      setDps(d.data.filter((x) => x.active));
+    } catch (e) {
+      toast.error(formatApiError(e, "Unable to load orders."));
+    } finally {
+      setLoading(false);
+    }
   }, [filter]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  // Poll for new pending orders every 15s and play alert on new arrivals
+  // Poll for new pending orders and refresh the list every 15s
   useEffect(() => {
     let cancelled = false;
+    let initialized = Boolean(lastSeenIdRef.current);
+
     const check = async () => {
       try {
         const { data } = await api.get("/admin/orders/pending-count");
-        if (cancelled || !data.latest_id) return;
-        if (lastSeenIdRef.current && data.latest_id !== lastSeenIdRef.current) {
-          if (!alertMuted) {
-            playAlert();
-            toast.success(`New order received! ${data.count} pending`, { duration: 6000 });
-            // Browser notification (works when tab is in background)
-            if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-              try {
-                new Notification("Ambajogai — New order", {
-                  body: `You have ${data.count} pending order${data.count === 1 ? "" : "s"}. Tap to review.`,
-                  tag: "ambajogai-new-order",
-                  icon: "/favicon.ico",
-                });
-              } catch { /* ignore */ }
+        if (cancelled) return;
+
+        if (data.latest_id) {
+          const isNewPending =
+            initialized &&
+            lastSeenIdRef.current &&
+            data.latest_id !== lastSeenIdRef.current;
+
+          if (isNewPending) {
+            if (!alertMuted) {
+              playAlert();
+              toast.success(`New order received! ${data.count} pending`, { duration: 6000 });
+              if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+                try {
+                  new Notification("Ambajogai — New order", {
+                    body: `You have ${data.count} pending order${data.count === 1 ? "" : "s"}. Tap to review.`,
+                    tag: "ambajogai-new-order",
+                    icon: "/favicon.ico",
+                  });
+                } catch { /* ignore */ }
+              }
             }
           }
-          load();
+
+          lastSeenIdRef.current = data.latest_id;
+          localStorage.setItem("admin_last_seen_order_id", data.latest_id);
+          initialized = true;
         }
-        lastSeenIdRef.current = data.latest_id;
-        localStorage.setItem("admin_last_seen_order_id", data.latest_id);
       } catch { /* silent */ }
+
+      if (!cancelled) {
+        load();
+      }
     };
+
     check();
     const t = setInterval(check, 15000);
     return () => { cancelled = true; clearInterval(t); };
@@ -780,7 +952,34 @@ function OrdersAdmin() {
     <div data-testid="orders-admin">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h2 className="font-heading text-2xl font-semibold">Orders</h2>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <ExportMenu
+            filename="orders.csv"
+            rows={orders.map((o) => ({
+              id: o.id,
+              customer: o.user_name,
+              phone: o.address?.phone ?? "",
+              address: [o.address?.line1, o.address?.area, o.address?.city, o.address?.pincode].filter(Boolean).join(", "),
+              total: o.total,
+              status: o.status,
+              payment: o.payment_method,
+              delivery_partner: o.delivery_partner_name || "",
+              items: o.items?.length ?? 0,
+              created_at: o.created_at,
+            }))}
+            columns={[
+              { key: "id", label: "Order ID" },
+              { key: "customer", label: "Customer" },
+              { key: "phone", label: "Phone" },
+              { key: "address", label: "Address" },
+              { key: "total", label: "Total" },
+              { key: "status", label: "Status" },
+              { key: "payment", label: "Payment" },
+              { key: "delivery_partner", label: "Delivery Partner" },
+              { key: "items", label: "Items" },
+              { key: "created_at", label: "Created At" },
+            ]}
+          />
           <button
             onClick={toggleMute}
             className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
@@ -910,7 +1109,24 @@ function Customers() {
 
   return (
     <div data-testid="customers-admin">
-      <h2 className="mb-6 font-heading text-2xl font-semibold">Customers ({customers.length})</h2>
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="font-heading text-2xl font-semibold">Customers ({customers.length})</h2>
+        <ExportMenu
+          filename="customers.csv"
+          rows={customers.map((c) => ({
+            name: c.name,
+            email: c.email,
+            phone: c.phone || "",
+            joined: c.created_at ? new Date(c.created_at).toLocaleDateString("en-IN") : "",
+          }))}
+          columns={[
+            { key: "name", label: "Name" },
+            { key: "email", label: "Email" },
+            { key: "phone", label: "Phone" },
+            { key: "joined", label: "Joined" },
+          ]}
+        />
+      </div>
       <div className="card-base overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-left text-xs uppercase tracking-wider text-[#4A4A4A]">
@@ -944,8 +1160,8 @@ function Categories() {
   const [cats, setCats] = useState([]);
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState({ name: "", slug: "", image: "", description: "" });
+  const [editing, setEditing] = useState(null);
   const [showForm, setShowForm] = useState(false);
-  const [uploading, setUploading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -956,33 +1172,36 @@ function Categories() {
 
   useEffect(() => { load(); }, [load]);
 
-  const uploadImage = async (file) => {
-    if (!file) return;
-    const fd = new FormData();
-    fd.append("file", file);
-    try {
-      setUploading(true);
-      const res = await api.post("/upload/image", fd, { headers: { "Content-Type": "multipart/form-data" } });
-      setForm((f) => ({ ...f, image: res.data.url }));
-      toast.success("Image uploaded");
-    } catch (e) {
-      toast.error(formatApiError(e) || "Image upload failed");
-    } finally {
-      setUploading(false);
-    }
-  };
-
   const save = async (e) => {
     e.preventDefault();
     try {
-      await api.post("/categories", { ...form, slug: form.slug || slugify(form.name) });
-      toast.success("Category created");
+      const payload = { ...form, slug: form.slug || slugify(form.name) };
+      if (editing) {
+        await api.put(`/categories/${editing.id}`, payload);
+        toast.success("Category updated");
+      } else {
+        await api.post("/categories", payload);
+        toast.success("Category created");
+      }
       setForm({ name: "", slug: "", image: "", description: "" });
+      setEditing(null);
       setShowForm(false);
       load();
     } catch (e) {
       toast.error(formatApiError(e));
     }
+  };
+
+  const startEdit = (c) => {
+    setEditing(c);
+    setForm({ name: c.name, slug: c.slug, image: c.image || "", description: c.description || "" });
+    setShowForm(true);
+  };
+
+  const cancelForm = () => {
+    setShowForm(false);
+    setEditing(null);
+    setForm({ name: "", slug: "", image: "", description: "" });
   };
 
   const del = async (id) => {
@@ -995,36 +1214,51 @@ function Categories() {
 
   return (
     <div data-testid="categories-admin">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h2 className="font-heading text-2xl font-semibold">Categories ({cats.length})</h2>
-        <button onClick={() => setShowForm((v) => !v)} className="btn-primary" data-testid="new-category">
-          <Plus className="h-4 w-4" /> Add category
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <ExportMenu
+            filename="categories.csv"
+            rows={cats}
+            columns={[
+              { key: "name", label: "Name" },
+              { key: "slug", label: "Slug" },
+              { key: "description", label: "Description" },
+              { key: "image", label: "Image URL" },
+            ]}
+          />
+          <button
+            onClick={() => {
+              setEditing(null);
+              setForm({ name: "", slug: "", image: "", description: "" });
+              setShowForm((v) => !v);
+            }}
+            className="btn-primary"
+            data-testid="new-category"
+          >
+            <Plus className="h-4 w-4" /> Add category
+          </button>
+        </div>
       </div>
 
       {showForm && (
         <form onSubmit={save} className="card-base mb-6 grid gap-4 p-6 sm:grid-cols-2">
+          <p className="sm:col-span-2 text-sm font-semibold text-[#1B4332]">
+            {editing ? "Edit category" : "New category"}
+          </p>
           <FField label="Name" value={form.name} onChange={(v) => setForm({ ...form, name: v })} required data-testid="category-name" />
           <FField label="Slug" value={form.slug} onChange={(v) => setForm({ ...form, slug: v })} placeholder="auto from name" data-testid="category-slug" />
           <div className="sm:col-span-2">
-            <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Category image</label>
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(e) => uploadImage(e.target.files?.[0])}
-              className="input-base"
-              data-testid="category-image-file"
+            <ImageSourcePicker
+              label="Category image"
+              value={form.image}
+              onChange={(v) => setForm({ ...form, image: v })}
+              testIdPrefix="category-image"
             />
-            {uploading && <p className="mt-2 text-xs text-[#1B4332]">Uploading image…</p>}
-            {form.image && (
-              <img src={form.image} alt="Preview" className="mt-3 h-24 w-24 rounded-lg object-cover" data-testid="category-image-preview" />
-            )}
-            <div className="mt-2">
-              <FField label="Or paste image URL" value={form.image} onChange={(v) => setForm({ ...form, image: v })} placeholder="https://…" data-testid="category-image-url" />
-            </div>
           </div>
-          <div className="sm:col-span-2 flex justify-end">
-            <button className="btn-primary" data-testid="save-category">Save</button>
+          <div className="sm:col-span-2 flex justify-end gap-3">
+            <button type="button" onClick={cancelForm} className="btn-secondary">Cancel</button>
+            <button className="btn-primary" data-testid="save-category">{editing ? "Update" : "Save"}</button>
           </div>
         </form>
       )}
@@ -1037,6 +1271,9 @@ function Categories() {
               <div className="font-semibold">{c.name}</div>
               <div className="text-xs text-[#4A4A4A]">{c.slug}</div>
             </div>
+            <button onClick={() => startEdit(c)} className="text-[#1B4332] hover:text-[#E07A5F]" aria-label="Edit category">
+              <Pencil className="h-4 w-4" />
+            </button>
             <button onClick={() => del(c.id)} className="text-red-600 hover:text-red-800">
               <Trash2 className="h-4 w-4" />
             </button>
@@ -1077,12 +1314,37 @@ function VendorsAdmin() {
 
   return (
     <div data-testid="vendors-admin">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h2 className="font-heading text-2xl font-semibold">Vendors ({vendors.length})</h2>
-        <select value={filter} onChange={(e) => setFilter(e.target.value)} className="input-base w-48">
-          <option value="">All statuses</option>
-          {["Pending", "Approved", "Rejected", "Suspended"].map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
+        <div className="flex flex-wrap items-center gap-2">
+          <ExportMenu
+            filename="vendors.csv"
+            rows={vendors.map((v) => ({
+              business_name: v.business_name,
+              owner_name: v.owner_name,
+              email: v.owner_email,
+              phone: v.phone,
+              status: v.status,
+              commission_pct: v.commission_pct ?? 10,
+              pincode: v.business_pincode,
+              address: v.business_address,
+            }))}
+            columns={[
+              { key: "business_name", label: "Business" },
+              { key: "owner_name", label: "Owner" },
+              { key: "email", label: "Email" },
+              { key: "phone", label: "Phone" },
+              { key: "status", label: "Status" },
+              { key: "commission_pct", label: "Commission %" },
+              { key: "pincode", label: "Pincode" },
+              { key: "address", label: "Address" },
+            ]}
+          />
+          <select value={filter} onChange={(e) => setFilter(e.target.value)} className="input-base w-48">
+            <option value="">All statuses</option>
+            {["Pending", "Under Review", "Approved", "Rejected", "Suspended", "Blocked"].map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
       </div>
 
       {vendors.length === 0 ? (
@@ -1205,7 +1467,10 @@ function CouponsAdmin() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
   const [f, setF] = useState({ code: "", discount_pct: 10, min_amount: 0, active: true, expires_at: "" });
+
+  const emptyForm = { code: "", discount_pct: 10, min_amount: 0, active: true, expires_at: "" };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1215,19 +1480,58 @@ function CouponsAdmin() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
+  const openCreate = () => {
+    setEditing(null);
+    setF(emptyForm);
+    setShowForm(true);
+  };
+
+  const openEdit = (c) => {
+    setEditing(c);
+    setF({
+      code: c.code,
+      discount_pct: c.discount_pct,
+      min_amount: c.min_amount || 0,
+      active: !!c.active,
+      expires_at: c.expires_at ? c.expires_at.slice(0, 10) : "",
+    });
+    setShowForm(true);
+  };
+
   const save = async (e) => {
     e.preventDefault();
     try {
-      await api.post("/admin/coupons", {
+      const payload = {
         code: f.code.trim(),
         discount_pct: Number(f.discount_pct),
         min_amount: Number(f.min_amount),
         active: !!f.active,
         expires_at: f.expires_at ? new Date(f.expires_at).toISOString() : null,
-      });
-      toast.success("Coupon created");
+      };
+      if (editing) {
+        await api.put(`/admin/coupons/${editing.id}`, payload);
+        toast.success("Coupon updated");
+      } else {
+        await api.post("/admin/coupons", payload);
+        toast.success("Coupon created");
+      }
       setShowForm(false);
-      setF({ code: "", discount_pct: 10, min_amount: 0, active: true, expires_at: "" });
+      setEditing(null);
+      setF(emptyForm);
+      load();
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  const toggleActive = async (c) => {
+    try {
+      await api.put(`/admin/coupons/${c.id}`, {
+        code: c.code,
+        discount_pct: c.discount_pct,
+        min_amount: c.min_amount || 0,
+        active: !c.active,
+        expires_at: c.expires_at || null,
+      });
+      toast.success(c.active ? "Coupon deactivated" : "Coupon activated");
       load();
     } catch (e) { toast.error(formatApiError(e)); }
   };
@@ -1242,15 +1546,37 @@ function CouponsAdmin() {
 
   return (
     <div data-testid="coupons-admin">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h2 className="font-heading text-2xl font-semibold">Coupons ({items.length})</h2>
-        <button onClick={() => setShowForm((v) => !v)} className="btn-primary" data-testid="new-coupon">
-          <Plus className="h-4 w-4" /> New coupon
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <ExportMenu
+            filename="coupons.csv"
+            rows={items.map((c) => ({
+              code: c.code,
+              discount_pct: c.discount_pct,
+              min_amount: c.min_amount || 0,
+              active: c.active ? "Yes" : "No",
+              expires_at: c.expires_at ? new Date(c.expires_at).toLocaleDateString("en-IN") : "",
+            }))}
+            columns={[
+              { key: "code", label: "Code" },
+              { key: "discount_pct", label: "Discount %" },
+              { key: "min_amount", label: "Min Order" },
+              { key: "active", label: "Active" },
+              { key: "expires_at", label: "Expires" },
+            ]}
+          />
+          <button onClick={openCreate} className="btn-primary" data-testid="new-coupon">
+            <Plus className="h-4 w-4" /> New coupon
+          </button>
+        </div>
       </div>
 
       {showForm && (
         <form onSubmit={save} className="card-base mb-6 grid gap-4 p-6 sm:grid-cols-2">
+          <p className="sm:col-span-2 text-sm font-semibold text-[#1B4332]">
+            {editing ? `Edit coupon · ${editing.code}` : "New coupon"}
+          </p>
           <div>
             <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Code</label>
             <input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value.toUpperCase() })} required className="input-base" data-testid="coupon-code" placeholder="WELCOME10" />
@@ -1271,8 +1597,9 @@ function CouponsAdmin() {
             <input type="checkbox" checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} />
             Active
           </label>
-          <div className="sm:col-span-2 flex justify-end">
-            <button className="btn-primary" data-testid="save-coupon">Save</button>
+          <div className="sm:col-span-2 flex justify-end gap-3">
+            <button type="button" onClick={() => { setShowForm(false); setEditing(null); }} className="btn-secondary">Cancel</button>
+            <button className="btn-primary" data-testid="save-coupon">{editing ? "Update" : "Save"}</button>
           </div>
         </form>
       )}
@@ -1305,6 +1632,12 @@ function CouponsAdmin() {
                     {c.active ? <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700">Yes</span> : <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs">No</span>}
                   </td>
                   <td className="px-4 py-3 text-right">
+                    <button onClick={() => openEdit(c)} className="mr-2 inline-grid h-8 w-8 place-items-center rounded-full text-[#1B4332] hover:bg-gray-100" aria-label="Edit coupon">
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button onClick={() => toggleActive(c)} className="mr-2 rounded-full border border-[#1B4332] px-2 py-0.5 text-xs font-semibold text-[#1B4332] hover:bg-[#1B4332]/10">
+                      {c.active ? "Deactivate" : "Activate"}
+                    </button>
                     <button onClick={() => del(c.id)} className="text-red-600 hover:text-red-800">
                       <Trash2 className="h-4 w-4" />
                     </button>
@@ -1342,13 +1675,71 @@ function Analytics() {
 
   return (
     <div className="space-y-8" data-testid="admin-analytics">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="font-heading text-2xl font-semibold">Sales analytics</h2>
-        <select value={days} onChange={(e) => setDays(Number(e.target.value))} className="input-base w-40 text-sm">
-          <option value={7}>Last 7 days</option>
-          <option value={14}>Last 14 days</option>
-          <option value={30}>Last 30 days</option>
-        </select>
+        <div className="flex flex-wrap items-center gap-2">
+          <ExportMenu
+            testId="analytics-export"
+            exports={[
+              {
+                label: "Daily trend",
+                filename: "analytics-daily-trend.csv",
+                title: "Daily Revenue Trend",
+                rows: data.daily_trend,
+                columns: [
+                  { key: "date", label: "Date" },
+                  { key: "revenue", label: "Revenue" },
+                  { key: "orders", label: "Orders" },
+                ],
+              },
+              {
+                label: "Top vendors",
+                filename: "analytics-top-vendors.csv",
+                title: "Top Vendors",
+                rows: data.top_vendors,
+                columns: [
+                  { key: "vendor_name", label: "Vendor" },
+                  { key: "gross", label: "Gross" },
+                  { key: "commission", label: "Commission" },
+                  { key: "net_payout", label: "Net Payout" },
+                  { key: "delivered_items", label: "Items" },
+                ],
+              },
+              {
+                label: "Top products",
+                filename: "analytics-top-products.csv",
+                title: "Top Products",
+                rows: data.top_products,
+                columns: [
+                  { key: "name", label: "Product" },
+                  { key: "qty", label: "Qty Sold" },
+                  { key: "revenue", label: "Revenue" },
+                ],
+              },
+              {
+                label: "Vendor performance",
+                filename: "vendor-performance.csv",
+                title: "Vendor Performance",
+                rows: perf,
+                columns: [
+                  { key: "business_name", label: "Vendor" },
+                  { key: "avg_rating", label: "Rating" },
+                  { key: "total_orders", label: "Orders" },
+                  { key: "delivered_orders", label: "Delivered" },
+                  { key: "cancelled_orders", label: "Cancelled" },
+                  { key: "completion_rate", label: "Completion %" },
+                  { key: "gross_sales", label: "Gross Sales" },
+                  { key: "commission_pct", label: "Commission %" },
+                ],
+              },
+            ]}
+          />
+          <select value={days} onChange={(e) => setDays(Number(e.target.value))} className="input-base w-40 text-sm">
+            <option value={7}>Last 7 days</option>
+            <option value={14}>Last 14 days</option>
+            <option value={30}>Last 30 days</option>
+          </select>
+        </div>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -1523,11 +1914,30 @@ function DeliveryAdmin() {
 
   return (
     <div data-testid="delivery-admin">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h2 className="font-heading text-2xl font-semibold">Delivery boys ({list.length})</h2>
-        <button onClick={() => setShowForm((v) => !v)} className="btn-primary" data-testid="new-delivery-boy">
-          <Plus className="h-4 w-4" /> Add delivery boy
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <ExportMenu
+            filename="delivery-partners.csv"
+            rows={list.map((d) => ({
+              name: d.name,
+              email: d.email,
+              phone: d.phone,
+              vehicle: d.vehicle || "",
+              active: d.active ? "Yes" : "No",
+            }))}
+            columns={[
+              { key: "name", label: "Name" },
+              { key: "email", label: "Email" },
+              { key: "phone", label: "Phone" },
+              { key: "vehicle", label: "Vehicle" },
+              { key: "active", label: "Active" },
+            ]}
+          />
+          <button onClick={() => setShowForm((v) => !v)} className="btn-primary" data-testid="new-delivery-boy">
+            <Plus className="h-4 w-4" /> Add delivery boy
+          </button>
+        </div>
       </div>
 
       {showForm && (
@@ -1589,3 +1999,243 @@ function DeliveryAdmin() {
   );
 }
 
+/* ================= OFFERS ADMIN ================= */
+const OFFER_COLORS = [
+  { label: "Forest green", value: "#1B4332" },
+  { label: "Coral", value: "#E07A5F" },
+  { label: "Sage", value: "#8BA888" },
+  { label: "Amber", value: "#F4A261" },
+  { label: "Navy", value: "#1D3557" },
+  { label: "Plum", value: "#6D4C7D" },
+];
+
+function OffersAdmin() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [f, setF] = useState({
+    title: "",
+    subtitle: "",
+    bg_color: "#1B4332",
+    link: "",
+    active: true,
+    sort_order: 0,
+  });
+
+  const emptyForm = {
+    title: "",
+    subtitle: "",
+    bg_color: "#1B4332",
+    link: "",
+    active: true,
+    sort_order: 0,
+  };
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data } = await api.get("/admin/offers");
+      setItems(data);
+    } catch (e) {
+      toast.error(formatApiError(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const openCreate = () => {
+    setEditing(null);
+    setF({ ...emptyForm, sort_order: items.length });
+    setShowForm(true);
+  };
+
+  const openEdit = (o) => {
+    setEditing(o);
+    setF({
+      title: o.title,
+      subtitle: o.subtitle || "",
+      bg_color: o.bg_color || "#1B4332",
+      link: o.link || "",
+      active: !!o.active,
+      sort_order: o.sort_order ?? 0,
+    });
+    setShowForm(true);
+  };
+
+  const save = async (e) => {
+    e.preventDefault();
+    if (!f.title.trim()) {
+      toast.error("Title is required");
+      return;
+    }
+    try {
+      const payload = {
+        title: f.title.trim(),
+        subtitle: f.subtitle.trim(),
+        bg_color: f.bg_color,
+        link: f.link.trim() || null,
+        active: !!f.active,
+        sort_order: Number(f.sort_order) || 0,
+      };
+      if (editing) {
+        await api.put(`/admin/offers/${editing.id}`, payload);
+        toast.success("Offer updated");
+      } else {
+        await api.post("/admin/offers", payload);
+        toast.success("Offer created");
+      }
+      setShowForm(false);
+      setEditing(null);
+      setF(emptyForm);
+      load();
+    } catch (e) {
+      toast.error(formatApiError(e));
+    }
+  };
+
+  const toggleActive = async (o) => {
+    try {
+      await api.put(`/admin/offers/${o.id}`, {
+        title: o.title,
+        subtitle: o.subtitle || "",
+        bg_color: o.bg_color || "#1B4332",
+        link: o.link || null,
+        active: !o.active,
+        sort_order: o.sort_order ?? 0,
+      });
+      toast.success(o.active ? "Offer hidden from homepage" : "Offer published");
+      load();
+    } catch (e) {
+      toast.error(formatApiError(e));
+    }
+  };
+
+  const del = async (id) => {
+    if (!window.confirm("Delete this offer?")) return;
+    try {
+      await api.delete(`/admin/offers/${id}`);
+      toast.success("Offer deleted");
+      load();
+    } catch (e) {
+      toast.error(formatApiError(e));
+    }
+  };
+
+  if (loading) return <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#1B4332]" />;
+
+  return (
+    <div data-testid="offers-admin">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="font-heading text-2xl font-semibold">Homepage offers ({items.length})</h2>
+          <p className="mt-1 text-xs text-[#4A4A4A]">
+            Control promotional banners shown on the homepage. Active offers appear in order.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <ExportMenu
+            filename="offers.csv"
+            rows={items.map((o) => ({
+              title: o.title,
+              subtitle: o.subtitle,
+              bg_color: o.bg_color,
+              link: o.link || "",
+              active: o.active ? "Yes" : "No",
+              sort_order: o.sort_order ?? 0,
+            }))}
+            columns={[
+              { key: "title", label: "Title" },
+              { key: "subtitle", label: "Subtitle" },
+              { key: "bg_color", label: "Background" },
+              { key: "link", label: "Link" },
+              { key: "active", label: "Active" },
+              { key: "sort_order", label: "Sort Order" },
+            ]}
+          />
+          <button onClick={openCreate} className="btn-primary" data-testid="new-offer">
+            <Plus className="h-4 w-4" /> New offer
+          </button>
+        </div>
+      </div>
+
+      {showForm && (
+        <form onSubmit={save} className="card-base mb-6 grid gap-4 p-6 sm:grid-cols-2">
+          <p className="sm:col-span-2 text-sm font-semibold text-[#1B4332]">
+            {editing ? "Edit offer" : "New offer"}
+          </p>
+          <FField label="Title" value={f.title} onChange={(v) => setF({ ...f, title: v })} required placeholder="10% off" data-testid="offer-title" />
+          <FField label="Subtitle" value={f.subtitle} onChange={(v) => setF({ ...f, subtitle: v })} placeholder="on your first order" data-testid="offer-subtitle" />
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Banner color</label>
+            <select value={f.bg_color} onChange={(e) => setF({ ...f, bg_color: e.target.value })} className="input-base" data-testid="offer-color">
+              {OFFER_COLORS.map((c) => (
+                <option key={c.value} value={c.value}>{c.label}</option>
+              ))}
+            </select>
+          </div>
+          <FField label="Sort order" type="number" min="0" value={f.sort_order} onChange={(v) => setF({ ...f, sort_order: v })} data-testid="offer-sort" />
+          <div className="sm:col-span-2">
+            <FField label="Link (optional)" value={f.link} onChange={(v) => setF({ ...f, link: v })} placeholder="/products or https://…" data-testid="offer-link" />
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} />
+            Active (visible on homepage)
+          </label>
+          <div className="sm:col-span-2 rounded-2xl p-5 text-white" style={{ backgroundColor: f.bg_color }}>
+            <div className="font-heading text-xl font-bold">{f.title || "Preview title"}</div>
+            <div className="mt-1 text-sm opacity-90">{f.subtitle || "Preview subtitle"}</div>
+          </div>
+          <div className="sm:col-span-2 flex justify-end gap-3">
+            <button type="button" onClick={() => { setShowForm(false); setEditing(null); }} className="btn-secondary">Cancel</button>
+            <button className="btn-primary" data-testid="save-offer">{editing ? "Update offer" : "Create offer"}</button>
+          </div>
+        </form>
+      )}
+
+      {items.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-[#E5E5E5] p-10 text-center text-[#4A4A4A]">
+          No offers yet. Create one to show on the homepage.
+        </div>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {items.map((o) => (
+            <div key={o.id} className="card-base overflow-hidden" data-testid={`offer-card-${o.id}`}>
+              <div className="p-5 text-white" style={{ backgroundColor: o.bg_color || "#1B4332" }}>
+                <div className="font-heading text-xl font-bold">{o.title}</div>
+                <div className="mt-1 text-sm opacity-90">{o.subtitle}</div>
+              </div>
+              <div className="space-y-2 p-4 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-[#4A4A4A]">Status</span>
+                  {o.active ? (
+                    <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700">Active</span>
+                  ) : (
+                    <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-600">Hidden</span>
+                  )}
+                </div>
+                {o.link && (
+                  <div className="truncate text-xs text-[#4A4A4A]">Link: {o.link}</div>
+                )}
+                <div className="text-xs text-[#4A4A4A]">Order: {o.sort_order ?? 0}</div>
+                <div className="flex flex-wrap gap-2 pt-2">
+                  <button onClick={() => openEdit(o)} className="inline-flex items-center gap-1 rounded-full border border-[#1B4332] px-3 py-1 text-xs font-semibold text-[#1B4332] hover:bg-[#1B4332]/10">
+                    <Pencil className="h-3 w-3" /> Edit
+                  </button>
+                  <button onClick={() => toggleActive(o)} className="rounded-full border border-gray-300 px-3 py-1 text-xs font-semibold text-[#4A4A4A] hover:bg-gray-50">
+                    {o.active ? "Hide" : "Publish"}
+                  </button>
+                  <button onClick={() => del(o.id)} className="inline-flex items-center gap-1 rounded-full border border-red-200 px-3 py-1 text-xs font-semibold text-red-600 hover:bg-red-50">
+                    <Trash2 className="h-3 w-3" /> Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

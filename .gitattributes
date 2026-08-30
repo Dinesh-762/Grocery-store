@@ -1,0 +1,35 @@
+# Normalize line endings to LF across the repo (works on Windows, macOS, Linux).
+* text=auto eol=lf
+
+# Shell scripts
+*.sh text eol=lf
+
+# Windows-native scripts
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.tar binary
+*.tgz binary
+*.jar binary
+*.exe binary
+*.dll binary
+*.dylib binary
+*.deb binary
+*.pack binary
+*.mdmp binary
+*.pdb binary

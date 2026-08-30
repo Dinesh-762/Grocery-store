@@ -25,7 +25,7 @@ export default function Legal({ type }) {
               </Section>
               <Section title="4. Your rights">
                 You may request access, correction or deletion of your data by contacting us at
-                contact us at ambajogaigrocerystores@gmail.com.
+                ambajogaigrocerystores@gmail.com.
               </Section>
             </>
           ) : (

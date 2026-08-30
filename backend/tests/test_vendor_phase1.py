@@ -315,7 +315,7 @@ class TestVendorPhase1Flow:
         assert rows, "vendor cannot see order containing its item"
         o = rows[0]
         assert all(i["vendor_id"] == state["vendor_id"] for i in o["items"])
-        assert o["my_subtotal"] == round(sum(i["price"] * i["quantity"] for i in o["items"]), 2)
+        assert o["my_subtotal"] == round(sum(i.get("line_total", i["price"] * i["quantity"]) for i in o["items"]), 2)
         assert o["my_status"] == "Pending"
         assert o["overall_status"] == "Pending"
 
