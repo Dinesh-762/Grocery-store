@@ -1,13 +1,21 @@
-from dotenv import load_dotenv
+﻿from dotenv import load_dotenv
 from pathlib import Path
 
 import math
-ROOT_DIR = Path(__file__).parent
-UPLOAD_DIR = ROOT_DIR / "uploads"
-UPLOAD_DIR.mkdir(exist_ok=True)
-load_dotenv(ROOT_DIR / ".env")
-
 import os
+
+ROOT_DIR = Path(__file__).parent
+
+# Vercel's deployment filesystem is read-only.
+# Use /tmp for temporary uploads in the serverless environment.
+if os.getenv("VERCEL"):
+    UPLOAD_DIR = Path("/tmp/uploads")
+else:
+    UPLOAD_DIR = ROOT_DIR / "uploads"
+
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+load_dotenv(ROOT_DIR / ".env")
 import logging
 import uuid
 import re
@@ -3281,3 +3289,4 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     client.close()
+
