@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, formatINR, formatApiError } from "@/lib/api";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
@@ -10,15 +10,15 @@ export default function AdminPayouts() {
   const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(true);
 
-  const load = () => {
+  const load = useCallback(() => {
     setLoading(true);
     api.get("/admin/payouts", { params: filter ? { status: filter } : {} })
       .then(({ data }) => setPayouts(data))
       .catch(() => {})
       .finally(() => setLoading(false));
-  };
+  },[filter]);
 
-  useEffect(() => { load(); }, [filter]);
+  useEffect(() => { load(); }, [load]);
 
   const updateStatus = async (id, status) => {
     const payload = { status };
