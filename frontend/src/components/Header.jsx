@@ -1,4 +1,4 @@
-﻿import { Link, NavLink, useNavigate, useLocation } from "react-router-dom";
+import { Link, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { ShoppingCart, User, Search, Menu, X, LogOut, LayoutDashboard, Package, Leaf, Store, Truck, UserCircle } from "lucide-react";
 import { api, formatINR } from "@/lib/api";

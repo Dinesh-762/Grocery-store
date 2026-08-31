@@ -65,7 +65,62 @@ async def create_notification(
     })
 
 
+async def reconcile_vendor_wallet_earnings(db, vendor_id: str) -> None:
+    """Fix legacy wallet rows that deducted platform commission from vendor earnings."""
+    await db.wallet_transactions.delete_many({
+        "vendor_id": vendor_id,
+        "transaction_type": "platform_deduction",
+    })
+
+    txs = await db.wallet_transactions.find({
+        "vendor_id": vendor_id,
+        "transaction_type": "order_earning",
+    }).to_list(5000)
+    if not txs:
+        return
+
+    from pricing_engine import get_order_item_base_price
+
+    for t in txs:
+        gross = t.get("gross_amount")
+        if gross is not None:
+            gross = round(float(gross), 2)
+        else:
+            gross = None
+            order_id = t.get("reference_id")
+            product_id = t.get("product_id")
+            if order_id and product_id:
+                try:
+                    order = await db.orders.find_one({"_id": ObjectId(order_id)})
+                except Exception:
+                    order = None
+                if order:
+                    for item in order.get("items", []):
+                        if item.get("product_id") == product_id and item.get("vendor_id") == vendor_id:
+                            gross = round(
+                                get_order_item_base_price(item) * int(item.get("quantity") or 0),
+                                2,
+                            )
+                            break
+            if gross is None:
+                gross = round(float(t.get("amount") or 0), 2)
+
+        current = round(float(t.get("amount") or 0), 2)
+        commission = float(t.get("commission") or 0)
+        if current != gross or commission > 0 or t.get("gross_amount") is None:
+            await db.wallet_transactions.update_one(
+                {"_id": t["_id"]},
+                {"$set": {
+                    "amount": gross,
+                    "gross_amount": gross,
+                    "commission": 0,
+                    "commission_pct": 0,
+                }},
+            )
+
+
 async def get_wallet_summary(db, vendor_id: str) -> dict:
+    await reconcile_vendor_wallet_earnings(db, vendor_id)
     txs = await db.wallet_transactions.find({"vendor_id": vendor_id}).sort("created_at", -1).to_list(5000)
     available = 0.0
     pending = 0.0
@@ -122,18 +177,16 @@ async def credit_vendor_order_earning(
     vendor_id: str,
     order_id: str,
     line_items: list[dict],
-    commission_pct: float,
+    commission_pct: float = 0,
     settlement_days: int = 7,
 ) -> None:
-    """Credit vendor wallet when order lines are delivered."""
+    """Credit vendor wallet when order lines are delivered (full base price, no platform fee)."""
     for item in line_items:
         snap = item.get("pricing_snapshot") or {}
         base = float(snap.get("base_price") or item.get("base_price") or 0)
         qty = int(item.get("quantity") or 0)
         gross = round(base * qty, 2)
-        commission = round(gross * commission_pct / 100.0, 2)
-        net = round(gross - commission, 2)
-        if net <= 0:
+        if gross <= 0:
             continue
 
         existing = await db.wallet_transactions.find_one({
@@ -149,10 +202,10 @@ async def credit_vendor_order_earning(
         await db.wallet_transactions.insert_one({
             "vendor_id": vendor_id,
             "transaction_type": "order_earning",
-            "amount": net,
+            "amount": gross,
             "gross_amount": gross,
-            "commission": commission,
-            "commission_pct": commission_pct,
+            "commission": 0,
+            "commission_pct": 0,
             "status": "pending",
             "reference_id": order_id,
             "product_id": item.get("product_id"),
@@ -160,18 +213,6 @@ async def credit_vendor_order_earning(
             "release_at": release_at,
             "created_at": iso_now(),
         })
-
-        if commission > 0:
-            await db.wallet_transactions.insert_one({
-                "vendor_id": vendor_id,
-                "transaction_type": "platform_deduction",
-                "amount": -commission,
-                "status": "completed",
-                "reference_id": order_id,
-                "product_id": item.get("product_id"),
-                "description": f"Platform commission ({commission_pct}%)",
-                "created_at": iso_now(),
-            })
 
 
 async def release_pending_earnings(db, vendor_id: Optional[str] = None) -> int:

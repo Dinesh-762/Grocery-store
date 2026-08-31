@@ -1325,7 +1325,6 @@ function VendorsAdmin() {
               email: v.owner_email,
               phone: v.phone,
               status: v.status,
-              commission_pct: v.commission_pct ?? 10,
               pincode: v.business_pincode,
               address: v.business_address,
             }))}
@@ -1335,7 +1334,6 @@ function VendorsAdmin() {
               { key: "email", label: "Email" },
               { key: "phone", label: "Phone" },
               { key: "status", label: "Status" },
-              { key: "commission_pct", label: "Commission %" },
               { key: "pincode", label: "Pincode" },
               { key: "address", label: "Address" },
             ]}
@@ -1407,26 +1405,8 @@ function VendorsAdmin() {
               )}
 
               {v.status === "Approved" && (
-                <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-dashed pt-3 text-xs">
-                  <span className="font-semibold text-[#4A4A4A]">Commission %:</span>
-                  <input
-                    type="number"
-                    min="0"
-                    max="90"
-                    defaultValue={v.commission_pct ?? 10}
-                    onBlur={async (e) => {
-                      const pct = Number(e.target.value);
-                      if (isNaN(pct) || pct === (v.commission_pct ?? 10)) return;
-                      try {
-                        await api.patch(`/admin/vendors/${v.id}/commission`, { commission_pct: pct });
-                        toast.success(`Commission set to ${pct}%`);
-                        load();
-                      } catch (err) { toast.error(formatApiError(err)); }
-                    }}
-                    className="input-base w-20 py-1 text-xs"
-                    data-testid={`commission-input-${v.id}`}
-                  />
-                  <span className="text-[#4A4A4A]">applied to delivered items</span>
+                <div className="mt-3 border-t border-dashed pt-3 text-xs text-[#4A4A4A]">
+                  Vendors receive 100% of product earnings — no platform fee deducted from payouts.
                 </div>
               )}
             </div>
@@ -1668,7 +1648,7 @@ function Analytics() {
   const maxRev = Math.max(1, ...data.daily_trend.map((d) => d.revenue));
   const kpis = [
     { label: "Total revenue", value: formatINR(data.total_revenue), color: "bg-[#1B4332]" },
-    { label: "Platform commission", value: formatINR(data.platform_commission_earned), color: "bg-[#E07A5F]" },
+    { label: "Delivered orders", value: data.delivered_orders, color: "bg-[#E07A5F]" },
     { label: "Vendor payout", value: formatINR(data.total_vendor_payout), color: "bg-[#8BA888]" },
     { label: "Cancelled orders", value: data.cancelled_orders, color: "bg-red-600" },
   ];
@@ -1700,8 +1680,7 @@ function Analytics() {
                 columns: [
                   { key: "vendor_name", label: "Vendor" },
                   { key: "gross", label: "Gross" },
-                  { key: "commission", label: "Commission" },
-                  { key: "net_payout", label: "Net Payout" },
+                  { key: "net_payout", label: "Vendor Payout" },
                   { key: "delivered_items", label: "Items" },
                 ],
               },
@@ -1729,7 +1708,6 @@ function Analytics() {
                   { key: "cancelled_orders", label: "Cancelled" },
                   { key: "completion_rate", label: "Completion %" },
                   { key: "gross_sales", label: "Gross Sales" },
-                  { key: "commission_pct", label: "Commission %" },
                 ],
               },
             ]}
@@ -1786,11 +1764,11 @@ function Analytics() {
                 <div key={v.vendor_id} className="flex items-center justify-between border-b border-dashed pb-2 last:border-0" data-testid={`top-vendor-${v.vendor_id}`}>
                   <div>
                     <div className="text-sm font-semibold">{v.vendor_name}</div>
-                    <div className="text-xs text-[#4A4A4A]">{v.delivered_items} items · commission {formatINR(v.commission)}</div>
+                    <div className="text-xs text-[#4A4A4A]">{v.delivered_items} items delivered</div>
                   </div>
                   <div className="text-right">
-                    <div className="text-sm font-bold text-[#1B4332]">{formatINR(v.gross)}</div>
-                    <div className="text-xs text-[#4A4A4A]">Net payout {formatINR(v.net_payout)}</div>
+                    <div className="text-sm font-bold text-[#1B4332]">{formatINR(v.net_payout)}</div>
+                    <div className="text-xs text-[#4A4A4A]">Full vendor earnings</div>
                   </div>
                 </div>
               ))}
@@ -1837,7 +1815,6 @@ function Analytics() {
                   <th className="px-4 py-2">Orders</th>
                   <th className="px-4 py-2">Completion %</th>
                   <th className="px-4 py-2">Gross sales</th>
-                  <th className="px-4 py-2">Commission</th>
                   <th className="px-4 py-2">Status</th>
                 </tr>
               </thead>
@@ -1853,7 +1830,6 @@ function Analytics() {
                       </span>
                     </td>
                     <td className="px-4 py-2 font-semibold">{formatINR(v.gross_sales)}</td>
-                    <td className="px-4 py-2 text-[#4A4A4A]">{v.commission_pct}%</td>
                     <td className="px-4 py-2">
                       {v.vacation_mode ? <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">Vacation</span> :
                        !v.open_now ? <span className="rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-semibold text-yellow-700">Closed</span> :

@@ -162,7 +162,7 @@ async def require_delivery(user: dict = Depends(get_current_user)) -> dict:
     return user
 
 
-DEFAULT_COMMISSION_PCT = float(os.environ.get("DEFAULT_COMMISSION_PCT", "10"))
+DEFAULT_COMMISSION_PCT = float(os.environ.get("DEFAULT_COMMISSION_PCT", "0"))
 DEFAULT_DELIVERY_EARNING = float(os.environ.get("DEFAULT_DELIVERY_EARNING", "20"))
 
 # ---------------------------------------------------------------------------
@@ -2169,17 +2169,11 @@ async def _maybe_credit_vendor_earnings(order: dict, new_status: str) -> None:
             continue
         by_vendor.setdefault(vid, []).append(item)
     for vid, items in by_vendor.items():
-        try:
-            vendor = await db.vendors.find_one({"_id": ObjectId(vid)})
-        except Exception:
-            vendor = None
-        commission_pct = float(vendor.get("commission_pct", DEFAULT_COMMISSION_PCT)) if vendor else DEFAULT_COMMISSION_PCT
         await credit_vendor_order_earning(
             db,
             vendor_id=vid,
             order_id=str(order["_id"]),
             line_items=items,
-            commission_pct=commission_pct,
             settlement_days=settlement_days,
         )
 
@@ -2417,7 +2411,7 @@ async def vendor_analytics(user: dict = Depends(get_current_user)):
 
     await release_pending_earnings(db, vid)
     wallet = await get_wallet_summary(db, vid)
-    pending_payment = wallet["pending_balance"]
+    pending_payment = round(wallet["available_balance"] + wallet["pending_balance"], 2)
 
     recent = []
     for o in all_orders[:10]:
@@ -2730,13 +2724,8 @@ async def admin_analytics(_: dict = Depends(require_admin), days: int = 14):
                     })
                     vs["gross"] += line_total
                     vs["delivered_items"] += i["quantity"]
-                    vend = vendors.get(vid)
-                    pct = float(vend.get("commission_pct", DEFAULT_COMMISSION_PCT)) if vend else DEFAULT_COMMISSION_PCT
-                    com = round(line_total * pct / 100.0, 2)
-                    vs["commission"] += com
-                    vs["net_payout"] += (line_total - com)
-                    total_platform_commission += com
-                    total_vendor_payout += (line_total - com)
+                    vs["net_payout"] += line_total
+                    total_vendor_payout += line_total
 
                 pid = i.get("product_id")
                 if pid:

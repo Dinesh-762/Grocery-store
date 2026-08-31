@@ -118,7 +118,7 @@ def restore(admin_token, vendor_id, vendor_token):
                                                    "vacation_mode": False},
                    headers=H(vendor_token), timeout=30)
     yield
-    requests.patch(f"{API}/admin/vendors/{vendor_id}/commission", json={"commission_pct": 10},
+    requests.patch(f"{API}/admin/vendors/{vendor_id}/commission", json={"commission_pct": 0},
                    headers=H(admin_token), timeout=30)
     requests.patch(f"{API}/vendor/settings", json={"min_order_amount": 100, "open_now": True,
                                                    "vacation_mode": False},
@@ -168,16 +168,13 @@ class TestCommission:
 
 # ---------------- VENDOR EARNINGS ----------------
 class TestVendorEarnings:
-    def test_earnings_breakdown_math(self, vendor_token, admin_token, vendor_id):
-        requests.patch(f"{API}/admin/vendors/{vendor_id}/commission", json={"commission_pct": 20},
-                       headers=H(admin_token), timeout=30)
+    def test_earnings_breakdown_math(self, vendor_token):
         d = requests.get(f"{API}/vendor/analytics", headers=H(vendor_token), timeout=30).json()
-        for k in ("commission_pct", "commission_deducted", "net_earnings", "pending_payment"):
+        for k in ("total_sales", "pending_payment", "wallet"):
             assert k in d, f"missing {k}"
-        assert d["commission_pct"] == 20
-        assert d["commission_deducted"] == pytest.approx(d["total_revenue"] * 0.20, abs=0.05)
-        assert d["net_earnings"] == pytest.approx(d["total_revenue"] - d["commission_deducted"], abs=0.05)
+        assert d["total_sales"] >= 0
         assert d["pending_payment"] >= 0
+        assert d["wallet"]["platform_fees"] == 0
 
 
 # ---------------- DELIVERY PARTNER CRUD + AUTH ----------------
@@ -315,10 +312,7 @@ class TestAdminAnalytics:
         assert len(d["top_vendors"]) <= 5 and len(d["top_products"]) <= 5
         assert all(set(("date", "orders", "revenue")) <= set(t) for t in d["daily_trend"])
 
-    def test_commission_math_two_rates(self, admin_token, vendor_token, vendor_id, customer, product):
-        # rate A
-        requests.patch(f"{API}/admin/vendors/{vendor_id}/commission", json={"commission_pct": 20},
-                       headers=H(admin_token), timeout=30)
+    def test_vendor_gets_full_payout(self, admin_token, vendor_token, vendor_id, customer, product):
         before = requests.get(f"{API}/admin/analytics", headers=H(admin_token), timeout=60).json()
         o1 = place_order(customer, product, 2)
         line_total = round(product["price"] * 2, 2)
@@ -326,17 +320,11 @@ class TestAdminAnalytics:
                            headers=H(vendor_token), timeout=30)
         assert r.status_code == 200, r.text[:300]
         mid = requests.get(f"{API}/admin/analytics", headers=H(admin_token), timeout=60).json()
-        exp_a = round(line_total * 0.20, 2)
-        assert mid["platform_commission_earned"] == pytest.approx(
-            before["platform_commission_earned"] + exp_a, abs=0.1), \
-            f"commission {before['platform_commission_earned']} -> {mid['platform_commission_earned']} exp +{exp_a}"
+        assert mid["platform_commission_earned"] == pytest.approx(before["platform_commission_earned"], abs=0.01)
         assert mid["total_revenue"] == pytest.approx(before["total_revenue"] + o1["total"], abs=0.1)
         assert mid["total_vendor_payout"] == pytest.approx(
-            before["total_vendor_payout"] + (line_total - exp_a), abs=0.1)
+            before["total_vendor_payout"] + line_total, abs=0.1)
 
-        # rate B
-        requests.patch(f"{API}/admin/vendors/{vendor_id}/commission", json={"commission_pct": 40},
-                       headers=H(admin_token), timeout=30)
         o2 = place_order(customer, product, 1)
         line_total2 = round(product["price"] * 1, 2)
         requests.patch(f"{API}/vendor/orders/{o2['id']}/line-status", json={"status": "Delivered"},
@@ -347,13 +335,10 @@ class TestAdminAnalytics:
         assert top_mid and top_after, "test vendor missing from top_vendors"
         vm, va = top_mid[0], top_after[0]
         assert va["gross"] == pytest.approx(vm["gross"] + line_total2, abs=0.1)
-        # commission is recomputed at read time with the CURRENT pct (40%)
-        assert va["commission"] == pytest.approx(va["gross"] * 0.40, abs=0.2)
-        assert va["net_payout"] == pytest.approx(va["gross"] - va["commission"], abs=0.2)
-        # platform total moves exactly by this vendor's commission delta
-        delta = after["platform_commission_earned"] - mid["platform_commission_earned"]
-        assert delta == pytest.approx(va["commission"] - vm["commission"], abs=0.3), \
-            f"platform delta {delta} vs vendor commission delta {va['commission'] - vm['commission']}"
+        assert va["commission"] == pytest.approx(0, abs=0.01)
+        assert va["net_payout"] == pytest.approx(va["gross"], abs=0.1)
+        assert after["platform_commission_earned"] == pytest.approx(
+            before["platform_commission_earned"], abs=0.01)
 
 
 # ---------------- VENDOR PERFORMANCE ----------------

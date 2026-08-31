@@ -552,16 +552,21 @@ function VAnalytics() {
 
   if (!data) return <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#1B4332]" />;
 
+  const totalSales = data.total_sales ?? data.total_revenue ?? 0;
+  const totalPayoutDue =
+    (data.wallet?.available_balance ?? 0) + (data.wallet?.pending_balance ?? 0);
+  const payoutDue = totalPayoutDue > 0 ? totalPayoutDue : (data.pending_payment ?? 0);
+
   const kpis = [
     { label: "Today's orders", value: data.today_orders },
     { label: "This week", value: data.week_orders },
     { label: "This month (₹)", value: formatINR(data.month_sales ?? data.month_revenue ?? 0) },
-    { label: "Total sales (₹)", value: formatINR(data.total_sales ?? data.total_revenue ?? 0) },
+    { label: "Total sales (₹)", value: formatINR(totalSales) },
   ];
 
   const earningsRow = [
-    { label: "Your sales", value: formatINR(data.total_sales ?? data.total_revenue ?? 0), color: "text-[#1B4332]" },
-    { label: "Pending payment", value: formatINR(data.pending_payment ?? 0), color: "text-[#F4A261]" },
+    { label: "Your sales", value: formatINR(totalSales), color: "text-[#1B4332]" },
+    { label: "Your payout", value: formatINR(payoutDue), color: "text-[#F4A261]" },
   ];
 
   return (
@@ -577,7 +582,7 @@ function VAnalytics() {
 
       <div className="card-base p-6" data-testid="earnings-breakdown">
         <h3 className="font-heading text-lg font-semibold">Earnings breakdown</h3>
-        <p className="mt-1 text-xs text-[#4A4A4A]">Your product prices on delivered orders only.</p>
+        <p className="mt-1 text-xs text-[#4A4A4A]">Full product earnings on delivered orders — no platform fee deducted.</p>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           {earningsRow.map((r) => (
             <div key={r.label} className="rounded-xl border border-[#E5E5E5] p-4">
