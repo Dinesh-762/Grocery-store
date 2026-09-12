@@ -11,16 +11,6 @@ export default function ProductCard({ product }) {
    * ---------------------------------------------------------------
    * Product variants
    * ---------------------------------------------------------------
-   *
-   * Supports variant objects such as:
-   *
-   * {
-   *   label: "1 kg",
-   *   price: 50,
-   *   unit: "1 kg"
-   * }
-   *
-   * Also safely handles label/name/unit differences.
    */
 
   const variants = useMemo(() => {
@@ -66,10 +56,9 @@ export default function ProductCard({ product }) {
   }, [product]);
 
   /*
-   * Selected variant.
-   *
-   * If variants exist, first variant is selected automatically.
-   * If there are no variants, null means normal product.
+   * ---------------------------------------------------------------
+   * Selected variant
+   * ---------------------------------------------------------------
    */
 
   const [selectedVariantLabel, setSelectedVariantLabel] =
@@ -80,7 +69,9 @@ export default function ProductCard({ product }) {
     );
 
   /*
-   * Get currently selected variant.
+   * ---------------------------------------------------------------
+   * Get currently selected variant
+   * ---------------------------------------------------------------
    */
 
   const selectedVariant = useMemo(() => {
@@ -91,14 +82,10 @@ export default function ProductCard({ product }) {
     return (
       variants.find(
         (variant) =>
-          variant.label ===
-          selectedVariantLabel
+          variant.label === selectedVariantLabel
       ) || null
     );
-  }, [
-    variants,
-    selectedVariantLabel,
-  ]);
+  }, [variants, selectedVariantLabel]);
 
   /*
    * ---------------------------------------------------------------
@@ -122,20 +109,18 @@ export default function ProductCard({ product }) {
    * ---------------------------------------------------------------
    * Discount
    * ---------------------------------------------------------------
+   *
+   * IMPORTANT:
+   * This remains fixed at 10%.
+   * It does NOT change the actual product price.
    */
 
-  // Promotional badge is fixed at 10% for every product.
-  // This does NOT change the product price. The real 10% discount is applied
-  // only after the customer explicitly applies GROCERY10 at checkout.
   const off = 10;
 
   /*
    * ---------------------------------------------------------------
    * Stock
    * ---------------------------------------------------------------
-   *
-   * Variant stock is used when available.
-   * Otherwise product stock is used.
    */
 
   const stock = Number(
@@ -148,16 +133,6 @@ export default function ProductCard({ product }) {
    * ---------------------------------------------------------------
    * Current cart item
    * ---------------------------------------------------------------
-   *
-   * IMPORTANT:
-   * Product + variant are treated as separate cart lines.
-   *
-   * Example:
-   *
-   * Tomato 1 kg
-   * Tomato 2 kg
-   *
-   * can both exist independently in the cart.
    */
 
   const inCart = Array.isArray(items)
@@ -181,7 +156,11 @@ export default function ProductCard({ product }) {
     }
 
     addItem(
-      { ...product, price: activePrice, unit: activeUnit },
+      {
+        ...product,
+        price: activePrice,
+        unit: activeUnit,
+      },
       1,
       null,
       selectedVariant?.label || null
@@ -222,7 +201,7 @@ export default function ProductCard({ product }) {
 
   return (
     <div
-      className="card-base group flex flex-col overflow-hidden hover:border-[#8BA888] hover:shadow-md"
+      className="card-base group flex flex-col overflow-hidden rounded-2xl hover:border-[#8BA888] hover:shadow-md"
       data-testid={`product-card-${product.slug}`}
     >
       {/* =========================================================
@@ -240,10 +219,10 @@ export default function ProductCard({ product }) {
           className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
         />
 
-        {/* Discount */}
+        {/* Discount Badge */}
 
         {off > 0 && (
-          <span className="absolute left-3 top-3 rounded-full bg-[#E07A5F] px-2 py-0.5 text-xs font-semibold text-white">
+          <span className="absolute left-3 top-3 rounded-full bg-[#16A34A] px-3 py-1 text-xs font-semibold text-white shadow-sm">
             {off}% OFF
           </span>
         )}
@@ -263,56 +242,32 @@ export default function ProductCard({ product }) {
           PRODUCT INFORMATION
       ========================================================= */}
 
-      <div className="flex flex-1 flex-col gap-2 p-4">
-        {/* Unit + Vendor */}
-
-        <div className="flex items-center justify-between gap-2 text-xs text-gray-500">
-          <span>
-            {selectedVariant
-              ? selectedVariant.unit
-              : product.unit}
-          </span>
-
-          {product.vendor_id &&
-            product.vendor_name && (
-              <Link
-                to={`/vendors/${product.vendor_id}`}
-                onClick={(e) =>
-                  e.stopPropagation()
-                }
-                className="max-w-[55%] truncate rounded-full bg-[#8BA888]/15 px-2 py-0.5 text-[10px] font-semibold text-[#1B4332] hover:bg-[#8BA888]/30"
-                data-testid={`vendor-badge-${product.slug}`}
-              >
-                by {product.vendor_name}
-              </Link>
-            )}
-        </div>
+      <div className="flex flex-1 flex-col p-4">
 
         {/* Product Name */}
 
         <Link
           to={`/products/${product.slug}`}
-          className="line-clamp-2 text-sm font-semibold text-[#1A1A1A] hover:text-[#1B4332]"
+          className="mb-3 line-clamp-2 text-base font-bold text-[#111827] hover:text-[#1B4332]"
         >
           {product.name}
         </Link>
 
         {/* =======================================================
-            VARIANT SELECTOR
+            VARIANT DROPDOWN
         ======================================================= */}
 
         {variants.length > 0 && (
-          <div className="mt-1">
-            <div className="mb-1.5 text-[11px] font-semibold text-gray-500">
-              Select weight
-            </div>
-
-            <div className="flex flex-wrap gap-1.5">
+          <div className="mb-4">
+            <select
+              value={selectedVariantLabel || ""}
+              onChange={(e) =>
+                setSelectedVariantLabel(e.target.value)
+              }
+              className="h-12 w-full cursor-pointer appearance-none rounded-xl border border-gray-200 bg-white px-4 text-sm font-medium text-[#111827] outline-none transition-all hover:border-[#8BA888] focus:border-[#1B4332] focus:ring-2 focus:ring-[#1B4332]/10"
+              data-testid={`variant-select-${product.slug}`}
+            >
               {variants.map((variant) => {
-                const selected =
-                  selectedVariantLabel ===
-                  variant.label;
-
                 const variantStock = Number(
                   variant.stock ??
                     product.stock ??
@@ -320,87 +275,67 @@ export default function ProductCard({ product }) {
                 );
 
                 return (
-                  <button
+                  <option
                     key={variant.label}
-                    type="button"
-                    disabled={
-                      variantStock <= 0
-                    }
-                    onClick={() =>
-                      setSelectedVariantLabel(
-                        variant.label
-                      )
-                    }
-                    className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-all ${
-                      selected
-                        ? "border-[#1B4332] bg-[#1B4332] text-white"
-                        : "border-gray-200 bg-white text-[#1B4332] hover:border-[#8BA888] hover:bg-[#8BA888]/10"
-                    } ${
-                      variantStock <= 0
-                        ? "cursor-not-allowed opacity-40"
-                        : ""
-                    }`}
-                    data-testid={`variant-${product.slug}-${variant.label}`}
+                    value={variant.label}
+                    disabled={variantStock <= 0}
                   >
-                    {variant.label}
-                  </button>
+                    {variant.label} - {formatINR(variant.price)}
+                  </option>
                 );
               })}
-            </div>
+            </select>
           </div>
         )}
 
         {/* =======================================================
-            PRICE + CART CONTROLS
+            PRICE
         ======================================================= */}
 
-        <div className="mt-auto flex items-center justify-between gap-2 pt-2">
-          {/* Price */}
-
-          <div>
-            <div className="text-lg font-bold text-[#1B4332]">
+        <div className="mb-4">
+          <div className="flex items-center gap-2">
+            <span className="text-xl font-bold text-[#111827]">
               {formatINR(activePrice)}
-            </div>
+            </span>
 
             {activeMrp > activePrice && (
-              <div className="text-xs text-gray-400 line-through">
+              <span className="text-sm text-gray-400 line-through">
                 {formatINR(activeMrp)}
-              </div>
-            )}
-
-            {/* Selected variant */}
-
-            {selectedVariant && (
-              <div className="mt-0.5 text-[10px] font-medium text-gray-500">
-                {selectedVariant.label}
-              </div>
+              </span>
             )}
           </div>
 
-          {/* =====================================================
-              CART CONTROLS
-          ===================================================== */}
+          {/* Selected unit */}
 
+          <div className="mt-1 text-sm text-gray-500">
+            {activeUnit}
+          </div>
+        </div>
+
+        {/* =======================================================
+            CART CONTROLS
+        ======================================================= */}
+
+        <div className="mt-auto w-full">
           {inCart ? (
-            <div className="flex items-center gap-2 rounded-full border border-[#1B4332] bg-white p-0.5 shadow-sm">
+            <div className="flex h-12 w-full items-center justify-between rounded-xl border border-[#1B4332] bg-white px-2 shadow-sm">
+              
               {/* Decrease */}
 
               <button
                 type="button"
-                onClick={
-                  handleDecrease
-                }
-                className="grid h-8 w-8 place-items-center rounded-full text-[#1B4332] transition-colors hover:bg-[#1B4332]/10"
+                onClick={handleDecrease}
+                className="grid h-9 w-9 place-items-center rounded-lg text-[#1B4332] transition-colors hover:bg-[#1B4332]/10"
                 data-testid={`decrement-${product.slug}`}
                 aria-label={`Decrease ${product.name} quantity`}
               >
-                <Minus className="h-3.5 w-3.5" />
+                <Minus className="h-4 w-4" />
               </button>
 
               {/* Quantity */}
 
               <span
-                className="min-w-6 text-center text-sm font-bold text-[#1B4332]"
+                className="text-base font-bold text-[#1B4332]"
                 data-testid={`qty-${product.slug}`}
               >
                 {inCart.quantity}
@@ -410,18 +345,13 @@ export default function ProductCard({ product }) {
 
               <button
                 type="button"
-                onClick={
-                  handleIncrease
-                }
-                disabled={
-                  inCart.quantity >=
-                  stock
-                }
-                className="grid h-8 w-8 place-items-center rounded-full text-[#1B4332] transition-colors hover:bg-[#1B4332]/10 disabled:cursor-not-allowed disabled:opacity-30"
+                onClick={handleIncrease}
+                disabled={inCart.quantity >= stock}
+                className="grid h-9 w-9 place-items-center rounded-lg text-[#1B4332] transition-colors hover:bg-[#1B4332]/10 disabled:cursor-not-allowed disabled:opacity-30"
                 data-testid={`increment-${product.slug}`}
                 aria-label={`Increase ${product.name} quantity`}
               >
-                <Plus className="h-3.5 w-3.5" />
+                <Plus className="h-4 w-4" />
               </button>
             </div>
           ) : (
@@ -430,15 +360,13 @@ export default function ProductCard({ product }) {
             <button
               type="button"
               disabled={stock <= 0}
-              onClick={
-                handleAddToCart
-              }
-              className="inline-flex items-center gap-1.5 rounded-full bg-[#1B4332] px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-[#2D6A4F] disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={handleAddToCart}
+              className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#16A34A] px-4 text-sm font-semibold text-white shadow-sm transition-all hover:bg-[#15803D] hover:shadow-md disabled:cursor-not-allowed disabled:opacity-40"
               data-testid={`add-to-cart-${product.slug}`}
             >
-              <ShoppingCart className="h-3.5 w-3.5" />
+              <ShoppingCart className="h-5 w-5" />
 
-              Add
+              Add to Cart
             </button>
           )}
         </div>

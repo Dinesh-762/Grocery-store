@@ -89,3 +89,6 @@ credentials.json
 *.key
 .credentials
 project_files/
+
+.vercel
+.env*
