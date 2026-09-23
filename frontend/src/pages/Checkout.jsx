@@ -1,11 +1,22 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+﻿import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate, useLocation, Link } from "react-router-dom";
 import { toast } from "sonner";
 import { useCart, lineKey } from "@/context/CartContext";
 import { useAuth } from "@/context/AuthContext";
 import { api, formatINR, formatApiError } from "@/lib/api";
-import CartFlowHeader, { SummaryCard, FlowSection } from "@/components/CartFlowHeader";
-import { computeDeliveryFee, setPricingSettings, getPricingSettings, FREE_DELIVERY_THRESHOLD, DELIVERY_NEAR_KM, DELIVERY_NEAR_FEE, DELIVERY_PER_KM } from "@/lib/deliveryFee";
+import CartFlowHeader, {
+  SummaryCard,
+  FlowSection,
+} from "@/components/CartFlowHeader";
+import {
+  computeDeliveryFee,
+  setPricingSettings,
+  getPricingSettings,
+  FREE_DELIVERY_THRESHOLD,
+  DELIVERY_NEAR_KM,
+  DELIVERY_NEAR_FEE,
+  DELIVERY_PER_KM,
+} from "@/lib/deliveryFee";
 import {
   CreditCard,
   Truck,
@@ -53,8 +64,7 @@ const STORE_LONGITUDE = 76.3891403;
 |--------------------------------------------------------------------------
 */
 const DELIVERY_ZONE_NAME = "Ambajogai";
-const SERVICEABILITY_MESSAGE =
-  "Sorry, we only deliver in Ambajogai.";
+const SERVICEABILITY_MESSAGE = "Sorry, we only deliver in Ambajogai.";
 
 /*
 |--------------------------------------------------------------------------
@@ -62,12 +72,7 @@ const SERVICEABILITY_MESSAGE =
 |--------------------------------------------------------------------------
 */
 
-function calculateDistanceKm(
-  lat1,
-  lon1,
-  lat2,
-  lon2
-) {
+function calculateDistanceKm(lat1, lon1, lat2, lon2) {
   const earthRadiusKm = 6371;
 
   const latitude1 = Number(lat1);
@@ -84,43 +89,23 @@ function calculateDistanceKm(
     return 0;
   }
 
-  const dLat =
-    ((latitude2 - latitude1) * Math.PI) /
-    180;
+  const dLat = ((latitude2 - latitude1) * Math.PI) / 180;
 
-  const dLon =
-    ((longitude2 - longitude1) * Math.PI) /
-    180;
+  const dLon = ((longitude2 - longitude1) * Math.PI) / 180;
 
-  const lat1Rad =
-    (latitude1 * Math.PI) /
-    180;
+  const lat1Rad = (latitude1 * Math.PI) / 180;
 
-  const lat2Rad =
-    (latitude2 * Math.PI) /
-    180;
+  const lat2Rad = (latitude2 * Math.PI) / 180;
 
   const a =
     Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1Rad) *
-      Math.cos(lat2Rad) *
-      Math.sin(dLon / 2) ** 2;
+    Math.cos(lat1Rad) * Math.cos(lat2Rad) * Math.sin(dLon / 2) ** 2;
 
-  const safeA = Math.min(
-    1,
-    Math.max(0, a)
-  );
+  const safeA = Math.min(1, Math.max(0, a));
 
-  const c =
-    2 *
-    Math.atan2(
-      Math.sqrt(safeA),
-      Math.sqrt(1 - safeA)
-    );
+  const c = 2 * Math.atan2(Math.sqrt(safeA), Math.sqrt(1 - safeA));
 
-  return Math.round(
-    earthRadiusKm * c * 100
-  ) / 100;
+  return Math.round(earthRadiusKm * c * 100) / 100;
 }
 
 /*
@@ -130,11 +115,7 @@ function calculateDistanceKm(
 */
 
 export default function Checkout() {
-  const {
-    items: cartItems,
-    clearCart,
-    removeItems,
-  } = useCart();
+  const { items: cartItems, clearCart, removeItems } = useCart();
 
   const routerLocation = useLocation();
   const selectedKeys = routerLocation.state?.selectedKeys;
@@ -148,9 +129,9 @@ export default function Checkout() {
   const subtotal = useMemo(
     () =>
       Math.round(
-        items.reduce((sum, it) => sum + it.price * it.quantity, 0) * 100
+        items.reduce((sum, it) => sum + it.price * it.quantity, 0) * 100,
       ) / 100,
-    [items]
+    [items],
   );
 
   const { user } = useAuth();
@@ -162,18 +143,30 @@ export default function Checkout() {
   |--------------------------------------------------------------------------
   */
 
+  const [copiedUpi, setCopiedUpi] = useState(false);
+
   const [store, setStore] = useState({
-    upi_id: "ambajogai@upi",
-    upi_name:
-      "Ambajogai Grocery Store",
+    upi_id: "ambajogaiupi@ybl",
+    upi_name: "Ambajogai Grocery Store",
     whatsapp: "+918237214975",
     upi_qr: "/assets/upi-qr.jpeg",
   });
 
-  const [pricingSettings, setPricingSettingsState] = useState(getPricingSettings());
+  const copyUpiId = async () => {
+    try {
+      await navigator.clipboard.writeText(store.upi_id);
+      alert("UPI ID copied!");
+    } catch (error) {
+      console.error("failed to copy UPI ID:", error);
+    }
+  };
+
+  const [pricingSettings, setPricingSettingsState] =
+    useState(getPricingSettings());
 
   useEffect(() => {
-    api.get("/pricing/settings")
+    api
+      .get("/pricing/settings")
       .then(({ data }) => {
         setPricingSettings(data);
         setPricingSettingsState(data);
@@ -182,11 +175,17 @@ export default function Checkout() {
   }, []);
 
   const freeDeliveryThreshold = Number(
-    pricingSettings?.free_delivery_threshold ?? FREE_DELIVERY_THRESHOLD
+    pricingSettings?.free_delivery_threshold ?? FREE_DELIVERY_THRESHOLD,
   );
-  const deliveryNearKm = Number(pricingSettings?.delivery_near_km ?? DELIVERY_NEAR_KM);
-  const deliveryNearFee = Number(pricingSettings?.delivery_near_fee ?? DELIVERY_NEAR_FEE);
-  const deliveryPerKm = Number(pricingSettings?.delivery_per_km ?? DELIVERY_PER_KM);
+  const deliveryNearKm = Number(
+    pricingSettings?.delivery_near_km ?? DELIVERY_NEAR_KM,
+  );
+  const deliveryNearFee = Number(
+    pricingSettings?.delivery_near_fee ?? DELIVERY_NEAR_FEE,
+  );
+  const deliveryPerKm = Number(
+    pricingSettings?.delivery_per_km ?? DELIVERY_PER_KM,
+  );
 
   /*
   |--------------------------------------------------------------------------
@@ -194,14 +193,11 @@ export default function Checkout() {
   |--------------------------------------------------------------------------
   */
 
-  const [payment, setPayment] =
-    useState("UPI");
+  const [payment, setPayment] = useState("UPI");
 
-  const [submitting, setSubmitting] =
-    useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-  const [placed, setPlaced] =
-    useState(false);
+  const [placed, setPlaced] = useState(false);
 
   /*
   |--------------------------------------------------------------------------
@@ -209,14 +205,11 @@ export default function Checkout() {
   |--------------------------------------------------------------------------
   */
 
-  const [couponInput, setCouponInput] =
-    useState("");
+  const [couponInput, setCouponInput] = useState("");
 
-  const [coupon, setCoupon] =
-    useState(null);
+  const [coupon, setCoupon] = useState(null);
 
-  const [couponBusy, setCouponBusy] =
-    useState(false);
+  const [couponBusy, setCouponBusy] = useState(false);
 
   /*
   |--------------------------------------------------------------------------
@@ -225,10 +218,8 @@ export default function Checkout() {
   */
 
   const [form, setForm] = useState({
-    full_name:
-      user?.name || "",
-    phone:
-      user?.phone || "",
+    full_name: user?.name || "",
+    phone: user?.phone || "",
     line1: "",
     landmark: "",
     area: "",
@@ -242,29 +233,23 @@ export default function Checkout() {
   |--------------------------------------------------------------------------
   */
 
-  const [location, setLocation] =
-    useState({
-      latitude: null,
-      longitude: null,
-      accuracy: null,
-    });
+  const [location, setLocation] = useState({
+    latitude: null,
+    longitude: null,
+    accuracy: null,
+  });
 
-  const [locating, setLocating] =
-    useState(false);
+  const [locating, setLocating] = useState(false);
 
-  const [geocoding, setGeocoding] =
-    useState(false);
+  const [geocoding, setGeocoding] = useState(false);
 
   const geocodeRequestId = useRef(0);
 
-  const [serviceabilityLoading, setServiceabilityLoading] =
-    useState(false);
+  const [serviceabilityLoading, setServiceabilityLoading] = useState(false);
 
-  const [serviceable, setServiceable] =
-    useState(null);
+  const [serviceable, setServiceable] = useState(null);
 
-  const [serviceabilityMessage, setServiceabilityMessage] =
-    useState("");
+  const [serviceabilityMessage, setServiceabilityMessage] = useState("");
 
   /*
   |--------------------------------------------------------------------------
@@ -358,8 +343,7 @@ export default function Checkout() {
         area: form.area.trim(),
         city: "Ambajogai",
         pincode: form.pincode.trim(),
-        ...(location.latitude !== null &&
-        location.longitude !== null
+        ...(location.latitude !== null && location.longitude !== null
           ? {
               latitude: Number(location.latitude),
               longitude: Number(location.longitude),
@@ -367,10 +351,7 @@ export default function Checkout() {
           : {}),
       };
 
-      const { data } = await api.post(
-        "/users/me/addresses",
-        address
-      );
+      const { data } = await api.post("/users/me/addresses", address);
 
       setSavedAddress(data ?? address);
 
@@ -378,10 +359,7 @@ export default function Checkout() {
     } catch (err) {
       console.error("Failed to save address:", err);
       toast.error(
-        formatApiError(
-          err,
-          "Unable to save address. Please try again."
-        )
+        formatApiError(err, "Unable to save address. Please try again."),
       );
     } finally {
       setSavedAddressBusy(false);
@@ -399,19 +377,12 @@ export default function Checkout() {
     setSavedAddressBusy(true);
 
     try {
-      await api.delete(
-        `/users/me/addresses/${savedAddress.id}`
-      );
+      await api.delete(`/users/me/addresses/${savedAddress.id}`);
       setSavedAddress(null);
       toast.success("Saved address deleted.");
     } catch (err) {
       console.error("Failed to delete saved address:", err);
-      toast.error(
-        formatApiError(
-          err,
-          "Unable to delete saved address."
-        )
-      );
+      toast.error(formatApiError(err, "Unable to delete saved address."));
     } finally {
       setSavedAddressBusy(false);
     }
@@ -423,7 +394,7 @@ export default function Checkout() {
     } else {
       setSavedAddress(null);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
   /*
@@ -451,19 +422,10 @@ export default function Checkout() {
   */
 
   useEffect(() => {
-    if (
-      items.length === 0 &&
-      !submitting &&
-      !placed
-    ) {
+    if (items.length === 0 && !submitting && !placed) {
       navigate("/cart");
     }
-  }, [
-    items.length,
-    submitting,
-    placed,
-    navigate,
-  ]);
+  }, [items.length, submitting, placed, navigate]);
 
   /*
   |--------------------------------------------------------------------------
@@ -474,8 +436,7 @@ export default function Checkout() {
   const update = (key) => (event) => {
     setForm((current) => ({
       ...current,
-      [key]:
-        event.target.value,
+      [key]: event.target.value,
     }));
   };
 
@@ -490,11 +451,7 @@ export default function Checkout() {
     const area = form.area.trim();
     const pincode = form.pincode.trim();
 
-    if (
-      !line1 ||
-      !area ||
-      !/^\d{6}$/.test(pincode)
-    ) {
+    if (!line1 || !area || !/^\d{6}$/.test(pincode)) {
       setLocation({
         latitude: null,
         longitude: null,
@@ -505,8 +462,7 @@ export default function Checkout() {
       return;
     }
 
-    const requestId =
-      ++geocodeRequestId.current;
+    const requestId = ++geocodeRequestId.current;
 
     const timer = setTimeout(async () => {
       setGeocoding(true);
@@ -514,39 +470,26 @@ export default function Checkout() {
       setServiceabilityMessage("");
 
       try {
-        const { data } = await api.get(
-          "/delivery/geocode",
-          {
-            params: {
-              line1,
-              area,
-              pincode,
-              city: "Ambajogai",
-            },
-          }
-        );
+        const { data } = await api.get("/delivery/geocode", {
+          params: {
+            line1,
+            area,
+            pincode,
+            city: "Ambajogai",
+          },
+        });
 
-        if (
-          requestId !==
-          geocodeRequestId.current
-        ) {
+        if (requestId !== geocodeRequestId.current) {
           return;
         }
 
         setLocation({
-          latitude: Number(
-            data.latitude
-          ),
-          longitude: Number(
-            data.longitude
-          ),
+          latitude: Number(data.latitude),
+          longitude: Number(data.longitude),
           accuracy: null,
         });
       } catch (error) {
-        if (
-          requestId !==
-          geocodeRequestId.current
-        ) {
+        if (requestId !== geocodeRequestId.current) {
           return;
         }
 
@@ -559,14 +502,11 @@ export default function Checkout() {
         setServiceabilityMessage(
           formatApiError(
             error,
-            "Could not locate this address. Please check the details."
-          )
+            "Could not locate this address. Please check the details.",
+          ),
         );
       } finally {
-        if (
-          requestId ===
-          geocodeRequestId.current
-        ) {
+        if (requestId === geocodeRequestId.current) {
           setGeocoding(false);
         }
       }
@@ -575,11 +515,7 @@ export default function Checkout() {
     return () => {
       clearTimeout(timer);
     };
-  }, [
-    form.line1,
-    form.area,
-    form.pincode,
-  ]);
+  }, [form.line1, form.area, form.pincode]);
 
   /*
   |--------------------------------------------------------------------------
@@ -588,12 +524,8 @@ export default function Checkout() {
   */
 
   const getCurrentLocation = () => {
-    if (
-      !navigator.geolocation
-    ) {
-      toast.error(
-        "Location is not supported by your browser."
-      );
+    if (!navigator.geolocation) {
+      toast.error("Location is not supported by your browser.");
       return;
     }
 
@@ -601,43 +533,22 @@ export default function Checkout() {
 
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        const latitude =
-          Number(
-            position.coords.latitude
-          );
+        const latitude = Number(position.coords.latitude);
 
-        const longitude =
-          Number(
-            position.coords.longitude
-          );
+        const longitude = Number(position.coords.longitude);
 
-        const accuracy =
-          Number(
-            position.coords.accuracy || 0
-          );
+        const accuracy = Number(position.coords.accuracy || 0);
 
-        console.log(
-          "CUSTOMER GPS:",
-          {
-            latitude,
-            longitude,
-            accuracy,
-          }
-        );
+        console.log("CUSTOMER GPS:", {
+          latitude,
+          longitude,
+          accuracy,
+        });
 
-        if (
-          !Number.isFinite(
-            latitude
-          ) ||
-          !Number.isFinite(
-            longitude
-          )
-        ) {
+        if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
           setLocating(false);
 
-          toast.error(
-            "Invalid location received. Please try again."
-          );
+          toast.error("Invalid location received. Please try again.");
 
           return;
         }
@@ -650,9 +561,7 @@ export default function Checkout() {
         ) {
           setLocating(false);
 
-          toast.error(
-            "Invalid GPS coordinates received."
-          );
+          toast.error("Invalid GPS coordinates received.");
 
           return;
         }
@@ -664,27 +573,18 @@ export default function Checkout() {
         });
 
         api
-          .get(
-            "/delivery/reverse-geocode",
-            {
-              params: {
-                latitude,
-                longitude,
-              },
-            }
-          )
+          .get("/delivery/reverse-geocode", {
+            params: {
+              latitude,
+              longitude,
+            },
+          })
           .then(({ data }) => {
             setForm((current) => ({
               ...current,
-              line1:
-                data.line1 ||
-                current.line1,
-              area:
-                data.area ||
-                current.area,
-              pincode:
-                data.pincode ||
-                current.pincode,
+              line1: data.line1 || current.line1,
+              area: data.area || current.area,
+              pincode: data.pincode || current.pincode,
             }));
           })
           .catch(() => {
@@ -693,9 +593,7 @@ export default function Checkout() {
              */
           });
 
-        toast.success(
-          "Location captured! Address fields updated."
-        );
+        toast.success("Location captured! Address fields updated.");
 
         setLocating(false);
       },
@@ -703,36 +601,16 @@ export default function Checkout() {
       (error) => {
         setLocating(false);
 
-        console.error(
-          "GPS ERROR:",
-          error
-        );
+        console.error("GPS ERROR:", error);
 
-        if (
-          error.code ===
-          error.PERMISSION_DENIED
-        ) {
-          toast.error(
-            "Please allow location access."
-          );
-        } else if (
-          error.code ===
-          error.POSITION_UNAVAILABLE
-        ) {
-          toast.error(
-            "Unable to detect your location."
-          );
-        } else if (
-          error.code ===
-          error.TIMEOUT
-        ) {
-          toast.error(
-            "Location request timed out. Please try again."
-          );
+        if (error.code === error.PERMISSION_DENIED) {
+          toast.error("Please allow location access.");
+        } else if (error.code === error.POSITION_UNAVAILABLE) {
+          toast.error("Unable to detect your location.");
+        } else if (error.code === error.TIMEOUT) {
+          toast.error("Location request timed out. Please try again.");
         } else {
-          toast.error(
-            "Unable to get your location."
-          );
+          toast.error("Unable to get your location.");
         }
       },
 
@@ -740,7 +618,7 @@ export default function Checkout() {
         enableHighAccuracy: true,
         timeout: 15000,
         maximumAge: 0,
-      }
+      },
     );
   };
 
@@ -750,22 +628,18 @@ export default function Checkout() {
   |--------------------------------------------------------------------------
   */
 
-  const estimatedDistance =
-    useMemo(() => {
-      if (
-        location.latitude === null ||
-        location.longitude === null
-      ) {
-        return null;
-      }
+  const estimatedDistance = useMemo(() => {
+    if (location.latitude === null || location.longitude === null) {
+      return null;
+    }
 
-      return calculateDistanceKm(
-        STORE_LATITUDE,
-        STORE_LONGITUDE,
-        location.latitude,
-        location.longitude
-      );
-    }, [location]);
+    return calculateDistanceKm(
+      STORE_LATITUDE,
+      STORE_LONGITUDE,
+      location.latitude,
+      location.longitude,
+    );
+  }, [location]);
 
   /*
   |--------------------------------------------------------------------------
@@ -780,7 +654,7 @@ export default function Checkout() {
 
   const checkServiceability = async (
     latitude = location.latitude,
-    longitude = location.longitude
+    longitude = location.longitude,
   ) => {
     if (
       latitude === null ||
@@ -798,38 +672,30 @@ export default function Checkout() {
     setServiceabilityMessage("");
 
     try {
-      const { data } = await api.get(
-        "/delivery/serviceability",
-        {
-          params: {
-            latitude: Number(latitude),
-            longitude: Number(longitude),
-            accuracy:
-              location.accuracy !== null
-                ? Number(location.accuracy)
-                : undefined,
-          },
-        }
-      );
+      const { data } = await api.get("/delivery/serviceability", {
+        params: {
+          latitude: Number(latitude),
+          longitude: Number(longitude),
+          accuracy:
+            location.accuracy !== null ? Number(location.accuracy) : undefined,
+        },
+      });
 
       const allowed = data?.serviceable === true;
       setServiceable(allowed);
       setServiceabilityMessage(
         allowed
           ? `Delivery available in ${data?.zone_name || DELIVERY_ZONE_NAME}.`
-          : data?.message || SERVICEABILITY_MESSAGE
+          : data?.message || SERVICEABILITY_MESSAGE,
       );
 
       return data;
     } catch (error) {
-      console.error(
-        "SERVICEABILITY CHECK ERROR:",
-        error
-      );
+      console.error("SERVICEABILITY CHECK ERROR:", error);
 
       setServiceable(false);
       setServiceabilityMessage(
-        "We could not verify your delivery location. Please try again."
+        "We could not verify your delivery location. Please try again.",
       );
 
       return null;
@@ -839,19 +705,13 @@ export default function Checkout() {
   };
 
   useEffect(() => {
-    if (
-      location.latitude === null ||
-      location.longitude === null
-    ) {
+    if (location.latitude === null || location.longitude === null) {
       setServiceable(null);
       setServiceabilityMessage("");
       return;
     }
 
-    checkServiceability(
-      location.latitude,
-      location.longitude
-    );
+    checkServiceability(location.latitude, location.longitude);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.latitude, location.longitude]);
 
@@ -861,9 +721,7 @@ export default function Checkout() {
   |--------------------------------------------------------------------------
   */
 
-  const discount = Number(
-    coupon?.discount || 0
-  );
+  const discount = Number(coupon?.discount || 0);
 
   /*
   |--------------------------------------------------------------------------
@@ -871,12 +729,7 @@ export default function Checkout() {
   |--------------------------------------------------------------------------
   */
 
-  const discountedSubtotal =
-    Math.max(
-      0,
-      Number(subtotal || 0) -
-        discount
-    );
+  const discountedSubtotal = Math.max(0, Number(subtotal || 0) - discount);
 
   /*
   |--------------------------------------------------------------------------
@@ -884,28 +737,16 @@ export default function Checkout() {
   |--------------------------------------------------------------------------
   */
 
-  const estimatedDeliveryFee =
-    useMemo(() => {
-      if (
-        estimatedDistance === null
-      ) {
-        return 0;
-      }
+  const estimatedDeliveryFee = useMemo(() => {
+    if (estimatedDistance === null) {
+      return 0;
+    }
 
-      return computeDeliveryFee(
-        estimatedDistance,
-        Number(
-          subtotal || 0
-        ) -
-          Number(
-            coupon?.discount || 0
-          )
-      );
-    }, [
+    return computeDeliveryFee(
       estimatedDistance,
-      subtotal,
-      coupon,
-    ]);
+      Number(subtotal || 0) - Number(coupon?.discount || 0),
+    );
+  }, [estimatedDistance, subtotal, coupon]);
 
   /*
   |--------------------------------------------------------------------------
@@ -925,11 +766,7 @@ export default function Checkout() {
   */
 
   const taxableAmount =
-    discountedSubtotal +
-    platformFee +
-    Number(
-      estimatedDeliveryFee || 0
-    );
+    discountedSubtotal + platformFee + Number(estimatedDeliveryFee || 0);
 
   /*
   |--------------------------------------------------------------------------
@@ -940,12 +777,7 @@ export default function Checkout() {
   const cgstRate = Number(pricingSettings?.gst_rate ?? GST_RATE) / 2;
   const sgstRate = Number(pricingSettings?.gst_rate ?? GST_RATE) / 2;
 
-  const cgst =
-    Math.round(
-      taxableAmount *
-        cgstRate *
-        100
-    ) / 100;
+  const cgst = Math.round(taxableAmount * cgstRate * 100) / 100;
 
   /*
   |--------------------------------------------------------------------------
@@ -953,12 +785,7 @@ export default function Checkout() {
   |--------------------------------------------------------------------------
   */
 
-  const sgst =
-    Math.round(
-      taxableAmount *
-        sgstRate *
-        100
-    ) / 100;
+  const sgst = Math.round(taxableAmount * sgstRate * 100) / 100;
 
   /*
   |--------------------------------------------------------------------------
@@ -966,10 +793,7 @@ export default function Checkout() {
   |--------------------------------------------------------------------------
   */
 
-  const gst =
-    Math.round(
-      (cgst + sgst) * 100
-    ) / 100;
+  const gst = Math.round((cgst + sgst) * 100) / 100;
 
   /*
   |--------------------------------------------------------------------------
@@ -979,14 +803,11 @@ export default function Checkout() {
 
   const estimatedTotal =
     Math.round(
-      (
-        discountedSubtotal +
+      (discountedSubtotal +
         platformFee +
-        Number(
-          estimatedDeliveryFee || 0
-        ) +
-        gst
-      ) * 100
+        Number(estimatedDeliveryFee || 0) +
+        gst) *
+        100,
     ) / 100;
 
   /*
@@ -996,40 +817,17 @@ export default function Checkout() {
   */
 
   const validate = () => {
-    const requiredFields = [
-      "full_name",
-      "phone",
-      "line1",
-      "area",
-      "pincode",
-    ];
+    const requiredFields = ["full_name", "phone", "line1", "area", "pincode"];
 
-    for (
-      const key of requiredFields
-    ) {
-      if (
-        !String(
-          form[key] || ""
-        ).trim()
-      ) {
-        return `Please fill your ${key.replace(
-          "_",
-          " "
-        )}`;
+    for (const key of requiredFields) {
+      if (!String(form[key] || "").trim()) {
+        return `Please fill your ${key.replace("_", " ")}`;
       }
     }
 
-    const cleanPhone =
-      form.phone.replace(
-        /\s/g,
-        ""
-      );
+    const cleanPhone = form.phone.replace(/\s/g, "");
 
-    if (
-      !/^\+?\d{10,15}$/.test(
-        cleanPhone
-      )
-    ) {
+    if (!/^\+?\d{10,15}$/.test(cleanPhone)) {
       return "Enter a valid phone number";
     }
 
@@ -1042,25 +840,15 @@ export default function Checkout() {
      * worth of products in cart.
      */
 
-    if (
-      Number(subtotal || 0) <
-      MINIMUM_ORDER_VALUE
-    ) {
+    if (Number(subtotal || 0) < MINIMUM_ORDER_VALUE) {
       return `Minimum order value is ₹${MINIMUM_ORDER_VALUE}. Please add more items to your cart.`;
     }
 
-    if (
-      !/^\d{6}$/.test(
-        form.pincode
-      )
-    ) {
+    if (!/^\d{6}$/.test(form.pincode)) {
       return "Enter a valid 6-digit pincode";
     }
 
-    if (
-      location.latitude === null ||
-      location.longitude === null
-    ) {
+    if (location.latitude === null || location.longitude === null) {
       if (geocoding) {
         return "Please wait while we verify your delivery address.";
       }
@@ -1069,19 +857,14 @@ export default function Checkout() {
     }
 
     if (serviceable === false) {
-      return (
-        serviceabilityMessage ||
-        SERVICEABILITY_MESSAGE
-      );
+      return serviceabilityMessage || SERVICEABILITY_MESSAGE;
     }
 
     if (serviceable !== true) {
       return "Please wait while we verify that your delivery address is within Ambajogai.";
     }
 
-    if (
-      items.length === 0
-    ) {
+    if (items.length === 0) {
       return "Your cart is empty.";
     }
 
@@ -1095,8 +878,7 @@ export default function Checkout() {
   */
 
   const submit = async () => {
-    const error =
-      validate();
+    const error = validate();
 
     if (error) {
       toast.error(error);
@@ -1106,14 +888,11 @@ export default function Checkout() {
     // Fresh backend check immediately before creating the order.
     const serviceability = await checkServiceability(
       location.latitude,
-      location.longitude
+      location.longitude,
     );
 
     if (!serviceability?.serviceable) {
-      toast.error(
-        serviceability?.message ||
-        SERVICEABILITY_MESSAGE
-      );
+      toast.error(serviceability?.message || SERVICEABILITY_MESSAGE);
       return;
     }
 
@@ -1121,104 +900,64 @@ export default function Checkout() {
 
     try {
       const orderPayload = {
-        items: items.map(
-          (item) => ({
-            product_id:
-              item.product_id,
+        items: items.map((item) => ({
+          product_id: item.product_id,
 
-            name: item.name,
+          name: item.name,
 
-            price: Number(
-              item.price || 0
-            ),
+          price: Number(item.price || 0),
 
-            quantity: Number(
-              item.quantity || 1
-            ),
+          quantity: Number(item.quantity || 1),
 
-            image: item.image,
+          image: item.image,
 
-            unit:
-              item.unit || null,
+          unit: item.unit || null,
 
-            variant_label:
-              item.variant_label ||
-              null,
+          variant_label: item.variant_label || null,
 
-            note: item.note || null,
+          note: item.note || null,
 
-            vendor_id:
-              item.vendor_id ||
-              null,
+          vendor_id: item.vendor_id || null,
 
-            vendor_name:
-              item.vendor_name ||
-              null,
-          })
-        ),
+          vendor_name: item.vendor_name || null,
+        })),
 
         address: {
-          full_name:
-            form.full_name,
+          full_name: form.full_name,
 
-          phone:
-            form.phone,
+          phone: form.phone,
 
-          line1:
-            form.line1,
+          line1: form.line1,
 
-          landmark:
-            form.landmark,
+          landmark: form.landmark,
 
-          area:
-            form.area,
+          area: form.area,
 
-          city:
-            "Ambajogai",
+          city: "Ambajogai",
 
-          pincode:
-            form.pincode,
+          pincode: form.pincode,
 
-          latitude:
-            Number(
-              location.latitude
-            ),
+          latitude: Number(location.latitude),
 
-          longitude:
-            Number(
-              location.longitude
-            ),
+          longitude: Number(location.longitude),
         },
 
-        latitude:
-          Number(
-            location.latitude
-          ),
+        latitude: Number(location.latitude),
 
-        longitude:
-          Number(
-            location.longitude
-          ),
+        longitude: Number(location.longitude),
 
-        payment_method:
-          payment,
+        payment_method: payment,
 
-        notes:
-          form.notes,
+        notes: form.notes,
 
-        coupon_code:
-          coupon?.code || null,
+        coupon_code: coupon?.code || null,
       };
 
       /*
        * Send order.
        */
 
-      const { data } =
-        await api.post(
-          "/orders",
-          orderPayload
-        );
+      const { data } = await api.post("/orders", orderPayload);
 
       setPlaced(true);
 
@@ -1226,52 +965,23 @@ export default function Checkout() {
        * Backend is authoritative.
        */
 
-      const finalSubtotal =
-        Number(
-          data.subtotal ??
-            subtotal
-        );
+      const finalSubtotal = Number(data.subtotal ?? subtotal);
 
-      const finalDeliveryFee =
-        Number(
-          data.delivery_fee ??
-            estimatedDeliveryFee
-        );
+      const finalDeliveryFee = Number(
+        data.delivery_fee ?? estimatedDeliveryFee,
+      );
 
-      const finalPlatformFee =
-        Number(
-          data.platform_fee ??
-            platformFee
-        );
+      const finalPlatformFee = Number(data.platform_fee ?? platformFee);
 
-      const finalCgst =
-        Number(
-          data.cgst ?? cgst
-        );
+      const finalCgst = Number(data.cgst ?? cgst);
 
-      const finalSgst =
-        Number(
-          data.sgst ?? sgst
-        );
+      const finalSgst = Number(data.sgst ?? sgst);
 
-      const finalGst =
-        Number(
-          data.gst ??
-            finalCgst +
-              finalSgst
-        );
+      const finalGst = Number(data.gst ?? finalCgst + finalSgst);
 
-      const finalDiscount =
-        Number(
-          data.discount ??
-            discount
-        );
+      const finalDiscount = Number(data.discount ?? discount);
 
-      const finalTotal =
-        Number(
-          data.total ??
-            estimatedTotal
-        );
+      const finalTotal = Number(data.total ?? estimatedTotal);
 
       /*
        * Clear cart after successful order.
@@ -1283,150 +993,72 @@ export default function Checkout() {
         clearCart();
       }
 
-      toast.success(
-        "Order placed successfully!"
-      );
+      toast.success("Order placed successfully!");
 
       /*
        * WhatsApp store notification.
        */
 
-      const storeNumber =
-        String(
-          store.whatsapp || ""
-        ).replace(
-          /[^\d]/g,
-          ""
-        );
+      const storeNumber = String(store.whatsapp || "").replace(/[^\d]/g, "");
 
-      const itemsBlock = (
-        data.items || items
-      )
+      const itemsBlock = (data.items || items)
         .map((item) => {
-          const variant =
-            item.variant_label
-              ? ` (${item.variant_label})`
-              : item.unit
+          const variant = item.variant_label
+            ? ` (${item.variant_label})`
+            : item.unit
               ? ` (${item.unit})`
               : "";
 
           const itemTotal =
-            Number(
-              item.price || 0
-            ) *
-            Number(
-              item.quantity || 0
-            );
+            Number(item.price || 0) * Number(item.quantity || 0);
 
-          return `- ${
-            item.name
-          }${variant} x ${
-            item.quantity
-          } @ ₹${Number(
-            item.price || 0
-          ).toFixed(
-            2
-          )} = ₹${itemTotal.toFixed(
-            2
-          )}`;
+          return `- ${item.name}${variant} x ${item.quantity} @ ₹${Number(
+            item.price || 0,
+          ).toFixed(2)} = ₹${itemTotal.toFixed(2)}`;
         })
         .join("\n");
 
-      const orderId =
-        data.id
-          ? String(data.id)
-              .slice(-6)
-              .toUpperCase()
-          : "NEW";
+      const orderId = data.id ? String(data.id).slice(-6).toUpperCase() : "NEW";
 
-      const storeMessage =
-        encodeURIComponent(
-          `NEW ORDER #${orderId}
+      const storeMessage = encodeURIComponent(
+        `NEW ORDER #${orderId}
 
 ${itemsBlock}
 
-Subtotal: ₹${finalSubtotal.toFixed(
-            2
-          )}
-Discount: -₹${finalDiscount.toFixed(
-            2
-          )}
-Platform Fee: ₹${finalPlatformFee.toFixed(
-            2
-          )}
-Delivery: ₹${finalDeliveryFee.toFixed(
-            2
-          )}
-CGST (2.5%): ₹${finalCgst.toFixed(
-            2
-          )}
-SGST (2.5%): ₹${finalSgst.toFixed(
-            2
-          )}
-GST (5% Total): ₹${finalGst.toFixed(
-            2
-          )}
-Total: ₹${finalTotal.toFixed(
-            2
-          )}
+Subtotal: ₹${finalSubtotal.toFixed(2)}
+Discount: -₹${finalDiscount.toFixed(2)}
+Platform Fee: ₹${finalPlatformFee.toFixed(2)}
+Delivery: ₹${finalDeliveryFee.toFixed(2)}
+CGST (2.5%): ₹${finalCgst.toFixed(2)}
+SGST (2.5%): ₹${finalSgst.toFixed(2)}
+GST (5% Total): ₹${finalGst.toFixed(2)}
+Total: ₹${finalTotal.toFixed(2)}
 
-Payment: ${
-            data.payment_method ??
-            payment
-          }
+Payment: ${data.payment_method ?? payment}
 
-Customer: ${
-            data.address?.full_name ??
-            form.full_name
-          }
+Customer: ${data.address?.full_name ?? form.full_name}
 
-Phone: ${
-            data.address?.phone ??
-            form.phone
-          }
+Phone: ${data.address?.phone ?? form.phone}
 
-Address: ${
-            data.address?.line1 ??
-            form.line1
-          }${
-            (
-              data.address
-                ?.landmark ??
-              form.landmark
-            )
-              ? `, ${
-                  data.address
-                    ?.landmark ??
-                  form.landmark
-                }`
-              : ""
-          }, ${
-            data.address?.area ??
-            form.area
-          }, ${
-            data.address?.pincode ??
-            form.pincode
-          }
+Address: ${data.address?.line1 ?? form.line1}${
+          (data.address?.landmark ?? form.landmark)
+            ? `, ${data.address?.landmark ?? form.landmark}`
+            : ""
+        }, ${data.address?.area ?? form.area}, ${
+          data.address?.pincode ?? form.pincode
+        }
 
 Customer Location:
-https://www.google.com/maps?q=${
-            location.latitude
-          },${
-            location.longitude
-          }
+https://www.google.com/maps?q=${location.latitude},${location.longitude}
 
 Distance from Ambajogai Grocery:
-${
-  data.delivery_distance_km ??
-  estimatedDistance ??
-  0
-} km`
-        );
+${data.delivery_distance_km ?? estimatedDistance ?? 0} km`,
+      );
 
       if (storeNumber) {
         window.open(
           `https://wa.me/${storeNumber}?text=${storeMessage}`,
-          "_blank"
+          "_blank",
         );
       }
 
@@ -1435,26 +1067,17 @@ ${
        */
 
       try {
-        const {
-          data: notification,
-        } = await api.post(
+        const { data: notification } = await api.post(
           "/notify/order-whatsapp",
           {
-            order_id:
-              data.id,
-            event:
-              "placed",
-          }
+            order_id: data.id,
+            event: "placed",
+          },
         );
 
-        if (
-          notification?.url
-        ) {
+        if (notification?.url) {
           setTimeout(() => {
-            window.open(
-              notification.url,
-              "_blank"
-            );
+            window.open(notification.url, "_blank");
           }, 350);
         }
       } catch {
@@ -1463,13 +1086,9 @@ ${
          */
       }
 
-      navigate(
-        `/orders/${data.id}`
-      );
+      navigate(`/orders/${data.id}`);
     } catch (error) {
-      toast.error(
-        formatApiError(error)
-      );
+      toast.error(formatApiError(error));
     } finally {
       setSubmitting(false);
     }
@@ -1482,41 +1101,29 @@ ${
   */
 
   const applyCoupon = async () => {
-    const code =
-      couponInput
-        .trim()
-        .toUpperCase();
+    const code = couponInput.trim().toUpperCase();
 
     if (!code) {
-      toast.error(
-        "Enter a coupon code."
-      );
+      toast.error("Enter a coupon code.");
       return;
     }
 
     setCouponBusy(true);
 
     try {
-      const { data } =
-        await api.get(
-          `/coupons/${encodeURIComponent(
-            code
-          )}/validate?subtotal=${subtotal}`
-        );
+      const { data } = await api.get(
+        `/coupons/${encodeURIComponent(code)}/validate?subtotal=${subtotal}`,
+      );
 
       setCoupon(data);
 
       toast.success(
-        `Coupon ${data.code} applied — saved ${formatINR(
-          data.discount
-        )}`
+        `Coupon ${data.code} applied — saved ${formatINR(data.discount)}`,
       );
     } catch (error) {
       setCoupon(null);
 
-      toast.error(
-        formatApiError(error)
-      );
+      toast.error(formatApiError(error));
     } finally {
       setCouponBusy(false);
     }
@@ -1539,21 +1146,16 @@ ${
   |--------------------------------------------------------------------------
   */
 
-  const upiUrl =
-    `upi://pay?pa=${encodeURIComponent(
-      store.upi_id || ""
-    )}&pn=${encodeURIComponent(
-      store.upi_name || ""
-    )}&am=${estimatedTotal.toFixed(
-      2
-    )}&cu=INR&tn=${encodeURIComponent(
-      "Ambajogai Grocery Order"
-    )}`;
+  const upiUrl = `upi://pay?pa=${encodeURIComponent(
+    store.upi_id || "",
+  )}&pn=${encodeURIComponent(store.upi_name || "")}&am=${estimatedTotal.toFixed(
+    2,
+  )}&cu=INR&tn=${encodeURIComponent("Ambajogai Grocery Order")}`;
 
   const qrSrc =
     store.upi_qr ||
     `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(
-      upiUrl
+      upiUrl,
     )}`;
 
   /*
@@ -1563,49 +1165,42 @@ ${
   */
 
   return (
-    <div
-      className="container-app py-8"
-      data-testid="checkout-page"
-    >
-      <CartFlowHeader active="checkout" backTo="/cart" backLabel="Back to cart" />
+    <div className="container-app py-8" data-testid="checkout-page">
+      <CartFlowHeader
+        active="checkout"
+        backTo="/cart"
+        backLabel="Back to cart"
+      />
 
       <div className="mb-6">
-        <h1 className="font-heading text-2xl font-bold text-[#1B4332] sm:text-3xl">Complete your order</h1>
+        <h1 className="font-heading text-2xl font-bold text-[#1B4332] sm:text-3xl">
+          Complete your order
+        </h1>
         <p className="mt-1.5 text-sm text-[#4A4A4A]">
-          Enter delivery details, apply a coupon if you have one, and choose payment.
+          Enter delivery details, apply a coupon if you have one, and choose
+          payment.
         </p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_400px] lg:gap-8">
-
         {/* LEFT */}
 
         <div className="space-y-6">
-
           {/* DELIVERY ADDRESS */}
 
           <FlowSection step={1} title="Delivery address" icon={MapPin}>
             <div className="grid gap-4 sm:grid-cols-2">
-
               <Field
                 label="Full name"
-                value={
-                  form.full_name
-                }
-                onChange={update(
-                  "full_name"
-                )}
+                value={form.full_name}
+                onChange={update("full_name")}
                 testid="addr-name"
               />
 
               <Field
                 label="Phone"
-                value={
-                  form.phone
-                }
-                onChange={update(
-                  "phone"
-                )}
+                value={form.phone}
+                onChange={update("phone")}
                 testid="addr-phone"
                 placeholder="+91..."
               />
@@ -1613,12 +1208,8 @@ ${
               <div className="sm:col-span-2">
                 <Field
                   label="Address line"
-                  value={
-                    form.line1
-                  }
-                  onChange={update(
-                    "line1"
-                  )}
+                  value={form.line1}
+                  onChange={update("line1")}
                   testid="addr-line"
                   placeholder="House / flat no, street"
                 />
@@ -1626,34 +1217,22 @@ ${
 
               <Field
                 label="Landmark (optional)"
-                value={
-                  form.landmark
-                }
-                onChange={update(
-                  "landmark"
-                )}
+                value={form.landmark}
+                onChange={update("landmark")}
                 testid="addr-landmark"
               />
 
               <Field
                 label="Area / Locality"
-                value={
-                  form.area
-                }
-                onChange={update(
-                  "area"
-                )}
+                value={form.area}
+                onChange={update("area")}
                 testid="addr-area"
               />
 
               <Field
                 label="Pincode"
-                value={
-                  form.pincode
-                }
-                onChange={update(
-                  "pincode"
-                )}
+                value={form.pincode}
+                onChange={update("pincode")}
                 testid="addr-pincode"
                 placeholder="6-digit pincode"
               />
@@ -1661,12 +1240,8 @@ ${
               <div className="sm:col-span-2">
                 <Field
                   label="Order notes (optional)"
-                  value={
-                    form.notes
-                  }
-                  onChange={update(
-                    "notes"
-                  )}
+                  value={form.notes}
+                  onChange={update("notes")}
                   testid="order-notes"
                   placeholder="Any special instructions?"
                 />
@@ -1677,31 +1252,25 @@ ${
 
             <div className="mt-5 rounded-xl border border-[#1B4332]/20 bg-[#1B4332]/5 p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
-
                 <div>
                   <div className="font-semibold text-[#1B4332]">
                     Saved address
                   </div>
 
                   <p className="mt-1 text-xs text-[#4A4A4A]">
-                    Save this address to use it automatically on your next checkout.
+                    Save this address to use it automatically on your next
+                    checkout.
                   </p>
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-
                   <button
                     type="button"
                     onClick={saveCurrentAddress}
-                    disabled={
-                      savedAddressBusy ||
-                      savedAddressLoading
-                    }
+                    disabled={savedAddressBusy || savedAddressLoading}
                     className="rounded-full bg-[#1B4332] px-4 py-2 text-xs font-semibold text-white hover:bg-[#2D6A4F] disabled:opacity-50"
                   >
-                    {savedAddressBusy
-                      ? "Saving..."
-                      : "Save address"}
+                    {savedAddressBusy ? "Saving..." : "Save address"}
                   </button>
 
                   {savedAddress && (
@@ -1714,7 +1283,6 @@ ${
                       Delete saved
                     </button>
                   )}
-
                 </div>
               </div>
 
@@ -1732,34 +1300,28 @@ ${
 
                   <div className="mt-1">
                     {savedAddress.line1}
-                    {savedAddress.area
-                      ? `, ${savedAddress.area}`
-                      : ""}
-                    {savedAddress.pincode
-                      ? ` - ${savedAddress.pincode}`
-                      : ""}
+                    {savedAddress.area ? `, ${savedAddress.area}` : ""}
+                    {savedAddress.pincode ? ` - ${savedAddress.pincode}` : ""}
                   </div>
                 </div>
               )}
-
             </div>
 
             {/* LOCATION */}
 
             <div className="mt-5 rounded-xl border border-[#8BA888]/30 bg-[#8BA888]/10 p-4">
               <div className="flex items-start gap-3">
-
                 <Navigation className="mt-0.5 h-5 w-5 text-[#1B4332]" />
 
                 <div className="flex-1">
-
                   <div className="font-semibold text-[#1B4332]">
                     Quick fill (optional)
                   </div>
 
                   <p className="mt-1 text-xs text-[#4A4A4A]">
-                    Use your current location to auto-fill the address above, or type
-                    any delivery address in Ambajogai (home, work, or a friend&apos;s place).
+                    Use your current location to auto-fill the address above, or
+                    type any delivery address in Ambajogai (home, work, or a
+                    friend&apos;s place).
                   </p>
 
                   {geocoding && (
@@ -1769,51 +1331,33 @@ ${
                   )}
 
                   {!geocoding &&
-                    location.latitude !==
-                      null &&
-                    location.longitude !==
-                      null && (
+                    location.latitude !== null &&
+                    location.longitude !== null && (
                       <div className="mt-2 text-xs font-medium text-[#1B4332]">
                         Delivery address located ✓
                       </div>
                     )}
 
-                  {estimatedDistance !==
-                    null && (
+                  {estimatedDistance !== null && (
                     <>
                       <div className="mt-2 text-xs text-[#4A4A4A]">
                         Estimated distance:{" "}
-                        <strong>
-                          {estimatedDistance.toFixed(
-                            2
-                          )}{" "}
-                          km
-                        </strong>
+                        <strong>{estimatedDistance.toFixed(2)} km</strong>
                       </div>
 
-                      {location.accuracy !==
-                        null && (
+                      {location.accuracy !== null && (
                         <div className="mt-1 text-xs text-[#4A4A4A]">
-                          GPS accuracy:{" "}
-                          {Math.round(
-                            location.accuracy
-                          )}{" "}
-                          m
+                          GPS accuracy: {Math.round(location.accuracy)} m
                         </div>
                       )}
                     </>
                   )}
-
                 </div>
 
                 <button
                   type="button"
-                  onClick={
-                    getCurrentLocation
-                  }
-                  disabled={
-                    locating
-                  }
+                  onClick={getCurrentLocation}
+                  disabled={locating}
                   className="inline-flex items-center gap-1.5 rounded-full bg-[#1B4332] px-4 py-2 text-xs font-semibold text-white hover:bg-[#2D6A4F] disabled:opacity-50"
                   data-testid="get-location-btn"
                 >
@@ -1823,11 +1367,8 @@ ${
                     <Navigation className="h-3.5 w-3.5" />
                   )}
 
-                  {locating
-                    ? "Locating..."
-                    : "Use my location"}
+                  {locating ? "Locating..." : "Use my location"}
                 </button>
-
               </div>
             </div>
           </FlowSection>
@@ -1837,16 +1378,9 @@ ${
           <FlowSection step={2} title="Coupon code" icon={Tag}>
             {!coupon ? (
               <div className="flex gap-2">
-
                 <input
-                  value={
-                    couponInput
-                  }
-                  onChange={(e) =>
-                    setCouponInput(
-                      e.target.value.toUpperCase()
-                    )
-                  }
+                  value={couponInput}
+                  onChange={(e) => setCouponInput(e.target.value.toUpperCase())}
                   placeholder="Enter coupon code"
                   className="input-base flex-1"
                   data-testid="coupon-input"
@@ -1854,52 +1388,34 @@ ${
 
                 <button
                   type="button"
-                  onClick={
-                    applyCoupon
-                  }
-                  disabled={
-                    couponBusy
-                  }
+                  onClick={applyCoupon}
+                  disabled={couponBusy}
                   className="rounded-xl bg-[#1B4332] px-5 py-2 text-sm font-semibold text-white hover:bg-[#2D6A4F] disabled:opacity-50"
                   data-testid="apply-coupon"
                 >
-                  {couponBusy
-                    ? "Checking..."
-                    : "Apply"}
+                  {couponBusy ? "Checking..." : "Apply"}
                 </button>
-
               </div>
             ) : (
               <div className="flex items-center justify-between rounded-xl bg-[#8BA888]/10 p-4">
-
                 <div>
-
                   <div className="font-semibold text-[#1B4332]">
-                    {
-                      coupon.code
-                    }
+                    {coupon.code}
                   </div>
 
                   <div className="text-xs text-[#4A4A4A]">
-                    You save{" "}
-                    {formatINR(
-                      discount
-                    )}
+                    You save {formatINR(discount)}
                   </div>
-
                 </div>
 
                 <button
                   type="button"
-                  onClick={
-                    removeCoupon
-                  }
+                  onClick={removeCoupon}
                   className="grid h-8 w-8 place-items-center rounded-full hover:bg-white"
                   aria-label="Remove coupon"
                 >
                   <X className="h-4 w-4" />
                 </button>
-
               </div>
             )}
           </FlowSection>
@@ -1914,7 +1430,9 @@ ${
               <div className="flex items-center justify-between gap-2 border-b border-[#E5E5E5]/80 px-4 py-3">
                 <div className="flex items-center gap-2">
                   <ShoppingBag className="h-4 w-4 text-[#1B4332]" />
-                  <h3 className="text-sm font-semibold text-[#1B4332]">Your cart</h3>
+                  <h3 className="text-sm font-semibold text-[#1B4332]">
+                    Your cart
+                  </h3>
                   <span className="rounded-full bg-[#1B4332]/10 px-2 py-0.5 text-[10px] font-bold text-[#1B4332]">
                     {items.reduce((n, it) => n + it.quantity, 0)} items
                   </span>
@@ -1939,247 +1457,200 @@ ${
                       className="h-11 w-11 shrink-0 rounded-lg object-cover"
                     />
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-[#1B4332]">{item.name}</p>
+                      <p className="truncate text-sm font-medium text-[#1B4332]">
+                        {item.name}
+                      </p>
                       <p className="text-xs text-[#4A4A4A]">
                         {item.variant_label ? `${item.variant_label} · ` : ""}
-                        Qty {item.quantity} × {formatINR(Number(item.price || 0))}
+                        Qty {item.quantity} ×{" "}
+                        {formatINR(Number(item.price || 0))}
                       </p>
                     </div>
                     <span className="shrink-0 text-sm font-bold text-[#1B4332]">
-                      {formatINR(Number(item.price || 0) * Number(item.quantity || 0))}
+                      {formatINR(
+                        Number(item.price || 0) * Number(item.quantity || 0),
+                      )}
                     </span>
                   </li>
                 ))}
               </ul>
 
               <div className="flex items-center justify-between border-t border-dashed border-[#E5E5E5] bg-[#1B4332]/5 px-4 py-3 text-sm">
-                <span className="font-medium text-[#4A4A4A]">Cart subtotal</span>
-                <span className="font-heading text-lg font-bold text-[#1B4332]">{formatINR(subtotal)}</span>
+                <span className="font-medium text-[#4A4A4A]">
+                  Cart subtotal
+                </span>
+                <span className="font-heading text-lg font-bold text-[#1B4332]">
+                  {formatINR(subtotal)}
+                </span>
               </div>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
-
               <PayOption
-                selected={
-                  payment === "UPI"
-                }
-                onClick={() =>
-                  setPayment(
-                    "UPI"
-                  )
-                }
+                selected={payment === "UPI"}
+                onClick={() => setPayment("UPI")}
                 title="UPI"
                 sub="Google Pay, PhonePe, Paytm & other UPI apps"
                 testid="payment-upi"
               />
 
               <PayOption
-                selected={
-                  payment === "COD"
-                }
-                onClick={() =>
-                  setPayment(
-                    "COD"
-                  )
-                }
+                selected={payment === "COD"}
+                onClick={() => setPayment("COD")}
                 title="Cash on Delivery"
                 sub="Pay when your order arrives"
                 testid="payment-cod"
               />
-
             </div>
 
-            {payment ===
-              "UPI" && (
+            {payment === "UPI" && (
               <div className="mt-6 rounded-xl bg-[#8BA888]/10 p-5 text-center">
-
                 <img
                   src={qrSrc}
                   alt="UPI QR"
                   className="mx-auto h-52 w-52 rounded-xl bg-white p-2"
                 />
 
-                <div className="mt-4 text-sm font-semibold text-[#1B4332]">
-                  {
-                    store.upi_name
-                  }
-                </div>
+                <div className="mt-1 flex items-center justify-center gap-2 text-xs text-[#4A4A4A]">
+                  <span>{store.upi_id}</span>
 
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(store.upi_id || "");
+                        setCopiedUpi(true);
+                        setTimeout(() => setCopiedUpi(false), 2000);
+                      } catch (error) {
+                        console.error("Failed to copy UPI ID:", error);
+                      }
+                    }}
+                    className="rounded-md border border-[#1B4332] px-2 py-1 text-[11px] font-semibold text-[#1B4332] transition hover:bg-[#1B4332] hover:text-white"
+                  >
+                    {copiedUpi ? "Copied ✓" : "Copy"}
+                  </button>
+                </div>
                 <div className="mt-1 text-xs text-[#4A4A4A]">
-                  {
-                    store.upi_id
-                  }
+                  {store.upi_id}
                 </div>
 
                 <div className="mt-3 text-xs text-[#4A4A4A]">
                   Pay{" "}
                   <span className="font-mono font-bold text-[#1B4332]">
-                    {formatINR(
-                      estimatedTotal
-                    )}
+                    {formatINR(estimatedTotal)}
                   </span>{" "}
                   using any UPI app.
                 </div>
 
                 <div className="mt-2 text-xs text-[#4A4A4A]">
-                  After payment, place the order. We&apos;ll confirm it via WhatsApp.
+                  After payment, place the order. We&apos;ll confirm it via
+                  WhatsApp.
                 </div>
-
               </div>
             )}
 
-            {payment ===
-              "COD" && (
+            {payment === "COD" && (
               <div className="mt-6 flex items-start gap-2 rounded-xl bg-[#8BA888]/10 p-4 text-sm text-[#1B4332]">
-
                 <Truck className="mt-0.5 h-4 w-4" />
 
                 <span>
-                  Please keep exact change ready. Cash on Delivery is available across Ambajogai.
+                  Please keep exact change ready. Cash on Delivery is available
+                  across Ambajogai.
                 </span>
-
               </div>
             )}
-
           </FlowSection>
         </div>
 
         {/* RIGHT */}
 
-        <SummaryCard title="Order summary" icon={ShoppingBag} testId="checkout-summary">
+        <SummaryCard
+          title="Order summary"
+          icon={ShoppingBag}
+          testId="checkout-summary"
+        >
           <div className="max-h-56 space-y-2.5 overflow-auto pr-1 -mt-2">
-
             {items.map((item) => (
-                <div
-                  key={`${item.product_id}-${item.variant_label || ""}`}
-                  className="flex items-center gap-3 rounded-xl bg-[#FAFAFA] p-2.5 ring-1 ring-black/5"
-                >
-                  <img
-                    src={item.image}
-                    alt=""
-                    className="h-11 w-11 shrink-0 rounded-lg object-cover"
-                  />
-                  <div className="min-w-0 flex-1 text-sm">
-                    <div className="truncate font-medium text-[#1B4332]">{item.name}</div>
-                    {item.variant_label && (
-                      <div className="text-[10px] font-bold uppercase tracking-wide text-[#8BA888]">
-                        {item.variant_label}
-                      </div>
-                    )}
-                    <div className="text-xs text-[#4A4A4A]">
-                      Qty {item.quantity} × {formatINR(Number(item.price || 0))}
-                    </div>
+              <div
+                key={`${item.product_id}-${item.variant_label || ""}`}
+                className="flex items-center gap-3 rounded-xl bg-[#FAFAFA] p-2.5 ring-1 ring-black/5"
+              >
+                <img
+                  src={item.image}
+                  alt=""
+                  className="h-11 w-11 shrink-0 rounded-lg object-cover"
+                />
+                <div className="min-w-0 flex-1 text-sm">
+                  <div className="truncate font-medium text-[#1B4332]">
+                    {item.name}
                   </div>
-                  <div className="shrink-0 text-sm font-bold text-[#1B4332]">
-                    {formatINR(Number(item.price || 0) * Number(item.quantity || 0))}
+                  {item.variant_label && (
+                    <div className="text-[10px] font-bold uppercase tracking-wide text-[#8BA888]">
+                      {item.variant_label}
+                    </div>
+                  )}
+                  <div className="text-xs text-[#4A4A4A]">
+                    Qty {item.quantity} × {formatINR(Number(item.price || 0))}
                   </div>
                 </div>
-              ))}
-
+                <div className="shrink-0 text-sm font-bold text-[#1B4332]">
+                  {formatINR(
+                    Number(item.price || 0) * Number(item.quantity || 0),
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
 
           <div className="mt-4 space-y-2 border-t border-dashed pt-4 text-sm">
+            <Row label="Subtotal" value={formatINR(subtotal)} />
 
-            <Row
-              label="Subtotal"
-              value={formatINR(
-                subtotal
-              )}
-            />
-
-            {discount >
-              0 && (
+            {discount > 0 && (
               <Row
                 label={`Coupon (${coupon.code})`}
-                value={`- ${formatINR(
-                  discount
-                )}`}
+                value={`- ${formatINR(discount)}`}
               />
             )}
 
-            <Row
-              label="Platform fee"
-              value={formatINR(
-                platformFee
-              )}
-            />
+            <Row label="Platform fee" value={formatINR(platformFee)} />
 
             <Row
               label="Delivery"
               value={
-                location.latitude ===
-                    null ||
-                location.longitude ===
-                    null
+                location.latitude === null || location.longitude === null
                   ? "Location required"
-                  : formatINR(
-                      estimatedDeliveryFee
-                    )
+                  : formatINR(estimatedDeliveryFee)
               }
             />
 
-            {estimatedDistance !==
-              null && (
+            {estimatedDistance !== null && (
               <div className="rounded-lg bg-[#8BA888]/10 px-3 py-2 text-xs text-[#1B4332]">
-
-                {Number(
-                  discountedSubtotal
-                ) >= freeDeliveryThreshold
+                {Number(discountedSubtotal) >= freeDeliveryThreshold
                   ? "FREE delivery"
-                  : estimatedDistance <=
-                    deliveryNearKm
-                  ? `₹${deliveryNearFee} up to ${deliveryNearKm} km`
-                  : `₹${deliveryNearFee} + ₹${deliveryPerKm}/km beyond ${deliveryNearKm} km`}
-
+                  : estimatedDistance <= deliveryNearKm
+                    ? `₹${deliveryNearFee} up to ${deliveryNearKm} km`
+                    : `₹${deliveryNearFee} + ₹${deliveryPerKm}/km beyond ${deliveryNearKm} km`}
                 {" · "}
-
-                {estimatedDistance.toFixed(
-                  2
-                )}{" "}
-                km
-
+                {estimatedDistance.toFixed(2)} km
               </div>
             )}
 
-            <Row
-              label="CGST (2.5%)"
-              value={formatINR(
-                cgst
-              )}
-            />
+            <Row label="CGST (2.5%)" value={formatINR(cgst)} />
 
-            <Row
-              label="SGST (2.5%)"
-              value={formatINR(
-                sgst
-              )}
-            />
+            <Row label="SGST (2.5%)" value={formatINR(sgst)} />
 
-            <Row
-              label="GST (5% total)"
-              value={formatINR(
-                gst
-              )}
-            />
-
+            <Row label="GST (5% total)" value={formatINR(gst)} />
           </div>
 
           <div className="mt-3 flex items-center justify-between border-t border-dashed pt-3">
-
-            <span className="text-sm font-semibold">
-              Total
-            </span>
+            <span className="text-sm font-semibold">Total</span>
 
             <span
               className="font-heading text-2xl font-bold text-[#1B4332]"
               data-testid="checkout-total"
             >
-              {formatINR(
-                estimatedTotal
-              )}
+              {formatINR(estimatedTotal)}
             </span>
-
           </div>
 
           {/* DELIVERY SERVICEABILITY MESSAGE */}
@@ -2191,47 +1662,37 @@ ${
             </div>
           )}
 
-          {!serviceabilityLoading &&
-            serviceable === false && (
+          {!serviceabilityLoading && serviceable === false && (
             <div
               className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-center text-sm text-red-700"
               data-testid="outside-zone-message"
             >
               <strong>{serviceabilityMessage || SERVICEABILITY_MESSAGE}</strong>
               <div className="mt-1 text-xs text-red-600">
-                Please enter a delivery address within Ambajogai (you can order for home, work, or someone else).
+                Please enter a delivery address within Ambajogai (you can order
+                for home, work, or someone else).
               </div>
             </div>
           )}
 
-          {!serviceabilityLoading &&
-            serviceable === true && (
+          {!serviceabilityLoading && serviceable === true && (
             <div
               className="mt-4 rounded-xl border border-green-200 bg-green-50 p-3 text-center text-sm text-green-700"
               data-testid="serviceable-zone-message"
             >
-              {serviceabilityMessage || `Delivery available in ${DELIVERY_ZONE_NAME}.`}
+              {serviceabilityMessage ||
+                `Delivery available in ${DELIVERY_ZONE_NAME}.`}
             </div>
           )}
 
           {/* MINIMUM ORDER MESSAGE */}
 
-          {Number(subtotal || 0) <
-            MINIMUM_ORDER_VALUE && (
+          {Number(subtotal || 0) < MINIMUM_ORDER_VALUE && (
             <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-center text-sm text-red-700">
-              Minimum order value is{" "}
+              Minimum order value is <strong>₹{MINIMUM_ORDER_VALUE}</strong>.
+              Please add{" "}
               <strong>
-                ₹{MINIMUM_ORDER_VALUE}
-              </strong>
-              . Please add{" "}
-              <strong>
-                ₹
-                {(
-                  MINIMUM_ORDER_VALUE -
-                  Number(
-                    subtotal || 0
-                  )
-                ).toFixed(2)}
+                ₹{(MINIMUM_ORDER_VALUE - Number(subtotal || 0)).toFixed(2)}
               </strong>{" "}
               more to place your order.
             </div>
@@ -2239,25 +1700,19 @@ ${
 
           <button
             type="button"
-            onClick={
-              submit
-            }
+            onClick={submit}
             disabled={
               submitting ||
               geocoding ||
               serviceabilityLoading ||
               serviceable !== true ||
-              location.latitude ===
-                null ||
-              location.longitude ===
-                null ||
-              Number(subtotal || 0) <
-                MINIMUM_ORDER_VALUE
+              location.latitude === null ||
+              location.longitude === null ||
+              Number(subtotal || 0) < MINIMUM_ORDER_VALUE
             }
             className="btn-primary mt-6 w-full disabled:cursor-not-allowed disabled:opacity-50"
             data-testid="place-order-btn"
           >
-
             {submitting ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
@@ -2267,26 +1722,21 @@ ${
             {submitting
               ? "Placing order..."
               : geocoding
-              ? "Locating address..."
-              : serviceabilityLoading
-              ? "Verifying delivery area..."
-              : serviceable === false
-              ? "Outside delivery area"
-              : serviceable !== true
-              ? "Enter delivery address"
-              : Number(
-                  subtotal || 0
-                ) <
-                MINIMUM_ORDER_VALUE
-              ? `Minimum ₹${MINIMUM_ORDER_VALUE} required`
-              : "Place order"}
-
+                ? "Locating address..."
+                : serviceabilityLoading
+                  ? "Verifying delivery area..."
+                  : serviceable === false
+                    ? "Outside delivery area"
+                    : serviceable !== true
+                      ? "Enter delivery address"
+                      : Number(subtotal || 0) < MINIMUM_ORDER_VALUE
+                        ? `Minimum ₹${MINIMUM_ORDER_VALUE} required`
+                        : "Place order"}
           </button>
 
           <p className="mt-3 text-center text-xs text-[#4A4A4A]">
             We&apos;ll send order confirmation via WhatsApp.
           </p>
-
         </SummaryCard>
       </div>
     </div>
@@ -2299,16 +1749,9 @@ ${
 |--------------------------------------------------------------------------
 */
 
-function Field({
-  label,
-  value,
-  onChange,
-  testid,
-  placeholder,
-}) {
+function Field({ label, value, onChange, testid, placeholder }) {
   return (
     <div>
-
       <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">
         {label}
       </label>
@@ -2316,13 +1759,10 @@ function Field({
       <input
         value={value}
         onChange={onChange}
-        placeholder={
-          placeholder
-        }
+        placeholder={placeholder}
         className="input-base"
         data-testid={testid}
       />
-
     </div>
   );
 }
@@ -2333,21 +1773,12 @@ function Field({
 |--------------------------------------------------------------------------
 */
 
-function Row({
-  label,
-  value,
-}) {
+function Row({ label, value }) {
   return (
     <div className="flex items-center justify-between">
+      <span className="text-[#4A4A4A]">{label}</span>
 
-      <span className="text-[#4A4A4A]">
-        {label}
-      </span>
-
-      <span className="font-semibold">
-        {value}
-      </span>
-
+      <span className="font-semibold">{value}</span>
     </div>
   );
 }
@@ -2358,13 +1789,7 @@ function Row({
 |--------------------------------------------------------------------------
 */
 
-function PayOption({
-  selected,
-  onClick,
-  title,
-  sub,
-  testid,
-}) {
+function PayOption({ selected, onClick, title, sub, testid }) {
   return (
     <button
       type="button"
@@ -2376,16 +1801,9 @@ function PayOption({
       }`}
       data-testid={testid}
     >
+      <div className="font-semibold text-[#1A1A1A]">{title}</div>
 
-      <div className="font-semibold text-[#1A1A1A]">
-        {title}
-      </div>
-
-      <div className="mt-1 text-xs text-[#4A4A4A]">
-        {sub}
-      </div>
-
+      <div className="mt-1 text-xs text-[#4A4A4A]">{sub}</div>
     </button>
   );
 }
-
