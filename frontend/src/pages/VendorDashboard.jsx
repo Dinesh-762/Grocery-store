@@ -1265,16 +1265,21 @@ function VSettings() {
             onChange={(x) => up("shop_whatsapp", x)}
             placeholder="+91..."
           />
-          <FF
-            label="Shop logo URL"
-            value={v.shop_logo || ""}
-            onChange={(x) => up("shop_logo", x)}
-          />
-          <FF
-            label="Banner image URL"
-            value={v.banner_image || ""}
-            onChange={(x) => up("banner_image", x)}
-          />
+          
+          <ImageSourcePicker
+
+  label="Shop logo"
+  value={v.shop_logo || ""}
+  onChange={(url) => up("shop_logo", url)}
+  testIdPrefix="shop-logo"
+/>
+
+<ImageSourcePicker
+  label="Banner image"
+  value={v.banner_image || ""}
+  onChange={(url) => up("banner_image", url)}
+  testIdPrefix="banner-image"
+/>
         </div>
       </section>
 

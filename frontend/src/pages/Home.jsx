@@ -12,24 +12,23 @@ export default function Home() {
   const [featured, setFeatured] = useState([]);
   const [popular, setPopular] = useState([]);
   const [allProducts, setAllProducts] = useState([]);
+  const [vendors, setVendors] = useState([]);
   const [reviews, setReviews] = useState([]);
   const [offers, setOffers] = useState([]);
 
   useEffect(() => {
     (async () => {
       try {
-        const [cRes, fRes, pRes, aRes, rRes, oRes] = await Promise.all([
-          api.get("/categories"),
-          api.get("/products?featured=true&limit=8"),
-          api.get("/products?popular=true&limit=8"),
-          api.get("/products?limit=200"),
-          api.get("/reviews?limit=6"),
-          api.get("/offers"),
-        ]);
+        const [cRes, fRes, rRes, oRes, vRes] = await Promise.all([
+  api.get("/categories"),
+  api.get("/products?featured=true&limit=8"),
+  api.get("/reviews?limit=6"),
+  api.get("/offers"),
+  api.get("/vendors"),
+]);
         setCategories(cRes.data);
         setFeatured(fRes.data);
-        setPopular(pRes.data);
-        setAllProducts(aRes.data);
+        setVendors(vRes.data);
         setReviews(rRes.data);
         setOffers(oRes.data);
       } catch {
@@ -39,19 +38,7 @@ export default function Home() {
   }, []);
 
   // Group products by vendor for the "Shop by Store" section
-  const productsByVendor = useMemo(() => {
-    const groups = {};
-    for (const p of allProducts) {
-      if (!p.vendor_id || !p.vendor_name) continue;
-      if (!groups[p.vendor_id]) {
-        groups[p.vendor_id] = { vendor_id: p.vendor_id, vendor_name: p.vendor_name, items: [] };
-      }
-      if (groups[p.vendor_id].items.length < 4) {
-        groups[p.vendor_id].items.push(p);
-      }
-    }
-    return Object.values(groups);
-  }, [allProducts]);
+
 
   const submitSearch = (e) => {
     e.preventDefault();
@@ -74,7 +61,7 @@ export default function Home() {
         <div className="container-app relative py-16 sm:py-24 lg:py-32">
           <div className="max-w-2xl">
             <span className="inline-flex max-w-full items-center gap-2 rounded-full border border-white/30 bg-white/10 px-3 py-1 text-[11px] font-medium text-white backdrop-blur-sm sm:text-xs">
-              <Sparkles className="h-3.5 w-3.5 shrink-0" /> Local & Fresh, Delivered in 30–45 minutes
+              <Sparkles className="h-3.5 w-3.5 shrink-0" /> Local & Fresh, Delivered in 15–20 minutes
             </span>
             <h1 className="mt-4 font-heading text-3xl font-bold text-white sm:mt-6 sm:text-5xl lg:text-6xl">
               Ambajogai&apos;s freshest
@@ -109,7 +96,7 @@ export default function Home() {
             <div className="mt-6 flex flex-col gap-3 sm:mt-8 sm:flex-row sm:flex-wrap sm:gap-6">
               {[
                 { icon: Truck, text: "Free delivery over ₹499" },
-                { icon: Clock, text: "Delivered in 30–45 min" },
+                { icon: Clock, text: "Delivered in 15–20 min" },
                 { icon: ShieldCheck, text: "100% quality assured" },
               ].map(({ icon: Icon, text }) => (
                 <div key={text} className="flex items-center gap-2 text-sm text-white/85">
@@ -186,54 +173,79 @@ export default function Home() {
         </section>
       )}
 
-      {/* POPULAR */}
-      {popular.length > 0 && (
-        <section className="container-app py-8">
-          <SectionHeading title="Popular Right Now" subtitle="What Ambajogai is buying this week" />
-          <div className="mt-8 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
-            {popular.map((p) => (
-              <ProductCard key={p.id} product={p} />
-            ))}
-          </div>
-        </section>
-      )}
 
-      {/* SHOP BY VENDOR / STORE */}
-      {productsByVendor.length > 0 && (
-        <section className="container-app py-8" data-testid="shop-by-vendor">
-          <SectionHeading title="Shop by Store" subtitle="Fresh picks from your neighbourhood vendors" />
-          <div className="mt-8 space-y-10">
-            {productsByVendor.map((g) => (
-              <div key={g.vendor_id} data-testid={`vendor-group-${g.vendor_id}`}>
-                <div className="flex items-center justify-between">
-                  <Link
-                    to={`/vendors/${g.vendor_id}`}
-                    className="group inline-flex items-center gap-2 text-lg font-semibold text-[#1A1A1A] hover:text-[#1B4332]"
-                  >
-                    <span className="grid h-9 w-9 place-items-center rounded-full bg-[#1B4332]/10 text-[#1B4332]">
-                      <Store className="h-4 w-4" />
-                    </span>
-                    {g.vendor_name}
-                    <ArrowRight className="h-4 w-4 opacity-0 transition-opacity group-hover:opacity-100" />
-                  </Link>
-                  <Link
-                    to={`/vendors/${g.vendor_id}`}
-                    className="text-xs font-semibold text-[#1B4332] hover:text-[#E07A5F]"
-                    data-testid={`view-store-${g.vendor_id}`}
-                  >
-                    View store
-                  </Link>
-                </div>
-                <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
-                  {g.items.map((p) => (
-                    <ProductCard key={p.id} product={p} />
-                  ))}
-                </div>
+
+{/* SHOP BY STORE */}
+{vendors.length > 0 && (
+  <section className="container-app py-8" data-testid="shop-by-store">
+    <SectionHeading
+      title="Shop by Store"
+      subtitle="Discover trusted shops from your neighbourhood"
+    />
+
+    <div className="mt-8 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+      {vendors.map((vendor) => (
+        <Link
+          key={vendor.id}
+          to={`/vendors/${vendor.id}`}
+          className="group overflow-hidden rounded-2xl border border-[#E5E5E5] bg-white shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-[#8BA888] hover:shadow-md"
+          data-testid={`vendor-card-${vendor.id}`}
+        >
+          {/* SHOP IMAGE */}
+          <div className="relative aspect-[4/3] overflow-hidden bg-[#F4F6F2]">
+            {vendor.shop_logo ? (
+              <img
+                src={vendor.shop_logo}
+                alt={vendor.business_name}
+                loading="lazy"
+                className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+              />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center">
+                <Store className="h-12 w-12 text-[#8BA888]" />
               </div>
-            ))}
+            )}
+
+            {vendor.verified && (
+              <span className="absolute left-3 top-3 rounded-full bg-white/95 px-2.5 py-1 text-[11px] font-semibold text-[#1B4332] shadow-sm">
+                ✓ Verified
+              </span>
+            )}
+
+            {vendor.vacation_mode && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/45">
+                <span className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-gray-700">
+                  Temporarily Closed
+                </span>
+              </div>
+            )}
           </div>
-        </section>
-      )}
+
+          {/* SHOP INFO */}
+          <div className="p-4">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="truncate text-sm font-semibold text-[#1A1A1A] sm:text-base">
+                {vendor.business_name}
+              </h3>
+
+              <ArrowRight className="h-4 w-4 shrink-0 text-[#1B4332] opacity-0 transition-all duration-300 group-hover:translate-x-1 group-hover:opacity-100" />
+            </div>
+
+            {vendor.description && (
+              <p className="mt-1 line-clamp-2 text-xs text-[#6B6B6B]">
+                {vendor.description}
+              </p>
+            )}
+
+            <div className="mt-3 text-xs font-semibold text-[#1B4332]">
+              View Store →
+            </div>
+          </div>
+        </Link>
+      ))}
+    </div>
+  </section>
+)}
 
       {/* WHY US */}
       <section className="bg-white py-20">
@@ -242,7 +254,7 @@ export default function Home() {
           <div className="mt-10 grid gap-6 md:grid-cols-3">
             {[
               { icon: "🌾", title: "Farm-fresh daily", body: "We source directly from local farmers to bring you the freshest produce every single day." },
-              { icon: "⚡", title: "Lightning fast delivery", body: "Order any time and get your groceries delivered in 30–45 minutes, right at your doorstep across Ambajogai." },
+              { icon: "⚡", title: "Lightning fast delivery", body: "Order any time and get your groceries delivered in 15–20 minutes, right at your doorstep across Ambajogai." },
               { icon: "💚", title: "Fair prices, no hidden fees", body: "Transparent pricing on every item. What you see is what you pay — plus free delivery over ₹499." },
             ].map((w) => (
               <div key={w.title} className="rounded-2xl border border-[#E5E5E5] p-6">
