@@ -20,7 +20,7 @@ import Footer from "@/components/Footer";
 const FAQ = [
   {
     q: "How fast is delivery?",
-    a: "Most orders reach your doorstep within 30–45 minutes across Ambajogai. Delivery is free for orders above ₹499.",
+    a: "Most orders reach your doorstep within 15–20 minutes across Ambajogai. Delivery is free for orders above ₹499.",
     icon: Truck,
   },
   {

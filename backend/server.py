@@ -1974,7 +1974,18 @@ async def vendor_me(user: dict = Depends(get_current_user)):
 async def list_public_vendors():
     docs = await db.vendors.find({"status": "Approved"}).to_list(500)
     return [
-        {"id": str(v["_id"]), "business_name": v["business_name"], "description": v.get("business_description", "")}
+        {
+            "id": str(v["_id"]),
+            "business_name": v["business_name"],
+            "description": v.get("business_description", ""),
+            "shop_logo": v.get("shop_logo", ""),
+            "banner_image": v.get("banner_image", ""),
+            "business_address": v.get("business_address", ""),
+            "business_pincode": v.get("business_pincode", ""),
+            "open_now": v.get("open_now", True),
+            "vacation_mode": v.get("vacation_mode", False),
+            "verified": v.get("status") == "Approved",
+        }
         for v in docs
     ]
 

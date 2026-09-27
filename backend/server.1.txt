@@ -1865,7 +1865,7 @@ async def store_info():
         "name": os.environ.get("STORE_NAME", "Ambajogai Grocery Store"),
         "whatsapp": os.environ.get("STORE_WHATSAPP", "+918237214975"),
         "phone": os.environ.get("STORE_PHONE", os.environ.get("STORE_WHATSAPP", "+918237214975")),
-        "upi_id": os.environ.get("STORE_UPI_ID", "ambajogai@upi"),
+        "upi_id": os.environ.get("STORE_UPI_ID", "ambajogaiupi@ybl"),
         "upi_name": os.environ.get("STORE_UPI_NAME", "Ambajogai Grocery Store"),
         "upi_qr": os.environ.get("STORE_UPI_QR", ""),
         "address": "Main Road, Ambajogai, Maharashtra 431517",
