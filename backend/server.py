@@ -3103,14 +3103,35 @@ async def reorder_items(order_id: str, user: dict = Depends(get_current_user)):
 @api.get("/store/info")
 async def store_info():
     return {
-        "name": os.environ.get("STORE_NAME", "Ambajogai Grocery Store"),
-        "whatsapp": os.environ.get("STORE_WHATSAPP", "+918237214975"),
-        "phone": os.environ.get("STORE_PHONE", os.environ.get("STORE_WHATSAPP", "+918237214975")),
-        "upi_id": os.environ.get("STORE_UPI_ID", "ambajogai@upi"),
-        "upi_name": os.environ.get("STORE_UPI_NAME", "Ambajogai Grocery Store"),
-        "upi_qr": os.environ.get("STORE_UPI_QR", ""),
+        "name": os.environ.get(
+            "STORE_NAME",
+            "Ambajogai Grocery Store"
+        ),
+        "whatsapp": os.environ.get(
+            "STORE_WHATSAPP",
+            "+918237214975"
+        ),
+        "phone": os.environ.get(
+            "STORE_PHONE",
+            os.environ.get("STORE_WHATSAPP", "+918237214975")
+        ),
+        "upi_id": os.environ.get(
+            "STORE_UPI_ID",
+            "ambajogaiupi@ybl"
+        ),
+        "upi_name": os.environ.get(
+            "STORE_UPI_NAME",
+            "Ambajogai Grocery Store"
+        ),
+        "upi_qr": os.environ.get(
+            "STORE_UPI_QR",
+            ""
+        ),
         "address": "Mandi Bazar, Ambajogai, Maharashtra 431517",
-        "email": os.environ.get("STORE_EMAIL", "ambajogaigrocerystores@gmail.com"),
+        "email": os.environ.get(
+            "STORE_EMAIL",
+            "ambajogaigrocerystores@gmail.com"
+        ),
         "delivery": {
             "center_lat": DELIVERY_CENTER_LAT,
             "center_lng": DELIVERY_CENTER_LNG,
