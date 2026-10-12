@@ -250,6 +250,13 @@ export function VProducts() {
   const [editing, setEditing] = useState(null);
   const [showForm, setShowForm] = useState(false);
 
+  // Variant price editor state
+  const [priceEditing, setPriceEditing] = useState(null);
+  const [priceVariants, setPriceVariants] = useState([]);
+  const [savingPrices, setSavingPrices] = useState(false);
+  const [priceError, setPriceError] = useState("");
+  const [pricePickerOpen, setPricePickerOpen] = useState(false);
+
   const load = useCallback(async ({ silent = false } = {}) => {
     if (silent) {
       setRefreshing(true);
@@ -293,6 +300,79 @@ export function VProducts() {
     }
   };
 
+    const openPriceEditor = (product) => {
+    setPriceEditing(product);
+
+    setPriceVariants(
+      (product.variants || []).map((variant) => ({
+        ...variant,
+        price: variant.price ?? "",
+        mrp: variant.mrp ?? "",
+      })),
+    );
+
+    setPriceError("");
+  };
+
+  const saveVariantPrices = async () => {
+    if (!priceEditing) return;
+
+    if (priceVariants.length === 0) {
+      setPriceError("This product has no variants to edit.");
+      return;
+    }
+
+    for (const variant of priceVariants) {
+      if (
+        variant.price === "" ||
+        !Number.isFinite(Number(variant.price)) ||
+        Number(variant.price) < 0
+      ) {
+        setPriceError("Enter a valid selling price for every variant.");
+        return;
+      }
+
+      if (
+        variant.mrp !== "" &&
+        (!Number.isFinite(Number(variant.mrp)) ||
+          Number(variant.mrp) < 0)
+      ) {
+        setPriceError("Enter a valid MRP for every variant.");
+        return;
+      }
+    }
+
+    setSavingPrices(true);
+    setPriceError("");
+
+    try {
+      await api.patch(
+        `/vendor/products/${priceEditing.id}/variant-prices`,
+        {
+          variants: priceVariants.map((variant) => ({
+            label: variant.label,
+            price: Number(variant.price),
+            mrp: variant.mrp === "" ? null : Number(variant.mrp),
+          })),
+        },
+      );
+
+      toast.success("Variant prices updated successfully.");
+
+      setPriceEditing(null);
+      setPriceVariants([]);
+
+      await load();
+    } catch (e) {
+      setPriceError(
+        e.response?.data?.detail ||
+          "Unable to update variant prices.",
+      );
+    } finally {
+      setSavingPrices(false);
+    }
+  };
+
   if (loading)
     return <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#1B4332]" />;
 
@@ -314,6 +394,14 @@ export function VProducts() {
           data-testid="vendor-add-product"
         >
           <Plus className="h-4 w-4" /> Add product
+        </button>
+        <button
+          type="button"
+          onClick={() => setPricePickerOpen(true)}
+          className="btn-secondary ml-2"
+          data-testid="vendor-edit-prices"
+        >
+          Edit Prices
         </button>
       </div>
 
@@ -384,6 +472,14 @@ export function VProducts() {
                     </td>
                     <td className="px-4 py-3 text-right">
                       <button
+                        type="button"
+                        onClick={() => openPriceEditor(p)}
+                        className="mr-2 rounded-lg border border-[#1B4332] px-3 py-1.5 text-xs font-semibold text-[#1B4332] hover:bg-green-50"
+                        data-testid={`v-prices-${p.slug}`}
+                      >
+                        Prices
+                      </button>
+                      <button
                         onClick={() => {
                           setEditing(p);
                           setShowForm(true);
@@ -420,9 +516,214 @@ export function VProducts() {
           }}
         />
       )}
+      {pricePickerOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-5 shadow-xl">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h3 className="text-xl font-semibold text-[#1B4332]">
+                Select Product to Edit Prices
+              </h3>
+              <button
+                type="button"
+                onClick={() => setPricePickerOpen(false)}
+                className="rounded-lg px-3 py-1 text-xl text-gray-500 hover:bg-gray-100"
+                aria-label="Close product selection"
+              >
+                &times;
+              </button>
+            </div>
+
+            <p className="mb-4 text-sm text-gray-500">
+              Select a product to update its variant Selling Price and MRP.
+            </p>
+
+            {products.filter((product) =>
+              Array.isArray(product.variants) && product.variants.length > 0
+            ).length === 0 ? (
+              <div className="rounded-lg bg-yellow-50 p-4 text-sm text-yellow-800">
+                No products with variants are available to edit.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {products
+                  .filter((product) =>
+                    Array.isArray(product.variants) && product.variants.length > 0
+                  )
+                  .map((product) => (
+                    <button
+                      key={product.id}
+                      type="button"
+                      onClick={() => {
+                        setPricePickerOpen(false);
+                        openPriceEditor(product);
+                      }}
+                      className="flex w-full items-center justify-between gap-3 rounded-xl border border-gray-200 p-4 text-left hover:border-[#1B4332] hover:bg-green-50"
+                    >
+                      <span>
+                        <span className="block font-semibold text-gray-800">
+                          {product.name}
+                        </span>
+                        <span className="mt-1 block text-sm text-gray-500">
+                          {product.variants.length} variants
+                        </span>
+                      </span>
+                      <span className="text-sm font-semibold text-[#1B4332]">
+                        Edit →
+                      </span>
+                    </button>
+                  ))}
+              </div>
+            )}
+
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setPricePickerOpen(false)}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {priceEditing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white p-5 shadow-xl">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-xl font-semibold text-[#1B4332]">
+                  Edit Variant Prices
+                </h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  {priceEditing.name}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setPriceEditing(null);
+                  setPriceVariants([]);
+                  setPriceError("");
+                }}
+                className="rounded-lg px-3 py-1 text-xl text-gray-500 hover:bg-gray-100"
+                aria-label="Close price editor"
+              >
+                &times;
+              </button>
+            </div>
+
+            {priceVariants.length === 0 ? (
+              <div className="rounded-lg bg-yellow-50 p-4 text-sm text-yellow-800">
+                This product has no variants to edit. Use the existing Edit
+                button to manage the product.
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {priceVariants.map((variant, index) => (
+                  <div
+                    key={`${variant.label}-${index}`}
+                    className="rounded-xl border border-gray-200 p-4"
+                  >
+                    <div className="mb-3 font-semibold text-gray-800">
+                      {variant.label || variant.unit || `Variant ${index + 1}`}
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div>
+                        <label className="mb-1 block text-sm font-medium">
+                          Selling Price (₹)
+                        </label>
+
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={variant.price}
+                          onChange={(e) => {
+                            const value = e.target.value;
+
+                            setPriceVariants((previous) =>
+                              previous.map((item, i) =>
+                                i === index
+                                  ? { ...item, price: value }
+                                  : item,
+                              ),
+                            );
+                          }}
+                          className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-[#1B4332]"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-sm font-medium">
+                          MRP (₹)
+                        </label>
+
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={variant.mrp}
+                          onChange={(e) => {
+                            const value = e.target.value;
+
+                            setPriceVariants((previous) =>
+                              previous.map((item, i) =>
+                                i === index
+                                  ? { ...item, mrp: value }
+                                  : item,
+                              ),
+                            );
+                          }}
+                          placeholder="Enter MRP"
+                          className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-[#1B4332]"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {priceError && (
+              <div className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                {priceError}
+              </div>
+            )}
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setPriceEditing(null);
+                  setPriceVariants([]);
+                  setPriceError("");
+                }}
+                disabled={savingPrices}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={saveVariantPrices}
+                disabled={savingPrices || priceVariants.length === 0}
+                className="rounded-lg bg-[#1B4332] px-4 py-2 text-sm font-semibold text-white hover:bg-[#163728] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {savingPrices ? "Saving..." : "Save Prices"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+
 
 function VProductForm({ initial, categories, onClose, onSaved }) {
   const [form, setForm] = useState(
@@ -1265,7 +1566,7 @@ function VSettings() {
             onChange={(x) => up("shop_whatsapp", x)}
             placeholder="+91..."
           />
-          
+
           <ImageSourcePicker
 
   label="Shop logo"

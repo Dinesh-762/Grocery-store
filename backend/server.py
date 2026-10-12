@@ -43,6 +43,8 @@ import cloudinary
 import cloudinary.uploader
 from pydantic import BaseModel, Field, EmailStr, ConfigDict, BeforeValidator, field_validator
 from pymongo import ReturnDocument
+from pydantic import BaseModel, Field
+from typing import List, Optional
 
 from pricing_engine import (
     get_platform_settings,
@@ -347,6 +349,14 @@ class ProductIn(BaseModel):
     popular: bool = False
     variants: Optional[List[dict]] = None  # [{label, price, unit}]
 
+class VariantPriceUpdate(BaseModel):
+    label: str
+    price: float = Field(ge=0)
+    mrp: Optional[float] = Field(default=None, ge=0)
+
+class ProductVariantPricesUpdate(BaseModel):
+    variants: List[VariantPriceUpdate]
+
 
 class ProductOut(ProductIn):
     id: str
@@ -354,6 +364,32 @@ class ProductOut(ProductIn):
     vendor_id: Optional[str] = None
     vendor_name: Optional[str] = None
     approval_status: str = "approved"  # approved | pending | rejected
+
+class ProductOut(ProductIn):
+    id: str
+    created_at: str
+    vendor_id: Optional[str] = None
+    vendor_name: Optional[str] = None
+    approval_status: str = "approved"
+
+
+# NEW CODE STARTS HERE
+
+class VariantPriceUpdate(BaseModel):
+    label: str
+    price: float = Field(ge=0)
+    mrp: Optional[float] = Field(default=None, ge=0)
+
+
+class ProductVariantPricesUpdate(BaseModel):
+    variants: List[VariantPriceUpdate]
+
+
+# EXISTING CODE CONTINUES HERE
+
+class AddressIn(BaseModel):
+    full_name: str
+    phone: str
 
 
 class AddressIn(BaseModel):
@@ -2137,6 +2173,85 @@ async def vendor_update_product(prod_id: str, payload: ProductIn, user: dict = D
     await log_audit(db, actor_id=user["id"], actor_role="vendor", action="product_update",
                     entity_type="product", entity_id=prod_id, new_value={"base_price": update.get("base_price")})
     return product_to_vendor_out(doc)
+
+
+@api.patch("/vendor/products/{prod_id}/variant-prices")
+async def vendor_update_variant_prices(
+    prod_id: str,
+    payload: ProductVariantPricesUpdate,
+    user: dict = Depends(get_current_user),
+):
+    vendor = await get_vendor_for_user(user)
+    oid = safe_object_id(prod_id)
+
+    existing = await db.products.find_one({
+        "_id": oid,
+        "vendor_id": str(vendor["_id"]),
+    })
+
+    if not existing:
+        raise HTTPException(
+            status_code=404,
+            detail="Product not found or not owned by this vendor",
+        )
+
+    existing_variants = existing.get("variants") or []
+
+    if len(existing_variants) != len(payload.variants):
+        raise HTTPException(
+            status_code=400,
+            detail="Variant list changed. Reload and try again.",
+        )
+
+    updated_variants = []
+
+    for old_variant, new_variant in zip(
+        existing_variants, payload.variants
+    ):
+        old_label = str(old_variant.get("label", "")).strip()
+        new_label = new_variant.label.strip()
+
+        if old_label != new_label:
+            raise HTTPException(
+                status_code=400,
+                detail="Variant labels cannot be changed here.",
+            )
+
+        updated_variant = dict(old_variant)
+
+        updated_variant["price"] = new_variant.price
+        updated_variant["base_price"] = new_variant.price
+        updated_variant["mrp"] = new_variant.mrp
+
+        updated_variants.append(updated_variant)
+
+    await db.products.update_one(
+        {
+            "_id": oid,
+            "vendor_id": str(vendor["_id"]),
+        },
+        {
+            "$set": {
+                "variants": updated_variants,
+            }
+        },
+    )
+
+    await log_audit(
+        db,
+        actor_id=user["id"],
+        actor_role="vendor",
+        action="variant_prices_update",
+        entity_type="product",
+        entity_id=prod_id,
+        new_value={"variant_count": len(updated_variants)},
+    )
+
+    return {
+        "success": True,
+        "message": "Variant prices updated successfully",
+        "variants": updated_variants,
+    }
 
 
 @api.delete("/vendor/products/{prod_id}")
