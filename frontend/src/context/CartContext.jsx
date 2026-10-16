@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+﻿import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 const CartContext = createContext(null);
@@ -23,15 +23,47 @@ export function CartProvider({ children }) {
   }, [items]);
 
   const addItem = (product, qty = 1, note = null, variant_label = null) => {
+    const incomingVendorId = product.vendor_id
+      ? String(product.vendor_id)
+      : null;
+
+    if (!incomingVendorId) {
+      toast.error("Vendor information is missing. Please refresh the product page and try again.");
+      return;
+    }
+
+    const existingVendorIds = [
+      ...new Set(items.map((item) => item.vendor_id ? String(item.vendor_id) : null)),
+    ];
+
+    if (
+      items.length > 0 &&
+      (
+        existingVendorIds.length !== 1 ||
+        existingVendorIds[0] !== incomingVendorId
+      )
+    ) {
+      toast.error("Your cart contains products from another shop. Please place that order first or clear your cart.");
+      return;
+    }
+
     setItems((prev) => {
       const idx = prev.findIndex(
-        (p) => p.product_id === product.id && (p.variant_label || null) === (variant_label || null) && (p.note || null) === (note || null)
+        (p) =>
+          p.product_id === product.id &&
+          (p.variant_label || null) === (variant_label || null) &&
+          (p.note || null) === (note || null)
       );
+
       if (idx >= 0) {
         const next = [...prev];
-        next[idx] = { ...next[idx], quantity: next[idx].quantity + qty };
+        next[idx] = {
+          ...next[idx],
+          quantity: next[idx].quantity + qty,
+        };
         return next;
       }
+
       return [
         ...prev,
         {
@@ -43,10 +75,15 @@ export function CartProvider({ children }) {
           quantity: qty,
           variant_label: variant_label || null,
           note: note || null,
+          vendor_id: incomingVendorId,
+          vendor_name: product.vendor_name || null,
         },
       ];
     });
-    toast.success(`${product.name}${variant_label ? ` (${variant_label})` : ""} added to cart`);
+
+    toast.success(
+      `${product.name}${variant_label ? ` (${variant_label})` : ""} added to cart`
+    );
   };
 
   const removeItem = (key) => {
@@ -71,12 +108,16 @@ export function CartProvider({ children }) {
   const { subtotal, count } = useMemo(() => {
     const s = items.reduce((sum, p) => sum + p.price * p.quantity, 0);
     const c = items.reduce((sum, p) => sum + p.quantity, 0);
-    return { subtotal: Math.round(s * 100) / 100, count: c };
+    return {
+      subtotal: Math.round(s * 100) / 100,
+      count: c,
+    };
   }, [items]);
 
   const DELIVERY_FEE = 20;
   const FREE_THRESHOLD = 499;
-  const deliveryFee = subtotal >= FREE_THRESHOLD || subtotal === 0 ? 0 : DELIVERY_FEE;
+  const deliveryFee =
+    subtotal >= FREE_THRESHOLD || subtotal === 0 ? 0 : DELIVERY_FEE;
   const total = Math.round((subtotal + deliveryFee) * 100) / 100;
 
   return (

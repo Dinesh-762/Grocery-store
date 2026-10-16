@@ -248,6 +248,7 @@ export default function Checkout() {
   const [serviceabilityLoading, setServiceabilityLoading] = useState(false);
 
   const [serviceable, setServiceable] = useState(null);
+  const [serviceabilityDistance, setServiceabilityDistance] = useState(null);
 
   const [serviceabilityMessage, setServiceabilityMessage] = useState("");
 
@@ -628,18 +629,7 @@ export default function Checkout() {
   |--------------------------------------------------------------------------
   */
 
-  const estimatedDistance = useMemo(() => {
-    if (location.latitude === null || location.longitude === null) {
-      return null;
-    }
-
-    return calculateDistanceKm(
-      STORE_LATITUDE,
-      STORE_LONGITUDE,
-      location.latitude,
-      location.longitude,
-    );
-  }, [location]);
+  const estimatedDistance = serviceabilityDistance;
 
   /*
   |--------------------------------------------------------------------------
@@ -663,12 +653,14 @@ export default function Checkout() {
       !Number.isFinite(Number(longitude))
     ) {
       setServiceable(null);
+      setServiceabilityDistance(null);
       setServiceabilityMessage("");
       return null;
     }
 
     setServiceabilityLoading(true);
     setServiceable(null);
+    setServiceabilityDistance(null);
     setServiceabilityMessage("");
 
     try {
@@ -676,10 +668,17 @@ export default function Checkout() {
         params: {
           latitude: Number(latitude),
           longitude: Number(longitude),
+          vendor_id: items?.[0]?.vendor_id || undefined,
           accuracy:
             location.accuracy !== null ? Number(location.accuracy) : undefined,
         },
       });
+
+      setServiceabilityDistance(
+        data?.distance_km != null && Number.isFinite(Number(data.distance_km))
+          ? Number(data.distance_km)
+          : null,
+      );
 
       const allowed = data?.serviceable === true;
       setServiceable(allowed);
@@ -694,6 +693,7 @@ export default function Checkout() {
       console.error("SERVICEABILITY CHECK ERROR:", error);
 
       setServiceable(false);
+      setServiceabilityDistance(null);
       setServiceabilityMessage(
         "We could not verify your delivery location. Please try again.",
       );
@@ -713,7 +713,7 @@ export default function Checkout() {
 
     checkServiceability(location.latitude, location.longitude);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.latitude, location.longitude]);
+  }, [location.latitude, location.longitude, items?.[0]?.vendor_id]);
 
   /*
   |--------------------------------------------------------------------------
@@ -1051,8 +1051,8 @@ Address: ${data.address?.line1 ?? form.line1}${
 Customer Location:
 https://www.google.com/maps?q=${location.latitude},${location.longitude}
 
-Distance from Ambajogai Grocery:
-${data.delivery_distance_km ?? estimatedDistance ?? 0} km`,
+Distance from Vendor:
+${data.distance_km ?? estimatedDistance ?? 0} km`,
       );
 
       if (storeNumber) {

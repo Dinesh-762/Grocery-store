@@ -1068,10 +1068,27 @@ async def create_product(payload: ProductIn, _: dict = Depends(require_admin)):
     exists = await db.products.find_one({"slug": payload.slug})
     if exists:
         raise HTTPException(status_code=400, detail="Slug already used")
+
     doc = payload.model_dump()
     doc["base_price"] = doc["price"]
     doc["created_at"] = iso_now()
-    doc["approval_status"] = "approved"  # admin-created products are pre-approved
+    doc["approval_status"] = "approved"
+
+    # Assign new admin-created products to the correct shop.
+    if doc.get("category_slug") == "fruits-vegetables":
+        vendor = await db.vendors.find_one({"business_name": "Fresh Vegetables"})
+    else:
+        vendor = await db.vendors.find_one({"business_name": "kirana store"})
+
+    if not vendor:
+        raise HTTPException(
+            status_code=500,
+            detail="Vendor configuration missing. Product was not created."
+        )
+
+    doc["vendor_id"] = str(vendor["_id"])
+    doc["vendor_name"] = vendor["business_name"]
+
     res = await db.products.insert_one(doc)
     doc["_id"] = res.inserted_id
     return product_to_out(doc)
@@ -1080,10 +1097,23 @@ async def create_product(payload: ProductIn, _: dict = Depends(require_admin)):
 @api.put("/products/{prod_id}", response_model=ProductOut)
 async def update_product(prod_id: str, payload: ProductIn, _: dict = Depends(require_admin)):
     oid = safe_object_id(prod_id)
-    await db.products.update_one({"_id": oid}, {"$set": payload.model_dump()})
+
+    existing = await db.products.find_one({"_id": oid})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    update = payload.model_dump()
+
+    # Preserve the product's existing vendor assignment.
+    update["vendor_id"] = existing.get("vendor_id")
+    update["vendor_name"] = existing.get("vendor_name")
+
+    await db.products.update_one({"_id": oid}, {"$set": update})
+
     doc = await db.products.find_one({"_id": oid})
     if not doc:
         raise HTTPException(status_code=404, detail="Product not found")
+
     return product_to_out(doc)
 
 
@@ -1127,6 +1157,7 @@ async def delivery_serviceability(
     latitude: float,
     longitude: float,
     accuracy: Optional[float] = None,
+    vendor_id: Optional[str] = None,
 ):
     if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
         raise HTTPException(status_code=400, detail="Invalid GPS coordinates")
@@ -1136,9 +1167,41 @@ async def delivery_serviceability(
     ):
         raise HTTPException(status_code=400, detail="Invalid GPS accuracy")
 
+    origin_lat = DELIVERY_CENTER_LAT
+    origin_lng = DELIVERY_CENTER_LNG
+
+    if vendor_id:
+        vendor_oid = safe_object_id(vendor_id)
+        if vendor_oid is None:
+            raise HTTPException(status_code=400, detail="Invalid vendor ID")
+
+        vendor = await db.vendors.find_one({"_id": vendor_oid})
+        if not vendor:
+            raise HTTPException(status_code=400, detail="Vendor not found")
+
+        try:
+            origin_lat = float(vendor.get("business_latitude"))
+            origin_lng = float(vendor.get("business_longitude"))
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail="This vendor must save their shop location before delivery can be checked.",
+            )
+
+        if (
+            not math.isfinite(origin_lat)
+            or not math.isfinite(origin_lng)
+            or not (-90 <= origin_lat <= 90)
+            or not (-180 <= origin_lng <= 180)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="This vendor's saved shop location is invalid.",
+            )
+
     distance_km = calculate_distance_km(
-        DELIVERY_CENTER_LAT,
-        DELIVERY_CENTER_LNG,
+        origin_lat,
+        origin_lng,
         latitude,
         longitude,
     )
@@ -1455,10 +1518,56 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
     ):
         raise HTTPException(status_code=400, detail="Invalid delivery address coordinates.")
 
+    order_vendor_ids = {
+        str(item.get("vendor_id"))
+        for item in verified_items
+        if item.get("vendor_id")
+    }
+
+    if len(order_vendor_ids) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Please order products from one vendor at a time.",
+        )
+
+    origin_lat = DELIVERY_CENTER_LAT
+    origin_lng = DELIVERY_CENTER_LNG
+
+    if order_vendor_ids:
+        order_vendor_id = next(iter(order_vendor_ids))
+        order_vendor_oid = safe_object_id(order_vendor_id)
+
+        if order_vendor_oid is None:
+            raise HTTPException(status_code=400, detail="Invalid vendor ID")
+
+        order_vendor = await db.vendors.find_one({"_id": order_vendor_oid})
+        if not order_vendor:
+            raise HTTPException(status_code=400, detail="Vendor not found")
+
+        try:
+            origin_lat = float(order_vendor.get("business_latitude"))
+            origin_lng = float(order_vendor.get("business_longitude"))
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail="The vendor must save their shop location before orders can be placed.",
+            )
+
+        if (
+            not math.isfinite(origin_lat)
+            or not math.isfinite(origin_lng)
+            or not (-90 <= origin_lat <= 90)
+            or not (-180 <= origin_lng <= 180)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="The vendor's saved shop location is invalid.",
+            )
+
     dist = round(
         calculate_distance_km(
-            DELIVERY_CENTER_LAT,
-            DELIVERY_CENTER_LNG,
+            origin_lat,
+            origin_lng,
             addr_lat,
             addr_lng,
         ),
@@ -1492,6 +1601,7 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         coupon_applied = {"code": coupon["code"], "discount_pct": coupon["discount_pct"], "discount": discount}
 
     totals = compute_order_totals(settings, subtotal, dist, discount)
+    delivery_fee = totals["delivery_fee"]
     platform_fee = totals["platform_fee"]
     taxable_amount = totals["taxable_amount"]
     cgst = totals["cgst"]
@@ -1873,6 +1983,8 @@ class VendorSettingsIn(BaseModel):
     business_description: Optional[str] = None
     business_address: Optional[str] = None
     business_pincode: Optional[str] = None
+    business_latitude: Optional[float] = None
+    business_longitude: Optional[float] = None
     shop_phone: Optional[str] = None
     shop_whatsapp: Optional[str] = None
     shop_logo: Optional[str] = None
@@ -1898,6 +2010,8 @@ def vendor_to_out(v: dict) -> dict:
         "business_description": v.get("business_description", ""),
         "business_address": v.get("business_address", ""),
         "business_pincode": v.get("business_pincode", ""),
+        "business_latitude": v.get("business_latitude"),
+        "business_longitude": v.get("business_longitude"),
         "docs": v.get("docs", {}),
         "status": v.get("status", "Pending"),
         "rejection_reason": v.get("rejection_reason", ""),
