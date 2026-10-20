@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate, useLocation, Link } from "react-router-dom";
 import { toast } from "sonner";
 import { useCart, lineKey } from "@/context/CartContext";
@@ -126,12 +126,27 @@ export default function Checkout() {
     return cartItems.filter((it) => allowed.has(lineKey(it)));
   }, [cartItems, selectedKeys]);
 
+  const [applyProductDiscount, setApplyProductDiscount] = useState(false);
+
+  const productDiscountSavings = useMemo(
+    () => Math.round(items.reduce((sum, it) => {
+      const mrp = Math.max(Number(it.mrp || it.price || 0), Number(it.price || 0));
+      return sum + Math.max(0, mrp - Number(it.price || 0)) * Number(it.quantity || 0);
+    }, 0) * 100) / 100,
+    [items]
+  );
+
   const subtotal = useMemo(
     () =>
       Math.round(
-        items.reduce((sum, it) => sum + it.price * it.quantity, 0) * 100,
+        items.reduce((sum, it) => {
+          const price = applyProductDiscount
+            ? Number(it.price || 0)
+            : Math.max(Number(it.mrp || it.price || 0), Number(it.price || 0));
+          return sum + price * Number(it.quantity || 0);
+        }, 0) * 100,
       ) / 100,
-    [items],
+    [items, applyProductDiscount],
   );
 
   const { user } = useAuth();
@@ -793,7 +808,7 @@ export default function Checkout() {
   |--------------------------------------------------------------------------
   */
 
-  const gst = Math.round((cgst + sgst) * 100) / 100;
+  const gst = Math.round((Number(cgst || 0) + Number(sgst || 0)) * 100) / 100;
 
   /*
   |--------------------------------------------------------------------------
@@ -806,8 +821,9 @@ export default function Checkout() {
       (discountedSubtotal +
         platformFee +
         Number(estimatedDeliveryFee || 0) +
-        gst) *
-        100,
+        cgst +
+        sgst +
+        gst) * 100,
     ) / 100;
 
   /*
@@ -951,6 +967,7 @@ export default function Checkout() {
         notes: form.notes,
 
         coupon_code: coupon?.code || null,
+        apply_product_discount: applyProductDiscount,
       };
 
       /*
@@ -1376,6 +1393,25 @@ ${data.distance_km ?? estimatedDistance ?? 0} km`,
           {/* COUPON */}
 
           <FlowSection step={2} title="Coupon code" icon={Tag}>
+            <label className="mb-4 flex cursor-pointer items-start gap-3 rounded-xl border border-[#8BA888]/40 bg-[#8BA888]/10 p-4">
+              <input
+                type="checkbox"
+                checked={applyProductDiscount}
+                onChange={(e) => setApplyProductDiscount(e.target.checked)}
+                className="mt-1 h-4 w-4 accent-[#1B4332]"
+                data-testid="apply-product-discount"
+              />
+              <span className="flex-1">
+                <span className="block text-sm font-semibold text-[#1B4332]">
+                  Apply Product Discounts
+                </span>
+                <span className="mt-1 block text-xs text-gray-600">
+                  {applyProductDiscount
+                    ? `Product discount applied ? saving ${formatINR(productDiscountSavings)}`
+                    : "Optional. Tick this to apply available product discounts."}
+                </span>
+              </span>
+            </label>
             {!coupon ? (
               <div className="flex gap-2">
                 <input
@@ -1570,36 +1606,58 @@ ${data.distance_km ?? estimatedDistance ?? 0} km`,
           testId="checkout-summary"
         >
           <div className="max-h-56 space-y-2.5 overflow-auto pr-1 -mt-2">
-            {items.map((item) => (
-              <div
-                key={`${item.product_id}-${item.variant_label || ""}`}
-                className="flex items-center gap-3 rounded-xl bg-[#FAFAFA] p-2.5 ring-1 ring-black/5"
-              >
-                <img
-                  src={item.image}
-                  alt=""
-                  className="h-11 w-11 shrink-0 rounded-lg object-cover"
-                />
-                <div className="min-w-0 flex-1 text-sm">
-                  <div className="truncate font-medium text-[#1B4332]">
-                    {item.name}
+            {items.map((item) => {
+              const itemPrice = Number(item.price || 0);
+              const itemMrp = Math.max(Number(item.mrp || itemPrice), itemPrice);
+              const itemDiscount = applyProductDiscount
+                ? Math.max(0, itemMrp - itemPrice)
+                : 0;
+              const displayedPrice = applyProductDiscount ? itemPrice : itemMrp;
+
+              return (
+                <div
+                  key={`${item.product_id}-${item.variant_label || ""}`}
+                  className="flex items-center gap-3 rounded-xl bg-[#FAFAFA] p-2.5 ring-1 ring-black/5"
+                >
+                  <img
+                    src={item.image}
+                    alt={item.name}
+                    className="h-12 w-12 rounded-lg object-cover"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-[#222]">
+                      {item.name}
+                    </p>
+                    {item.variant_label && (
+                      <p className="text-xs text-gray-500">{item.variant_label}</p>
+                    )}
+                    <p className="text-xs text-gray-500">
+                      Qty: {item.quantity}
+                    </p>
+                    {itemDiscount > 0 && (
+                      <p className="mt-1 text-xs font-medium text-green-700">
+                        MRP {formatINR(itemMrp)} ? Save {formatINR(itemDiscount)} per item
+                      </p>
+                    )}
+                    {itemDiscount > 0 && (
+                      <p className="text-xs text-gray-500">
+                        {formatINR(itemPrice)} ? {item.quantity}
+                      </p>
+                    )}
                   </div>
-                  {item.variant_label && (
-                    <div className="text-[10px] font-bold uppercase tracking-wide text-[#8BA888]">
-                      {item.variant_label}
-                    </div>
-                  )}
-                  <div className="text-xs text-[#4A4A4A]">
-                    Qty {item.quantity} × {formatINR(Number(item.price || 0))}
+                  <div className="text-right">
+                    {itemDiscount > 0 && (
+                      <p className="text-xs text-gray-400 line-through">
+                        {formatINR(itemMrp * Number(item.quantity || 0))}
+                      </p>
+                    )}
+                    <p className="text-sm font-bold text-[#1B4332]">
+                      {formatINR(displayedPrice * Number(item.quantity || 0))}
+                    </p>
                   </div>
                 </div>
-                <div className="shrink-0 text-sm font-bold text-[#1B4332]">
-                  {formatINR(
-                    Number(item.price || 0) * Number(item.quantity || 0),
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="mt-4 space-y-2 border-t border-dashed pt-4 text-sm">

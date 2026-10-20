@@ -1,4 +1,4 @@
-﻿from dotenv import load_dotenv
+from dotenv import load_dotenv
 from pathlib import Path
 
 import math
@@ -423,6 +423,7 @@ class OrderIn(BaseModel):
     notes: Optional[str] = ""
     coupon_code: Optional[str] = None
     distance_km: Optional[float] = None
+    apply_product_discount: bool = False
 
     @field_validator("payment_method")
     @classmethod
@@ -1103,6 +1104,9 @@ async def update_product(prod_id: str, payload: ProductIn, _: dict = Depends(req
         raise HTTPException(status_code=404, detail="Product not found")
 
     update = payload.model_dump()
+    update["base_price"] = float(update["price"])
+    for variant in update.get("variants") or []:
+        variant["base_price"] = float(variant.get("price") or 0)
 
     # Preserve the product's existing vendor assignment.
     update["vendor_id"] = existing.get("vendor_id")
@@ -1438,14 +1442,29 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         if prod.get("stock", 0) < it.quantity:
             raise HTTPException(status_code=400, detail=f"Insufficient stock for {prod['name']}")
         pricing = await compute_product_price(db, prod, variant_label=it.variant_label, settings=settings, rules=rules)
-        eff_price = pricing["selling_price"]
+        selling_price = float(pricing["selling_price"])
         eff_unit = prod.get("unit", "1 pc")
+
         if it.variant_label:
             variants = prod.get("variants") or []
             match = next((v for v in variants if v.get("label") == it.variant_label), None)
             if not match:
                 raise HTTPException(status_code=400, detail=f"Unknown variant '{it.variant_label}' for {prod['name']}")
             eff_unit = match.get("unit", eff_unit)
+            stored_mrp = match.get("mrp")
+        else:
+            stored_mrp = prod.get("mrp")
+
+        try:
+            original_price = float(stored_mrp) if stored_mrp is not None else selling_price
+        except (TypeError, ValueError):
+            original_price = selling_price
+
+        if not it.variant_label and stored_mrp and original_price < selling_price:
+            original_price = round(selling_price * 1.1, 2)
+
+        original_price = max(selling_price, original_price)
+        eff_price = selling_price if payload.apply_product_discount else original_price
         # Vacation-mode / open-now check per vendor
         vid = prod.get("vendor_id")
         if vid:
@@ -1462,6 +1481,9 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
             "product_id": str(prod["_id"]),
             "name": prod["name"],
             "price": eff_price,
+            "mrp": original_price,
+            "product_discount": round(max(0.0, original_price - selling_price), 2)
+                if payload.apply_product_discount else 0.0,
             "base_price": pricing["base_price"],
             "quantity": it.quantity,
             "image": prod["image"],
@@ -1476,6 +1498,8 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
                 "markup_pct": pricing["markup_pct"],
                 "markup_amount": pricing["markup_amount"],
                 "selling_price": pricing["selling_price"],
+                "mrp": original_price,
+                "product_discount_applied": payload.apply_product_discount,
                 "gst_rate": pricing.get("gst_rate", settings.get("gst_rate")),
                 "rule_source": pricing.get("rule_source"),
             },

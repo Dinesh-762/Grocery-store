@@ -21,34 +21,96 @@ export default function Products() {
   }, [q]);
 
   useEffect(() => {
-    api.get("/categories").then(({ data }) => setCategories(data)).catch(() => {});
+    let active = true;
+
+    api
+      .get("/categories")
+      .then(({ data }) => {
+        if (active) {
+          setCategories(Array.isArray(data) ? data : []);
+        }
+      })
+      .catch(() => {
+        if (active) setCategories([]);
+      });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
-    setLoading(true);
+    let active = true;
     const params = new URLSearchParams();
+
     if (q) params.set("q", q);
     if (category) params.set("category", category);
     params.set("limit", "100");
-    api
-      .get(`/products?${params.toString()}`)
-      .then(({ data }) => setProducts(data))
-      .catch(() => setProducts([]))
-      .finally(() => setLoading(false));
+
+    const fetchProducts = (showLoading = false) => {
+      if (showLoading && active) setLoading(true);
+
+      api
+        .get(`/products?${params.toString()}`)
+        .then(({ data }) => {
+          if (active) {
+            setProducts(Array.isArray(data) ? data : []);
+          }
+        })
+        .catch((error) => {
+          console.error("Failed to load products:", error);
+          if (active && showLoading) setProducts([]);
+        })
+        .finally(() => {
+          if (active && showLoading) setLoading(false);
+        });
+    };
+
+    fetchProducts(true);
+
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        fetchProducts();
+      }
+    }, 15000);
+
+    const refreshOnFocus = () => {
+      if (document.visibilityState === "visible") {
+        fetchProducts();
+      }
+    };
+
+    window.addEventListener("focus", refreshOnFocus);
+    document.addEventListener("visibilitychange", refreshOnFocus);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+      window.removeEventListener("focus", refreshOnFocus);
+      document.removeEventListener("visibilitychange", refreshOnFocus);
+    };
   }, [q, category]);
 
   const sorted = useMemo(() => {
     const arr = [...products];
-    if (sort === "price-asc") arr.sort((a, b) => a.price - b.price);
-    else if (sort === "price-desc") arr.sort((a, b) => b.price - a.price);
-    else if (sort === "name") arr.sort((a, b) => a.name.localeCompare(b.name));
+
+    if (sort === "price-asc") {
+      arr.sort((a, b) => a.price - b.price);
+    } else if (sort === "price-desc") {
+      arr.sort((a, b) => b.price - a.price);
+    } else if (sort === "name") {
+      arr.sort((a, b) => a.name.localeCompare(b.name));
+    }
+
     return arr;
   }, [products, sort]);
 
   const updateParam = (key, value) => {
     const next = new URLSearchParams(searchParams);
+
     if (value) next.set(key, value);
     else next.delete(key);
+
     setSearchParams(next);
   };
 
@@ -57,16 +119,25 @@ export default function Products() {
     updateParam("q", searchInput.trim());
   };
 
-  const activeCat = Array.isArray(categories) ? categories.find((c) => c.slug === category) : null;
+  const activeCat = Array.isArray(categories)
+    ? categories.find((c) => c.slug === category)
+    : null;
 
   return (
     <div className="container-app py-6 sm:py-8" data-testid="products-page">
       <div className="mb-4 sm:mb-6">
         <h1 className="font-heading text-2xl font-bold sm:text-3xl lg:text-4xl">
-          {activeCat ? activeCat.name : q ? `Results for "${q}"` : "All products"}
+          {activeCat
+            ? activeCat.name
+            : q
+              ? `Results for "${q}"`
+              : "All products"}
         </h1>
+
         <p className="mt-2 text-sm text-[#4A4A4A]">
-          {loading ? "Loading products…" : `${sorted.length} product${sorted.length !== 1 ? "s" : ""} available`}
+          {loading
+            ? "Loading products…"
+            : `${sorted.length} product${sorted.length !== 1 ? "s" : ""} available`}
         </p>
       </div>
 
@@ -80,17 +151,25 @@ export default function Products() {
           <SlidersHorizontal className="h-4 w-4" />
           Filters & sort
         </span>
-        <ChevronDown className={`h-4 w-4 transition-transform ${filtersOpen ? "rotate-180" : ""}`} />
+
+        <ChevronDown
+          className={`h-4 w-4 transition-transform ${
+            filtersOpen ? "rotate-180" : ""
+          }`}
+        />
       </button>
 
       <div className="grid gap-6 lg:grid-cols-[220px_1fr] lg:items-start lg:gap-8">
         <aside
-          className={`sticky-sidebar space-y-6 ${filtersOpen ? "block" : "hidden"} lg:block`}
+          className={`sticky-sidebar space-y-6 ${
+            filtersOpen ? "block" : "hidden"
+          } lg:block`}
           data-testid="filters-sidebar"
         >
           <form onSubmit={submitSearch}>
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+
               <input
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
@@ -106,25 +185,33 @@ export default function Products() {
               <SlidersHorizontal className="h-4 w-4" />
               Categories
             </div>
+
             <div className="no-scrollbar flex gap-2 overflow-x-auto pb-1 lg:flex-col lg:space-y-1 lg:overflow-visible lg:pb-0">
               <button
+                type="button"
                 onClick={() => updateParam("category", "")}
                 className={`shrink-0 rounded-lg px-3 py-2 text-left text-sm transition-colors lg:w-full ${
-                  !category ? "bg-[#1B4332] text-white" : "text-[#4A4A4A] hover:bg-gray-50"
+                  !category
+                    ? "bg-[#1B4332] text-white"
+                    : "text-[#4A4A4A] hover:bg-gray-50"
                 }`}
                 data-testid="filter-cat-all"
               >
                 All products
               </button>
+
               {(Array.isArray(categories) ? categories : []).map((c) => (
                 <button
+                  type="button"
                   key={c.slug}
                   onClick={() => {
                     updateParam("category", c.slug);
                     setFiltersOpen(false);
                   }}
                   className={`shrink-0 rounded-lg px-3 py-2 text-left text-sm transition-colors lg:w-full ${
-                    category === c.slug ? "bg-[#1B4332] text-white" : "text-[#4A4A4A] hover:bg-gray-50"
+                    category === c.slug
+                      ? "bg-[#1B4332] text-white"
+                      : "text-[#4A4A4A] hover:bg-gray-50"
                   }`}
                   data-testid={`filter-cat-${c.slug}`}
                 >
@@ -135,7 +222,10 @@ export default function Products() {
           </div>
 
           <div>
-            <div className="mb-3 text-sm font-semibold text-[#1A1A1A]">Sort by</div>
+            <div className="mb-3 text-sm font-semibold text-[#1A1A1A]">
+              Sort by
+            </div>
+
             <select
               value={sort}
               onChange={(e) => updateParam("sort", e.target.value)}
@@ -150,7 +240,7 @@ export default function Products() {
           </div>
         </aside>
 
-        {/* Grid — scrolls while filters stay fixed on desktop */}
+        {/* Product grid */}
         <div className="min-w-0">
           {loading ? (
             <div className="flex min-h-[300px] items-center justify-center">
@@ -160,14 +250,16 @@ export default function Products() {
             <div className="flex min-h-[300px] flex-col items-center justify-center rounded-2xl border border-dashed border-[#E5E5E5] p-10 text-center">
               <div className="text-3xl">🛒</div>
               <p className="mt-3 font-semibold">No products found</p>
-              <p className="mt-1 text-sm text-[#4A4A4A]">Try a different search or category.</p>
+              <p className="mt-1 text-sm text-[#4A4A4A]">
+                Try a different search or category.
+              </p>
             </div>
           ) : (
             <div
               className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4"
               data-testid="products-grid"
             >
-             {(Array.isArray(sorted) ? sorted : []).map((p) => (
+              {sorted.map((p) => (
                 <ProductCard key={p.id} product={p} />
               ))}
             </div>

@@ -1,4 +1,4 @@
-﻿import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 const CartContext = createContext(null);
@@ -70,6 +70,7 @@ export function CartProvider({ children }) {
           product_id: product.id,
           name: product.name,
           price: product.price,
+          mrp: Number(product.mrp || product.price || 0),
           image: product.image,
           unit: product.unit,
           quantity: qty,

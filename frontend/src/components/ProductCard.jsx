@@ -115,7 +115,11 @@ export default function ProductCard({ product }) {
    * It does NOT change the actual product price.
    */
 
-  const off = 10;
+  const off =
+activeMrp > activePrice && activeMrp > 0
+? Math.round(((activeMrp - activePrice) / activeMrp) * 100)
+: 0;
+
 
   /*
    * ---------------------------------------------------------------
@@ -159,6 +163,7 @@ export default function ProductCard({ product }) {
       {
         ...product,
         price: activePrice,
+        mrp: activeMrp > 0 ? activeMrp : activePrice,
         unit: activeUnit,
       },
       1,

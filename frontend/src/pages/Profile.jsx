@@ -22,6 +22,8 @@ import {
 
 const menuItems = [
   { label: "My Orders", icon: Package, to: "/orders" },
+  { label: "My Orders", icon: Package, to: "/orders" },
+  { label: "Loyalty Card", icon: Gift, to: "/loyalty-card" },
   { label: "Wishlist", icon: Heart, to: "/profile/wishlist" },
   { label: "Wallet", icon: Wallet, to: "/profile/wallet" },
   { label: "Refer Friends", icon: Gift, to: "/profile/refer" },
@@ -29,6 +31,7 @@ const menuItems = [
   { label: "Help Center", icon: HelpCircle, to: "/contact" },
   { label: "Rate App", icon: Star, to: "/profile/rate" },
 ];
+
 
 function initials(name, email) {
   const n = String(name || email || "?").trim();

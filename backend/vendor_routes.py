@@ -328,8 +328,8 @@ def register_platform_routes(api, db, deps):
     @api.patch("/admin/payouts/{payout_id}/status")
     async def admin_update_payout_status(payout_id: str, payload: dict, admin: dict = Depends(require_admin)):
         status = payload.get("status")
-        if status not in ("Approved", "Processing", "Paid", "Failed", "Rejected"):
-            raise HTTPException(status_code=400, detail="Invalid payout status")
+        if status not in ("Pending", "Processing", "Paid" , "Rejected"):
+           raise HTTPException(status_code=400, detail="Invalid payout status")
         oid = safe_object_id(payout_id)
         payout = await db.payouts.find_one({"_id": oid})
         if not payout:

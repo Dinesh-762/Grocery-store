@@ -10,6 +10,7 @@ import StickyCartBar from "@/components/StickyCartBar";
 import ProtectedRoute from "@/components/ProtectedRoute";
 
 import Home from "@/pages/Home";
+import LoyaltyCard from "./pages/LoyaltyCard";
 import Products from "@/pages/Products";
 import VendorDashboard from "./pages/VendorDashboard";
 import ProductDetail from "@/pages/ProductDetail";
@@ -79,6 +80,10 @@ function AppShell() {
                 </ProtectedRoute>
               }
             />
+            <Route
+  path="/loyalty-card"
+  element={<LoyaltyCard />}
+/>
             <Route
               path="/orders"
               element={

@@ -1,6 +1,6 @@
-import { Link, NavLink, useNavigate, useLocation } from "react-router-dom";
+﻿import { Link, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useState, useEffect } from "react";
-import { ShoppingCart, User, Search, Menu, X, LogOut, LayoutDashboard, Package, Leaf, Store, Truck, UserCircle } from "lucide-react";
+import { ShoppingCart, User, Search, Menu, X, LogOut, LayoutDashboard, Package, Leaf, Store, Truck, UserCircle, Gift} from "lucide-react";
 import { api, formatINR } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useCart } from "@/context/CartContext";
@@ -96,7 +96,7 @@ export default function Header() {
               onChange={(e) => setSearch(e.target.value)}
               onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
               onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
-              placeholder="Search for rice, dal, milk, snacks…"
+              placeholder="Search for rice, dal, milk, snacksâ€¦"
               className="input-base pl-12"
               data-testid="header-search-input"
             />
@@ -201,6 +201,11 @@ export default function Header() {
                     <Package className="mr-2 h-4 w-4" /> My Orders
                   </Link>
                 </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link to="/loyalty-card" data-testid="menu-loyalty-card" className="cursor-pointer">
+                    <Gift className="mr-2 h-4 w-4 text-green-700" /> Loyalty Card
+                  </Link>
+                </DropdownMenuItem>
                 {user.role === "admin" && (
                   <DropdownMenuItem asChild>
                     <Link to="/admin" data-testid="menu-admin" className="cursor-pointer">
@@ -267,7 +272,7 @@ export default function Header() {
                 <input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search products…"
+                  placeholder="Search productsâ€¦"
                   className="input-base pl-11"
                   data-testid="mobile-search-input"
                 />
@@ -307,6 +312,13 @@ export default function Header() {
                   >
                     My Orders
                   </Link>
+                  <Link
+                    to="/loyalty-card"
+                    onClick={() => setMobileOpen(false)}
+                    className="rounded-lg px-3 py-2 text-sm font-medium text-[#4A4A4A] hover:bg-gray-50"
+                  >
+                    🎁 Loyalty Card
+                  </Link>
                   {user.role === "admin" && (
                     <Link
                       to="/admin"
@@ -341,7 +353,7 @@ export default function Header() {
                     }}
                     className="rounded-lg px-3 py-2 text-left text-sm font-medium text-red-600 hover:bg-red-50"
                   >
-                    Logout
+Logout
                   </button>
                 </>
               ) : (
@@ -361,4 +373,6 @@ export default function Header() {
     </header>
   );
 }
+
+
 
