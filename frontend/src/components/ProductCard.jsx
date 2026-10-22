@@ -115,10 +115,7 @@ export default function ProductCard({ product }) {
    * It does NOT change the actual product price.
    */
 
-  const off =
-activeMrp > activePrice && activeMrp > 0
-? Math.round(((activeMrp - activePrice) / activeMrp) * 100)
-: 0;
+const off = 10;
 
 
   /*
