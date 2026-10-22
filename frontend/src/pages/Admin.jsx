@@ -26,7 +26,7 @@ function allowedNextStatuses(current) {
   if (current === "Cancelled" || current === "Delivered") return [current];
   const idx = STATUS_FLOW.indexOf(current);
   const next = idx >= 0 && idx < STATUS_FLOW.length - 1 ? [STATUS_FLOW[idx + 1]] : [];
-  return [current, ...next, "Cancelled"];
+  return [...new Set([current, ...next, "Delivered", "Cancelled"])];
 }
 import {
   LayoutDashboard,
