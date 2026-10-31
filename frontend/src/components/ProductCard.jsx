@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+﻿import { Link } from "react-router-dom";
 import { Plus, Minus, ShoppingCart } from "lucide-react";
 import { useCart, lineKey } from "@/context/CartContext";
 import { formatINR } from "@/lib/api";
@@ -115,7 +115,12 @@ export default function ProductCard({ product }) {
    * It does NOT change the actual product price.
    */
 
-const off = 10;
+const hasConfiguredDiscount =
+  product.discount_percent !== undefined && product.discount_percent !== null;
+
+const off = hasConfiguredDiscount
+  ? Math.max(0, Math.min(100, Number(product.discount_percent) || 0))
+  : (["handwash", "dettol", "bathingsoap", "bathsoap", "toiletcleaner", "floorcleaner", "dishwashbar", "toothpaste", "detergentpowder", "tomatoketchup", "instantnoodles", "farsan", "shev", "marie", "glucosebiscuit", "instantcoffee", "ctcleaftea", "rusk", "freshpav", "whitebread", "cheeseslices", "saltedbutter", "curd", "dahi", "freshpaneer", "milkpouch", "purejaggery", "refinedsugar", "iodizedsalt", "hing", "asafetida", "mustardseeds", "cuminseeds", "jeera", "corianderpowder", "cowghee", "mustardoil", "groundnut", "peanutoil", "rajma", "kabulichana", "basmatirice", "kolamrice", "suji", "rava", "riceflour", "maida", "wholewheatatta", "colgate", "sunfloweroil", "amulbutter"].some(term => String(product.name || "").toLowerCase().replace(/[^a-z0-9]/g, "").includes(term)) ? 5 : 10);
 
 
   /*
@@ -376,3 +381,4 @@ const off = 10;
     </div>
   );
 }
+

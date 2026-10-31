@@ -348,6 +348,11 @@ class ProductIn(BaseModel):
     featured: bool = False
     popular: bool = False
     variants: Optional[List[dict]] = None  # [{label, price, unit}]
+    company_packed: bool = False
+    commission_type: str = "MRP"
+    commission_value: float = 0.0
+    discount_percent: Optional[float] = Field(default=None, ge=0, le=100)
+
 
 class VariantPriceUpdate(BaseModel):
     label: str
@@ -547,6 +552,7 @@ def product_to_out(p: dict) -> dict:
         "stock": p.get("stock", 0),
         "featured": p.get("featured", False),
         "popular": p.get("popular", False),
+        "company_packed": bool(p.get("company_packed", False)),
         "created_at": p.get("created_at", iso_now()),
         "vendor_id": p.get("vendor_id"),
         "vendor_name": p.get("vendor_name"),
@@ -1426,6 +1432,15 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
     # Recompute prices server-side from DB and validate stock
     verified_items = []
     vendor_min_totals: dict = {}  # vendor_id -> subtotal (customer selling prices)
+    apply_product_discount = bool(payload.apply_product_discount)
+    if apply_product_discount:
+        delivered_order = await db.orders.find_one(
+            {"user_id": user["id"], "status": "Delivered"},
+            {"_id": 1},
+        )
+        if delivered_order:
+            apply_product_discount = False
+
     for it in payload.items:
         try:
             prod = await db.products.find_one({"_id": ObjectId(it.product_id)})
@@ -1464,7 +1479,14 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
             original_price = round(selling_price * 1.1, 2)
 
         original_price = max(selling_price, original_price)
-        eff_price = selling_price if payload.apply_product_discount else original_price
+        discount_percent = prod.get("discount_percent")
+        if discount_percent is None:
+            product_name_normalized = "".join(ch for ch in str(prod.get("name") or "").lower() if ch.isalnum())
+            five_percent_terms = ('handwash', 'dettol', 'bathingsoap', 'bathsoap', 'toiletcleaner', 'floorcleaner', 'dishwashbar', 'toothpaste', 'detergentpowder', 'tomatoketchup', 'instantnoodles', 'farsan', 'shev', 'marie', 'glucosebiscuit', 'instantcoffee', 'ctcleaftea', 'rusk', 'freshpav', 'whitebread', 'cheeseslices', 'saltedbutter', 'curd', 'dahi', 'freshpaneer', 'milkpouch', 'purejaggery', 'refinedsugar', 'iodizedsalt', 'hing', 'asafetida', 'mustardseeds', 'cuminseeds', 'jeera', 'corianderpowder', 'cowghee', 'mustardoil', 'groundnut', 'peanutoil', 'rajma', 'kabulichana', 'basmatirice', 'kolamrice', 'suji', 'rava', 'riceflour', 'maida', 'wholewheatatta', 'colgate', 'sunfloweroil', 'amulbutter')
+            discount_percent = 5.0 if any(term in product_name_normalized for term in five_percent_terms) else 10.0
+        discount_percent = max(0.0, min(100.0, float(discount_percent)))
+        configured_discount_price = round(original_price * (1 - discount_percent / 100), 2)
+        eff_price = min(selling_price, configured_discount_price) if apply_product_discount else original_price
         # Vacation-mode / open-now check per vendor
         vid = prod.get("vendor_id")
         if vid:
@@ -1478,12 +1500,12 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
                 raise HTTPException(status_code=400, detail=f"{vend.get('business_name', 'This vendor')} is not accepting orders right now.")
             vendor_min_totals[vid] = vendor_min_totals.get(vid, 0.0) + eff_price * it.quantity
         verified_items.append({
+                "company_packed": bool(prod.get("company_packed", False)),
             "product_id": str(prod["_id"]),
             "name": prod["name"],
             "price": eff_price,
             "mrp": original_price,
-            "product_discount": round(max(0.0, original_price - selling_price), 2)
-                if payload.apply_product_discount else 0.0,
+            "product_discount": round(max(0.0, original_price - eff_price), 2) if apply_product_discount else 0.0,
             "base_price": pricing["base_price"],
             "quantity": it.quantity,
             "image": prod["image"],
@@ -1494,12 +1516,13 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
             "variant_label": it.variant_label,
             "note": (it.note or "").strip() or None,
             "pricing_snapshot": {
+                    "company_packed": bool(prod.get("company_packed", False)),
                 "base_price": pricing["base_price"],
                 "markup_pct": pricing["markup_pct"],
                 "markup_amount": pricing["markup_amount"],
                 "selling_price": pricing["selling_price"],
                 "mrp": original_price,
-                "product_discount_applied": payload.apply_product_discount,
+                "product_discount_applied": apply_product_discount,
                 "gst_rate": pricing.get("gst_rate", settings.get("gst_rate")),
                 "rule_source": pricing.get("rule_source"),
             },
@@ -1730,6 +1753,24 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
 
     return order_to_out(doc)
 
+
+@api.get("/loyalty/progress")
+async def loyalty_progress(user: dict = Depends(get_current_user)):
+    if user.get("role") != "customer":
+        raise HTTPException(status_code=403, detail="Customer access required")
+
+    qualifying_orders = await db.orders.count_documents({
+        "user_id": user["id"],
+        "status": "Delivered",
+        "total": {"$gte": 299},
+    })
+
+    return {
+        "customer_name": user.get("name", ""),
+        "completed_orders": qualifying_orders % 10,
+        "total_qualifying_orders": qualifying_orders,
+        "reward_unlocked": qualifying_orders > 0 and qualifying_orders % 10 == 0,
+    }
 
 @api.get("/orders/my")
 async def my_orders(user: dict = Depends(get_current_user)):
@@ -2265,6 +2306,12 @@ async def vendor_my_products(user: dict = Depends(get_current_user)):
 
 def _product_payload_to_doc(payload: ProductIn, as_vendor: bool = False) -> dict:
     doc = payload.model_dump()
+    # Only admins can assign company-packed status.
+    # Omitting this field preserves the existing value on vendor edits.
+    if as_vendor:
+        doc.pop("company_packed", None)
+        doc.pop("commission_type", None)
+        doc.pop("commission_value", None)
     base = float(doc.pop("price", 0))
     doc["base_price"] = base
     doc["price"] = base  # legacy field mirrors base for DB queries
@@ -2282,7 +2329,7 @@ async def vendor_create_product(payload: ProductIn, user: dict = Depends(get_cur
     exists = await db.products.find_one({"slug": payload.slug})
     if exists:
         raise HTTPException(status_code=400, detail="Slug already used")
-    doc = _product_payload_to_doc(payload)
+    doc = _product_payload_to_doc(payload, as_vendor=True)
     doc["created_at"] = iso_now()
     doc["vendor_id"] = str(vendor["_id"])
     doc["vendor_name"] = vendor["business_name"]
@@ -2302,7 +2349,7 @@ async def vendor_update_product(prod_id: str, payload: ProductIn, user: dict = D
         raise HTTPException(status_code=404, detail="Product not found")
     if existing.get("vendor_id") != str(vendor["_id"]):
         raise HTTPException(status_code=403, detail="Not your product")
-    update = _product_payload_to_doc(payload)
+    update = _product_payload_to_doc(payload, as_vendor=True)
     settings = await get_platform_settings(db)
     if settings.get("product_approval_required", True):
         update["approval_status"] = "pending"

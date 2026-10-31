@@ -546,7 +546,10 @@ function ProductsAdmin() {
 
 function ProductForm({ initial, categories, onClose, onSaved }) {
   const [form, setForm] = useState(
-    initial || {
+    initial ? {
+      ...initial,
+      discount_percent: initial.discount_percent ?? (["handwash", "dettol", "bathingsoap", "bathsoap", "toiletcleaner", "floorcleaner", "dishwashbar", "toothpaste", "detergentpowder", "tomatoketchup", "instantnoodles", "farsan", "shev", "marie", "glucosebiscuit", "instantcoffee", "ctcleaftea", "rusk", "freshpav", "whitebread", "cheeseslices", "saltedbutter", "curd", "dahi", "freshpaneer", "milkpouch", "purejaggery", "refinedsugar", "iodizedsalt", "hing", "asafetida", "mustardseeds", "cuminseeds", "jeera", "corianderpowder", "cowghee", "mustardoil", "groundnut", "peanutoil", "rajma", "kabulichana", "basmatirice", "kolamrice", "suji", "rava", "riceflour", "maida", "wholewheatatta", "colgate", "sunfloweroil", "amulbutter"].some(term => String(initial.name || "").toLowerCase().replace(/[^a-z0-9]/g, "").includes(term)) ? 5 : 10),
+    } : {
       name: "",
       slug: "",
       description: "",
@@ -560,6 +563,8 @@ function ProductForm({ initial, categories, onClose, onSaved }) {
       popular: false,
       commission_type: "MRP",
       commission_value: 0,
+      discount_percent: 10,
+      company_packed: false,
     }
   );
 
@@ -600,6 +605,11 @@ function ProductForm({ initial, categories, onClose, onSaved }) {
 
     const commissionType = String(form.commission_type || "MRP").toUpperCase();
     const commissionValue = Number(form.commission_value || 0);
+    const discountPercent = Number(form.discount_percent ?? 10);
+    if (!Number.isFinite(discountPercent) || discountPercent < 0 || discountPercent > 100) {
+      toast.error("Discount must be between 0 and 100%.");
+      return;
+    }
 
     if (!Number.isFinite(commissionValue) || commissionValue < 0) {
       toast.error("Commission value cannot be negative.");
@@ -626,6 +636,7 @@ function ProductForm({ initial, categories, onClose, onSaved }) {
         stock: Number(form.stock),
         commission_type: commissionType,
         commission_value: commissionValue,
+        discount_percent: discountPercent,
         variants: variants.map((v) => ({
           label: String(v.label || "").trim(),
           price: Number(v.price || 0),
@@ -696,6 +707,7 @@ function ProductForm({ initial, categories, onClose, onSaved }) {
           </div>
 
           <FField label="Stock" type="number" min="0" step="1" value={form.stock} onChange={(v) => update("stock", v)} required data-testid="product-stock" />
+          <FField label="Product Discount (%)" type="number" min="0" max="100" step="0.01" value={form.discount_percent ?? 10} onChange={(v) => update("discount_percent", v)} data-testid="product-discount-percent" />
 
           {/* Commission */}
           <div className="sm:col-span-2 rounded-2xl border border-[#D9E8DE] bg-[#F7FBF8] p-4">
@@ -783,6 +795,14 @@ function ProductForm({ initial, categories, onClose, onSaved }) {
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={Boolean(form.popular)} onChange={(e) => update("popular", e.target.checked)} />
               Popular
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={Boolean(form.company_packed)}
+                onChange={(e) => update("company_packed", e.target.checked)}
+              />
+              Company-packed product (5% vendor commission)
             </label>
           </div>
 

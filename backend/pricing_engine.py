@@ -136,7 +136,16 @@ async def compute_product_price(
         rules = await get_active_pricing_rules(db)
 
     base = get_base_price(product, variant_label)
-    markup_pct, rule_source = resolve_markup_pct(product, rules, settings)
+
+    # Company-packed products have zero customer-facing markup.
+    if product.get("company_packed") is True:
+        markup_pct = 0.0
+        rule_source = "company_packed:zero_markup"
+    else:
+        markup_pct, rule_source = resolve_markup_pct(
+            product, rules, settings
+        )
+
     result = apply_markup(base, markup_pct)
     result["rule_source"] = rule_source
 

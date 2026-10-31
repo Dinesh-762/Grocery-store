@@ -66,7 +66,7 @@ async def create_notification(
 
 
 async def reconcile_vendor_wallet_earnings(db, vendor_id: str) -> None:
-    """Fix legacy wallet rows that deducted platform commission from vendor earnings."""
+    """Reconcile wallet earnings while preserving company-packed commission."""
     await db.wallet_transactions.delete_many({
         "vendor_id": vendor_id,
         "transaction_type": "platform_deduction",
@@ -76,49 +76,66 @@ async def reconcile_vendor_wallet_earnings(db, vendor_id: str) -> None:
         "vendor_id": vendor_id,
         "transaction_type": "order_earning",
     }).to_list(5000)
+
     if not txs:
         return
 
     from pricing_engine import get_order_item_base_price
 
     for t in txs:
+        order = None
+        order_id = t.get("reference_id")
+        product_id = t.get("product_id")
+        matched_item = None
+
+        if order_id and product_id:
+            try:
+                order = await db.orders.find_one({"_id": ObjectId(order_id)})
+            except Exception:
+                order = None
+
+            if order:
+                for item in order.get("items", []):
+                    if (
+                        str(item.get("product_id")) == str(product_id)
+                        and str(item.get("vendor_id")) == str(vendor_id)
+                    ):
+                        matched_item = item
+                        break
+
+        snap = (matched_item or {}).get("pricing_snapshot") or {}
+        company_packed = (
+            t.get("company_packed") is True
+            or (matched_item or {}).get("company_packed") is True
+            or snap.get("company_packed") is True
+        )
+
         gross = t.get("gross_amount")
         if gross is not None:
             gross = round(float(gross), 2)
-        else:
-            gross = None
-            order_id = t.get("reference_id")
-            product_id = t.get("product_id")
-            if order_id and product_id:
-                try:
-                    order = await db.orders.find_one({"_id": ObjectId(order_id)})
-                except Exception:
-                    order = None
-                if order:
-                    for item in order.get("items", []):
-                        if item.get("product_id") == product_id and item.get("vendor_id") == vendor_id:
-                            gross = round(
-                                get_order_item_base_price(item) * int(item.get("quantity") or 0),
-                                2,
-                            )
-                            break
-            if gross is None:
-                gross = round(float(t.get("amount") or 0), 2)
-
-        current = round(float(t.get("amount") or 0), 2)
-        commission = float(t.get("commission") or 0)
-        if current != gross or commission > 0 or t.get("gross_amount") is None:
-            await db.wallet_transactions.update_one(
-                {"_id": t["_id"]},
-                {"$set": {
-                    "amount": gross,
-                    "gross_amount": gross,
-                    "commission": 0,
-                    "commission_pct": 0,
-                }},
+        elif matched_item:
+            gross = round(
+                get_order_item_base_price(matched_item)
+                * int(matched_item.get("quantity") or 0),
+                2,
             )
+        else:
+            gross = round(float(t.get("amount") or 0), 2)
 
+        pct = 5.0 if company_packed else 0.0
+        commission = round(gross * pct / 100.0, 2)
+        net_amount = round(gross - commission, 2)
 
+        await db.wallet_transactions.update_one(
+            {"_id": t["_id"]},
+            {"$set": {
+                "amount": net_amount,
+                "gross_amount": gross,
+                "commission": commission,
+                "commission_pct": pct,
+                "company_packed": company_packed,
+            }},
+        )
 async def get_wallet_summary(db, vendor_id: str) -> dict:
     await reconcile_vendor_wallet_earnings(db, vendor_id)
     txs = await db.wallet_transactions.find({"vendor_id": vendor_id}).sort("created_at", -1).to_list(5000)
@@ -172,15 +189,10 @@ async def get_wallet_summary(db, vendor_id: str) -> dict:
 
 
 async def credit_vendor_order_earning(
-    db,
-    *,
-    vendor_id: str,
-    order_id: str,
-    line_items: list[dict],
-    commission_pct: float = 0,
-    settlement_days: int = 7,
+    db, *, vendor_id: str, order_id: str, line_items: list[dict],
+    commission_pct: float = 0, settlement_days: int = 7,
 ) -> None:
-    """Credit vendor wallet when order lines are delivered (full base price, no platform fee)."""
+    """Credit delivered vendor earnings with company-packed commission."""
     for item in line_items:
         snap = item.get("pricing_snapshot") or {}
         base = float(snap.get("base_price") or item.get("base_price") or 0)
@@ -188,6 +200,14 @@ async def credit_vendor_order_earning(
         gross = round(base * qty, 2)
         if gross <= 0:
             continue
+
+        company_packed = (
+            snap.get("company_packed") is True
+            or item.get("company_packed") is True
+        )
+        pct = 5.0 if company_packed else 0.0
+        commission = round(gross * pct / 100.0, 2)
+        net_amount = round(gross - commission, 2)
 
         existing = await db.wallet_transactions.find_one({
             "vendor_id": vendor_id,
@@ -198,18 +218,22 @@ async def credit_vendor_order_earning(
         if existing:
             continue
 
-        release_at = (datetime.now(timezone.utc) + timedelta(days=settlement_days)).isoformat()
+        release_at = (
+            datetime.now(timezone.utc) + timedelta(days=settlement_days)
+        ).isoformat()
+
         await db.wallet_transactions.insert_one({
             "vendor_id": vendor_id,
             "transaction_type": "order_earning",
-            "amount": gross,
+            "amount": net_amount,
             "gross_amount": gross,
-            "commission": 0,
-            "commission_pct": 0,
+            "commission": commission,
+            "commission_pct": pct,
+            "company_packed": company_packed,
             "status": "pending",
             "reference_id": order_id,
             "product_id": item.get("product_id"),
-            "description": f"Order #{order_id[-6:].upper()} — {item.get('name', 'item')}",
+            "description": f"Order #{order_id[-6:].upper()} ? {item.get('name', 'item')}",
             "release_at": release_at,
             "created_at": iso_now(),
         })

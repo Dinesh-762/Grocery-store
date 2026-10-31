@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useCallback, useEffect, useState } from "react";
+import { api } from "../lib/api";
 import { Link } from "react-router-dom";
 import {
   ArrowLeft,
@@ -31,73 +32,34 @@ const LoyaltyCard = () => {
   const rewardUnlocked = eligibleOrders >= 10;
   const progress = eligibleOrders * 10;
 
+  const loadLoyaltyData = useCallback(async () => {
+    try {
+      setError("");
+
+      const response = await api.get("/loyalty/progress");
+      const data = response.data;
+
+      setCustomerName(data.customer_name || "");
+      setCompletedOrders(
+        Math.max(0, Math.floor(Number(data.completed_orders) || 0))
+      );
+    } catch (err) {
+      setError(
+        err.response?.data?.detail ||
+          "Your loyalty progress is temporarily unavailable."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    let active = true;
-
-    const loadLoyaltyData = async () => {
-      try {
-        setLoading(true);
-        setError("");
-
-        /*
-         * Backend integration:
-         * This endpoint must return the authenticated customer's
-         * actual eligible completed-order count.
-         *
-         * Expected response:
-         * {
-         *   "customer_name": "Dinesh",
-         *   "completed_orders": 3
-         * }
-         *
-         * The backend endpoint will be implemented separately.
-         */
-
-        const response = await fetch("/api/loyalty/progress", {
-          method: "GET",
-          credentials: "include",
-          headers: {
-            Accept: "application/json",
-          },
-        });
-
-        if (!response.ok) {
-          throw new Error(
-            "Your loyalty progress is temporarily unavailable."
-          );
-        }
-
-        const data = await response.json();
-
-        if (!active) return;
-
-        setCustomerName(data.customer_name || "");
-        setCompletedOrders(
-          Math.max(
-            0,
-            Math.floor(Number(data.completed_orders) || 0)
-          )
-        );
-      } catch (err) {
-        if (!active) return;
-
-        setError(
-          err.message ||
-            "Unable to load your loyalty progress."
-        );
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    };
-
     loadLoyaltyData();
 
-    return () => {
-      active = false;
-    };
-  }, []);
+    const interval = window.setInterval(loadLoyaltyData, 10000);
+
+    return () => window.clearInterval(interval);
+  }, [loadLoyaltyData]);
 
   return (
     <div className="min-h-screen bg-[#f7f9f4] text-[#123f2d]">
@@ -124,8 +86,8 @@ const LoyaltyCard = () => {
           </Link>
 
           <div className="hidden text-sm font-medium text-gray-600 sm:block">
-            Fresh <span className="mx-2 text-green-700">•</span>
-            Local <span className="mx-2 text-green-700">•</span>
+            Fresh <span className="mx-2 text-green-700">{ "\u2022" }</span>
+            Local <span className="mx-2 text-green-700">{ "\u2022" }</span>
             For You
           </div>
         </div>
@@ -152,7 +114,7 @@ const LoyaltyCard = () => {
 
           <p className="mt-3 max-w-2xl text-sm leading-6 text-gray-600 sm:text-base">
             Complete 10 qualifying orders and receive a free
-            order worth up to ₹499. Thank you for being part
+            order worth up to { "\u20B9" }499. Thank you for being part
             of Ambajogai Grocery Store!
           </p>
         </section>
@@ -184,7 +146,7 @@ const LoyaltyCard = () => {
                   </p>
 
                   <p className="mt-1 text-3xl font-extrabold text-green-800">
-                    {loading ? "—" : `${eligibleOrders}/10`}
+                    {loading ? "â€”" : `${eligibleOrders}/10`}
                   </p>
                 </div>
 
@@ -218,12 +180,12 @@ const LoyaltyCard = () => {
 
             <div>
               <p className="font-semibold">
-                Only orders above ₹299 count towards your loyalty card.
+                Only orders above {"\u20B9"}299 count towards your loyalty card.
               </p>
 
               <p className="mt-1 text-sm text-gray-600">
                 Only completed and delivered qualifying orders count.
-                Orders of exactly ₹299 do not qualify.
+                Orders of exactly {"\u20B9"}299 do not qualify.
               </p>
             </div>
           </div>
@@ -244,7 +206,7 @@ const LoyaltyCard = () => {
                   </h3>
 
                   <p className="mt-1 text-sm text-green-50 sm:text-base">
-                    Complete 10 orders above ₹299.
+                    Complete 10 orders above { "\u20B9" }299.
                   </p>
                 </div>
               </div>
@@ -364,12 +326,12 @@ const LoyaltyCard = () => {
               </h3>
 
               <p className="mt-3 text-2xl font-bold text-lime-200 sm:text-3xl">
-                Worth up to ₹499!
+                Worth up to { "\u20B9" }499!
               </p>
 
               <p className="mt-4 max-w-xl text-sm leading-6 text-green-50 sm:text-base">
-                Complete 10 qualifying orders above ₹299 to
-                unlock one free order worth up to ₹499.
+                Complete 10 qualifying orders above { "\u20B9" }299 to
+                unlock one free order worth up to { "\u20B9" }499.
               </p>
 
               {!loading && !error && (
@@ -514,7 +476,7 @@ const LoyaltyCard = () => {
         </section>
 
         <footer className="py-6 text-center text-sm text-gray-500">
-          Thank you for supporting Ambajogai Grocery Store. 💚
+          Thank you for supporting Ambajogai Grocery Store. ðŸ’š
         </footer>
       </main>
     </div>
