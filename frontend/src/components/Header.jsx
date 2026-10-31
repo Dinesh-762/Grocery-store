@@ -1,4 +1,4 @@
-﻿import { Link, NavLink, useNavigate, useLocation } from "react-router-dom";
+import { Link, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { ShoppingCart, User, Search, Menu, X, LogOut, LayoutDashboard, Package, Leaf, Store, Truck, UserCircle, Gift} from "lucide-react";
 import { api, formatINR } from "@/lib/api";
@@ -263,21 +263,24 @@ export default function Header() {
         </div>
       </div>
 
+      <div className="border-t border-[#E5E5E5]/60 bg-white px-3 py-3 md:hidden" data-testid="mobile-search-bar">
+        <form onSubmit={submitSearch} className="container-app">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search rice, atta, dal, milk..."
+              aria-label="Search products"
+              className="input-base w-full pl-11"
+              data-testid="mobile-search-input"
+            />
+          </div>
+        </form>
+      </div>
       {mobileOpen && (
         <div className="border-t border-[#E5E5E5]/60 bg-white lg:hidden" data-testid="mobile-menu">
           <div className="container-app max-h-[calc(100dvh-3.5rem)] space-y-4 overflow-y-auto py-4">
-            <form onSubmit={submitSearch}>
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search productsâ€¦"
-                  className="input-base pl-11"
-                  data-testid="mobile-search-input"
-                />
-              </div>
-            </form>
             <div className="flex flex-col gap-1">
               {navLinks.map((l) => (
                 <NavLink

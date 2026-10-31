@@ -2234,8 +2234,8 @@ async def get_public_vendor(vendor_id: str):
         "business_description": v.get("business_description", ""),
         "business_address": v.get("business_address", ""),
         "business_pincode": v.get("business_pincode", ""),
-        "shop_phone": v.get("shop_phone", v.get("phone", "")),
-        "shop_whatsapp": v.get("shop_whatsapp", v.get("phone", "")),
+
+
         "shop_logo": v.get("shop_logo", ""),
         "banner_image": v.get("banner_image", ""),
         "business_hours": v.get("business_hours", {}),

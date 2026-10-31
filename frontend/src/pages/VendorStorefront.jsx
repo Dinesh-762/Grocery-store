@@ -111,11 +111,6 @@ export default function VendorStorefront() {
                     {vendor.business_address}{vendor.business_pincode && ` - ${vendor.business_pincode}`}
                   </span>
                 )}
-                {vendor.shop_phone && (
-                  <a href={`tel:${vendor.shop_phone}`} className="inline-flex items-center gap-1 hover:text-[#1B4332]">
-                    <Phone className="h-3.5 w-3.5" /> {vendor.shop_phone}
-                  </a>
-                )}
                 <span className="inline-flex items-center gap-1">
                   <Package className="h-3.5 w-3.5" />
                   {vendor.products.length} product{vendor.products.length !== 1 ? "s" : ""}

@@ -1,4 +1,4 @@
-﻿
+
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -147,102 +147,20 @@ export default function Home() {
 
         <div className="absolute inset-0 -z-10 bg-gradient-to-r from-[#102F23]/95 via-[#153D2C]/80 to-[#153D2C]/35" />
 
-        <div className="container-app relative py-12 sm:py-16 lg:py-24">
-
-          <div className="max-w-2xl">
-
-            <span className="inline-flex items-center gap-2 rounded-full border border-white/25 bg-white/10 px-3 py-2 text-xs font-semibold text-white backdrop-blur">
-              <Sparkles className="h-4 w-4 text-[#F6C85F]" />
-              AMBAJOGAI'S LOCAL GROCERY STORE
-            </span>
-
-            <h1 className="mt-5 font-heading text-3xl font-extrabold leading-tight text-white sm:text-5xl lg:text-6xl">
-              Fresh groceries.
-              <span className="mt-1 block text-[#F6C85F]">
-                Delivered to your door.
-              </span>
-            </h1>
-
-            <p className="mt-4 max-w-xl text-sm leading-6 text-white/85 sm:text-lg sm:leading-8">
-              From fresh fruits and vegetables to daily essentials,
-              shop from trusted local stores and get your groceries
-              delivered across Ambajogai.
-            </p>
-
-            <form
-              onSubmit={submitSearch}
-              className="mt-6 flex w-full max-w-xl flex-col gap-2 rounded-2xl bg-white p-2 shadow-2xl sm:mt-8 sm:flex-row sm:items-center sm:rounded-full"
-              data-testid="hero-search-form"
-            >
-
-              <div className="relative min-w-0 flex-1">
-
-                <Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
-
-                <input
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                  placeholder="Search rice, atta, dal, milk..."
-                  aria-label="Search groceries"
-                  className="min-h-11 w-full rounded-xl bg-transparent py-2.5 pl-11 pr-3 text-base text-gray-900 outline-none placeholder:text-gray-400 sm:text-sm"
-                  data-testid="hero-search-input"
-                />
-
-              </div>
-
-              <button
-                type="submit"
-                className="min-h-11 w-full rounded-xl bg-[#1B4332] px-7 py-3 text-sm font-bold text-white transition hover:bg-[#2D6A4F] sm:w-auto sm:rounded-full"
-                data-testid="hero-search-submit"
-              >
-                Search products
-              </button>
-
-            </form>
-
-            <div className="mt-6 grid gap-3 text-white/90 sm:grid-cols-3">
-
-              <HeroBenefit
-                icon={Truck}
-                text="Free delivery over ₹499"
-              />
-
-              <HeroBenefit
-                icon={Clock}
-                text="15–20 min delivery*"
-              />
-
-              <HeroBenefit
-                icon={ShieldCheck}
-                text="Trusted local stores"
-              />
-
-            </div>
-
-            <p className="mt-3 text-[11px] text-white/60">
-              *Delivery time may vary by location and order conditions.
-            </p>
-
-          </div>
-
-        </div>
-
-      </section>
-
       {/* OFFERS CAROUSEL */}
 
       {displayOffers.length > 0 && (
 
-        <section className="container-app relative z-10 py-7 sm:py-10">
+        <section className="container-app relative z-10 pt-8 pb-2 sm:pt-10 sm:pb-3">
 
           <div className="mb-4 flex items-end justify-between gap-3">
 
             <div>
-              <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#B7791F]">
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#FFE08A]">
                 DEALS MADE FOR YOU
               </p>
 
-              <h2 className="mt-1 font-heading text-xl font-bold text-[#183D2D] sm:text-2xl">
+              <h2 className="mt-1 font-heading text-xl font-bold text-white sm:text-2xl">
                 Offers & savings
               </h2>
             </div>
@@ -383,7 +301,7 @@ export default function Home() {
 
           </div>
 
-          <p className="mt-3 text-center text-[11px] text-[#68756B]">
+          <p className="mt-3 text-center text-[11px] text-white/70">
             First-order offers are subject to eligibility and applicable
             product conditions at checkout.
           </p>
@@ -391,6 +309,69 @@ export default function Home() {
         </section>
 
       )}
+
+
+
+        <div className="container-app relative py-12 sm:py-16 lg:py-24">
+
+          <div className="max-w-2xl">
+
+            <span className="inline-flex items-center gap-2 rounded-full border border-white/25 bg-white/10 px-3 py-2 text-xs font-semibold text-white backdrop-blur">
+              <Sparkles className="h-4 w-4 text-[#F6C85F]" />
+              AMBAJOGAI'S LOCAL GROCERY STORE
+            </span>
+
+            <h1 className="mt-5 font-heading text-3xl font-extrabold leading-tight text-white sm:text-5xl lg:text-6xl">
+              Fresh groceries.
+              <span className="mt-1 block text-[#F6C85F]">
+                Delivered to your door.
+              </span>
+            </h1>
+
+            <p className="mt-4 max-w-xl text-sm leading-6 text-white/85 sm:text-lg sm:leading-8">
+              From fresh fruits and vegetables to daily essentials,
+              shop from trusted local stores and get your groceries
+              delivered across Ambajogai.
+            </p>
+
+            <form
+              onSubmit={submitSearch}
+              className="mt-6 flex w-full max-w-xl flex-col gap-2 rounded-2xl bg-white p-2 shadow-2xl sm:mt-8 sm:flex-row sm:items-center sm:rounded-full"
+              data-testid="hero-search-form"
+            >
+
+              <div className="relative min-w-0 flex-1">
+
+                <Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
+
+                <input
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  placeholder="Search rice, atta, dal, milk..."
+                  aria-label="Search groceries"
+                  className="min-h-11 w-full rounded-xl bg-transparent py-2.5 pl-11 pr-3 text-base text-gray-900 outline-none placeholder:text-gray-400 sm:text-sm"
+                  data-testid="hero-search-input"
+                />
+
+              </div>
+
+              <button
+                type="submit"
+                className="min-h-11 w-full rounded-xl bg-[#1B4332] px-7 py-3 text-sm font-bold text-white transition hover:bg-[#2D6A4F] sm:w-auto sm:rounded-full"
+                data-testid="hero-search-submit"
+              >
+                Search products
+              </button>
+
+            </form>
+
+            
+
+          </div>
+
+        </div>
+
+      </section>
 
       {/* CATEGORIES */}
 
