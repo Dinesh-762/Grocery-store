@@ -88,7 +88,7 @@ export default function Header() {
           </span>
         </Link>
 
-        <form onSubmit={submitSearch} className="relative hidden max-w-md flex-1 md:block" data-testid="header-search-form">
+        <form onSubmit={submitSearch} className={`relative max-w-md flex-1 ${pathname === "/" ? "hidden" : "hidden md:block"}`} data-testid="header-search-form">
           <div className="relative">
             <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
             <input
@@ -263,7 +263,7 @@ export default function Header() {
         </div>
       </div>
 
-      <div className="border-t border-[#E5E5E5]/60 bg-white px-3 py-3 md:hidden" data-testid="mobile-search-bar">
+      <div className={`border-t border-[#E5E5E5]/60 bg-white px-3 py-3 md:hidden ${pathname === "/" ? "hidden" : ""}`} data-testid="mobile-search-bar">
         <form onSubmit={submitSearch} className="container-app">
           <div className="relative">
             <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />

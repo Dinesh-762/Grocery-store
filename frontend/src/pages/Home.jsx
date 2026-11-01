@@ -147,13 +147,15 @@ export default function Home() {
 
         <div className="absolute inset-0 -z-10 bg-gradient-to-r from-[#102F23]/95 via-[#153D2C]/80 to-[#153D2C]/35" />
 
+
+
       {/* OFFERS CAROUSEL */}
 
       {displayOffers.length > 0 && (
 
-        <section className="container-app relative z-10 pt-8 pb-2 sm:pt-10 sm:pb-3">
+        <section className="relative z-10 w-full pt-4 pb-1 sm:pt-5 sm:pb-2">
 
-          <div className="mb-4 flex items-end justify-between gap-3">
+          <div className="mb-4 flex items-end justify-between gap-3 px-4 sm:px-8 lg:px-12">
 
             <div>
               <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#FFE08A]">
@@ -191,7 +193,7 @@ export default function Home() {
 
           </div>
 
-          <div className="overflow-hidden rounded-2xl shadow-xl">
+          <div className="relative w-full overflow-hidden">
 
             <div
               className="flex transition-transform duration-700 ease-in-out motion-reduce:transition-none"
@@ -210,7 +212,7 @@ export default function Home() {
                   className="group relative min-w-full"
                 >
 
-                  <div className="relative flex min-h-[260px] items-center overflow-hidden px-6 py-9 sm:min-h-[300px] sm:px-14 lg:min-h-[340px] lg:px-20">
+                  <div className="relative flex min-h-[190px] items-center overflow-hidden px-6 py-7 sm:min-h-[220px] sm:px-14 sm:py-8 lg:min-h-[240px] lg:px-20">
 
                     <img
                       src={offer.image}
@@ -219,7 +221,7 @@ export default function Home() {
                       className="absolute inset-0 h-full w-full object-cover transition-transform duration-1000 group-hover:scale-105"
                     />
 
-                    <div className="absolute inset-0 bg-gradient-to-r from-[#123D2B]/95 via-[#1B5A3B]/85 to-[#9A6B2F]/75" />
+                    <div className="absolute inset-0 bg-gradient-to-r from-[#702C3A]/95 via-[#C94F45]/85 to-[#E98B45]/75" />
 
                     <div className="absolute inset-0 bg-gradient-to-t from-black/30 to-transparent" />
 
@@ -233,7 +235,7 @@ export default function Home() {
 
                       </span>
 
-                      <h3 className="mt-4 font-heading text-3xl font-extrabold leading-tight sm:text-4xl lg:text-5xl">
+                      <h3 className="mt-3 font-heading text-2xl font-extrabold leading-tight sm:text-3xl lg:text-4xl">
                         {offer.title}
                       </h3>
 
@@ -241,7 +243,7 @@ export default function Home() {
                         {offer.subtitle}
                       </p>
 
-                      <div className="mt-5 inline-flex items-center gap-2 text-xs font-bold tracking-widest text-[#FFE08A]">
+                      <div className="mt-3 inline-flex items-center gap-2 text-xs font-bold tracking-widest text-[#FFE08A]">
                         {offer.detail}
                         <ArrowRight className="h-4 w-4" />
                       </div>
@@ -301,7 +303,7 @@ export default function Home() {
 
           </div>
 
-          <p className="mt-3 text-center text-[11px] text-white/70">
+          <p className="mt-3 px-4 text-center text-[11px] text-white/70 sm:px-8 lg:px-12">
             First-order offers are subject to eligibility and applicable
             product conditions at checkout.
           </p>
