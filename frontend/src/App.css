@@ -1,0 +1,5 @@
+/* Global reset — most styling handled by Tailwind and index.css */
+.App {
+  min-height: 100vh;
+  background: var(--brand-bg);
+}

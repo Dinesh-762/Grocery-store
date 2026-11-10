@@ -1,0 +1,149 @@
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
+
+const CartContext = createContext(null);
+const STORAGE_KEY = "ambajogai_cart";
+
+function lineKey(item) {
+  return `${item.product_id}::${item.variant_label || ""}::${item.note || ""}`;
+}
+
+export function CartProvider({ children }) {
+  const [items, setItems] = useState(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  }, [items]);
+
+  const addItem = (product, qty = 1, note = null, variant_label = null) => {
+    const incomingVendorId = product.vendor_id
+      ? String(product.vendor_id)
+      : null;
+
+    if (!incomingVendorId) {
+      toast.error("Vendor information is missing. Please refresh the product page and try again.");
+      return;
+    }
+
+    const existingVendorIds = [
+      ...new Set(items.map((item) => item.vendor_id ? String(item.vendor_id) : null)),
+    ];
+
+    if (
+      items.length > 0 &&
+      (
+        existingVendorIds.length !== 1 ||
+        existingVendorIds[0] !== incomingVendorId
+      )
+    ) {
+      toast.error("Your cart contains products from another shop. Please place that order first or clear your cart.");
+      return;
+    }
+
+    setItems((prev) => {
+      const idx = prev.findIndex(
+        (p) =>
+          p.product_id === product.id &&
+          (p.variant_label || null) === (variant_label || null) &&
+          (p.note || null) === (note || null)
+      );
+
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = {
+          ...next[idx],
+          quantity: next[idx].quantity + qty,
+        };
+        return next;
+      }
+
+      return [
+        ...prev,
+        {
+          product_id: product.id,
+          name: product.name,
+          price: product.price,
+          mrp: Number(product.mrp || product.price || 0),
+          image: product.image,
+          unit: product.unit,
+          quantity: qty,
+          variant_label: variant_label || null,
+          note: note || null,
+          vendor_id: incomingVendorId,
+          vendor_name: product.vendor_name || null,
+        },
+      ];
+    });
+
+    toast.success(
+      `${product.name}${variant_label ? ` (${variant_label})` : ""} added to cart`
+    );
+  };
+
+  const removeItem = (key) => {
+    setItems((prev) => prev.filter((p) => lineKey(p) !== key));
+  };
+
+  const removeItems = (keys) => {
+    const drop = new Set(keys);
+    setItems((prev) => prev.filter((p) => !drop.has(lineKey(p))));
+  };
+
+  const setQuantity = (key, quantity) => {
+    setItems((prev) =>
+      prev
+        .map((p) => (lineKey(p) === key ? { ...p, quantity } : p))
+        .filter((p) => p.quantity > 0)
+    );
+  };
+
+  const clearCart = () => setItems([]);
+
+  const { subtotal, count } = useMemo(() => {
+    const s = items.reduce((sum, p) => sum + p.price * p.quantity, 0);
+    const c = items.reduce((sum, p) => sum + p.quantity, 0);
+    return {
+      subtotal: Math.round(s * 100) / 100,
+      count: c,
+    };
+  }, [items]);
+
+  const DELIVERY_FEE = 20;
+  const FREE_THRESHOLD = 499;
+  const deliveryFee =
+    subtotal >= FREE_THRESHOLD || subtotal === 0 ? 0 : DELIVERY_FEE;
+  const total = Math.round((subtotal + deliveryFee) * 100) / 100;
+
+  return (
+    <CartContext.Provider
+      value={{
+        items,
+        addItem,
+        removeItem,
+        removeItems,
+        setQuantity,
+        clearCart,
+        subtotal,
+        deliveryFee,
+        total,
+        count,
+        FREE_THRESHOLD,
+      }}
+    >
+      {children}
+    </CartContext.Provider>
+  );
+}
+
+export function useCart() {
+  return useContext(CartContext);
+}
+
+export { lineKey };

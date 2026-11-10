@@ -1,0 +1,123 @@
+{
+  "project_name": "Ambajogai Grocery Store",
+  "app_type": "e-commerce",
+  "theme": "light",
+  "archetype": "ORGANIC & EARTHY",
+  "typography": {
+    "heading_font": "Outfit",
+    "body_font": "Manrope",
+    "weights": {
+      "heading": "600, 700",
+      "body": "400, 500"
+    },
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl tracking-tight",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl tracking-tight",
+      "h3": "text-xl sm:text-2xl",
+      "body": "text-base leading-relaxed",
+      "small": "text-sm text-gray-500"
+    }
+  },
+  "colors": {
+    "background": "#FDFBF7",
+    "surface": "#FFFFFF",
+    "primary": "#1B4332",
+    "secondary": "#8BA888",
+    "accent": "#E07A5F",
+    "text": {
+      "primary": "#1A1A1A",
+      "secondary": "#4A4A4A"
+    },
+    "border": "#E5E5E5",
+    "success": "#2D6A4F",
+    "warning": "#F4A261",
+    "error": "#D90429"
+  },
+  "visual_enhancers": {
+    "shadows": {
+      "card": "shadow-sm hover:shadow-md transition-shadow duration-200",
+      "dropdown": "shadow-lg border border-border"
+    },
+    "border_radius": {
+      "button": "rounded-full",
+      "card": "rounded-2xl",
+      "input": "rounded-xl"
+    },
+    "surfaces": {
+      "header": "backdrop-blur-md bg-[#FDFBF7]/80 border-b border-[#E5E5E5]/50",
+      "footer": "bg-[#1B4332] text-white py-16"
+    }
+  },
+  "layouts": {
+    "container": "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8",
+    "spacing": "py-12 md:py-20",
+    "grid": {
+      "product_list": "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6",
+      "category_list": "grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4"
+    }
+  },
+  "components": {
+    "button": {
+      "primary": "bg-[#1B4332] text-white hover:bg-[#2D6A4F] px-6 py-3 rounded-full font-medium transition-colors",
+      "secondary": "bg-[#FDFBF7] text-[#1B4332] border border-[#1B4332] hover:bg-[#F3F4F6] px-6 py-3 rounded-full transition-colors",
+      "accent": "bg-[#E07A5F] text-white hover:bg-[#C96A51] px-6 py-3 rounded-full font-medium transition-colors"
+    },
+    "product_card": "bg-white p-4 rounded-2xl border border-gray-100 hover:border-[#8BA888] hover:shadow-md transition-all flex flex-col gap-3 group",
+    "cart_drawer": "fixed right-0 top-0 h-full w-full md:w-96 bg-white shadow-2xl z-50 transform transition-transform"
+  },
+  "motion": {
+    "hover": "transition-all duration-300 ease-out",
+    "page_transition": "animate-in fade-in slide-in-from-bottom-4 duration-500",
+    "list_stagger": "animate-in fade-in slide-in-from-bottom-4 duration-500"
+  },
+  "image_urls": [
+    {
+      "category": "hero",
+      "url": "https://images.unsplash.com/photo-1557844352-761f2565b576?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTF8MHwxfHNlYXJjaHw0fHxmcmVzaCUyMG9yZ2FuaWMlMjB2ZWdldGFibGVzJTIwZnJ1aXRzJTIwbWFya2V0fGVufDB8fHx8MTc4NTE2OTIwNXww&ixlib=rb-4.1.0&q=85",
+      "description": "Premium fresh organic vegetables for hero section background"
+    },
+    {
+      "category": "vegetables",
+      "url": "https://images.unsplash.com/photo-1566385101042-1a0aa0c1268c?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTF8MHwxfHNlYXJjaHwzfHxmcmVzaCUyMG9yZ2FuaWMlMjB2ZWdldGFibGVzJTIwZnJ1aXRzJTIwbWFya2V0fGVufDB8fHx8MTc4NTE2OTIwNXww&ixlib=rb-4.1.0&q=85",
+      "description": "Variety of fresh vegetables for product/category imagery"
+    },
+    {
+      "category": "staples",
+      "url": "https://images.unsplash.com/photo-1546702005-7f8e5aeab4a6?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzh8MHwxfHNlYXJjaHw0fHxpbmRpYW4lMjBzcGljZXMlMjBsZW50aWxzJTIwc3RhcGxlc3xlbnwwfHx8fDE3ODUxNjkyMDR8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Indian staples, lentils, and spices"
+    },
+    {
+      "category": "dairy",
+      "url": "https://images.unsplash.com/photo-1781332146569-9c5093bc2ca5?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjV8MHwxfHNlYXJjaHwzfHxmcmVzaCUyMGRhaXJ5JTIwbWlsayUyMGJ1dHRlciUyMHBhbiUyMHBhbmVlcnxlbnwwfHx8fDE3ODUxNjkyMDR8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Paneer and fresh dairy representations"
+    },
+    {
+      "category": "store_about",
+      "url": "https://images.unsplash.com/photo-1693505628207-dbeb3d882c92?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NzF8MHwxfHNlYXJjaHwwyfHxpbmRpYW4lMjBsb2NhbCUyMHByZW1pdW0lMjBncm9jZXJ5JTIwc3RvcmUlMjBzaG9wfGVufDB8fHx8MTc4NTE2OTIwNHww&ixlib=rb-4.1.0&q=85",
+      "description": "Shopping cart in a premium grocery store for About Us section"
+    },
+    {
+      "category": "payment_qr",
+      "url": "https://images.unsplash.com/photo-1595079676339-1534801ad6cf?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzd8MHwxfHNlYXJjaHwxfHxxciUyMGNvZGUlMjBwYXltZW50JTIwc2NhbnxlbnwwfHx8fDE3ODUxNjkyMTh8MA&ixlib=rb-4.1.0&q=85",
+      "description": "QR Code payment graphic for Checkout/UPI page"
+    },
+    {
+      "category": "whatsapp_float",
+      "url": "https://images.unsplash.com/photo-1633354931133-27ac1ee5d853?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA0MTJ8MHwxfHNlYXJjaHwxfHx3aGF0c2FwcCUyMGxvZ28lMjBpY29ufGVufDB8fHx8MTc4NTE2OTIxOHww&ixlib=rb-4.1.0&q=85",
+      "description": "WhatsApp 3D icon for floating button"
+    }
+  ],
+  "instructions_to_main_agent": [
+    "Use Lucide-react for system icons.",
+    "Do NOT center-align the main App container.",
+    "For the Hero section, use a glassmorphism overlay on the background image to ensure the search bar and offers banner are clearly visible.",
+    "Use Sonner for toast notifications (e.g., item added to cart).",
+    "Ensure all interactive elements have data-testid attributes.",
+    "No completely transparent header. Use backdrop-blur with off-white tint.",
+    "Implement the shopping cart as a slide-out drawer or a dedicated page with clear summary.",
+    "Checkout page should cleanly separate Address form, Payment Method (UPI QR/COD), and Order Summary.",
+    "Admin panel should use a high-density layout, removing extra padding for efficient data scanning (products list, orders, stock alerts).",
+    "Implement order tracking with a visual vertical or horizontal stepper timeline (Pending -> Confirmed -> Packed -> Out for Delivery -> Delivered)."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": "Do not make generic centered layouts. Create depth with z-index hierarchy and glassmorphism. Never use AI emoji characters for icons. Provide micro-animations for interactions. Ensure rich spacing (2x-3x typical). Maintain accessibility standards."
+}

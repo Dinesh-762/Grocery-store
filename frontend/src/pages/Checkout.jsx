@@ -1,0 +1,1867 @@
+import { useState, useEffect, useMemo, useRef } from "react";
+import { useNavigate, useLocation, Link } from "react-router-dom";
+import { toast } from "sonner";
+import { useCart, lineKey } from "@/context/CartContext";
+import { useAuth } from "@/context/AuthContext";
+import { api, formatINR, formatApiError } from "@/lib/api";
+import CartFlowHeader, {
+  SummaryCard,
+  FlowSection,
+} from "@/components/CartFlowHeader";
+import {
+  computeDeliveryFee,
+  setPricingSettings,
+  getPricingSettings,
+  FREE_DELIVERY_THRESHOLD,
+  DELIVERY_NEAR_KM,
+  DELIVERY_NEAR_FEE,
+  DELIVERY_PER_KM,
+} from "@/lib/deliveryFee";
+import {
+  CreditCard,
+  Truck,
+  MapPin,
+  Loader2,
+  MessageCircle,
+  Tag,
+  X,
+  Navigation,
+  ShoppingBag,
+} from "lucide-react";
+
+/*
+|--------------------------------------------------------------------------
+| Pricing Configuration
+|--------------------------------------------------------------------------
+*/
+
+const MINIMUM_ORDER_VALUE = 100;
+const FREE_ORDER_LIMIT = 249;
+const FREE_ORDER_REQUIRED_ORDERS = 13;
+
+const PLATFORM_FEE = 10;
+
+const CGST_RATE = 0.025;
+const SGST_RATE = 0.025;
+const GST_RATE = 0.05;
+
+/*
+|--------------------------------------------------------------------------
+| EXACT AMBAJOGAI STORE LOCATION
+|--------------------------------------------------------------------------
+|
+| Latitude  : 18.7271336
+| Longitude : 76.3810922
+|
+*/
+
+const STORE_LATITUDE = 18.735994;
+const STORE_LONGITUDE = 76.3891403;
+
+/*
+|--------------------------------------------------------------------------
+| Ambajogai delivery serviceability
+|--------------------------------------------------------------------------
+*/
+const DELIVERY_ZONE_NAME = "Ambajogai";
+const SERVICEABILITY_MESSAGE = "Sorry, we only deliver in Ambajogai.";
+
+/*
+|--------------------------------------------------------------------------
+| Helpers
+|--------------------------------------------------------------------------
+*/
+
+function calculateDistanceKm(lat1, lon1, lat2, lon2) {
+  const earthRadiusKm = 6371;
+
+  const latitude1 = Number(lat1);
+  const longitude1 = Number(lon1);
+  const latitude2 = Number(lat2);
+  const longitude2 = Number(lon2);
+
+  if (
+    !Number.isFinite(latitude1) ||
+    !Number.isFinite(longitude1) ||
+    !Number.isFinite(latitude2) ||
+    !Number.isFinite(longitude2)
+  ) {
+    return 0;
+  }
+
+  const dLat = ((latitude2 - latitude1) * Math.PI) / 180;
+
+  const dLon = ((longitude2 - longitude1) * Math.PI) / 180;
+
+  const lat1Rad = (latitude1 * Math.PI) / 180;
+
+  const lat2Rad = (latitude2 * Math.PI) / 180;
+
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1Rad) * Math.cos(lat2Rad) * Math.sin(dLon / 2) ** 2;
+
+  const safeA = Math.min(1, Math.max(0, a));
+
+  const c = 2 * Math.atan2(Math.sqrt(safeA), Math.sqrt(1 - safeA));
+
+  return Math.round(earthRadiusKm * c * 100) / 100;
+}
+
+/*
+|--------------------------------------------------------------------------
+| Delivery fee
+|--------------------------------------------------------------------------
+*/
+
+export default function Checkout() {
+  const { items: cartItems, clearCart, removeItems } = useCart();
+
+  const routerLocation = useLocation();
+  const selectedKeys = routerLocation.state?.selectedKeys;
+
+  const items = useMemo(() => {
+    if (!selectedKeys?.length) return cartItems;
+    const allowed = new Set(selectedKeys);
+    return cartItems.filter((it) => allowed.has(lineKey(it)));
+  }, [cartItems, selectedKeys]);
+
+  const [applyProductDiscount, setApplyProductDiscount] = useState(false);
+
+  const productDiscountSavings = useMemo(
+    () => Math.round(items.reduce((sum, it) => {
+      const mrp = Math.max(Number(it.mrp || it.price || 0), Number(it.price || 0));
+      return sum + Math.max(0, mrp - Number(it.price || 0)) * Number(it.quantity || 0);
+    }, 0) * 100) / 100,
+    [items]
+  );
+
+  const subtotal = useMemo(
+    () =>
+      Math.round(
+        items.reduce((sum, it) => {
+          const price = applyProductDiscount
+            ? Number(it.price || 0)
+            : Math.max(Number(it.mrp || it.price || 0), Number(it.price || 0));
+          return sum + price * Number(it.quantity || 0);
+        }, 0) * 100,
+      ) / 100,
+    [items, applyProductDiscount],
+  );
+
+  const { user } = useAuth();
+  const navigate = useNavigate();
+
+  /*
+  |--------------------------------------------------------------------------
+  | Store information
+  |--------------------------------------------------------------------------
+  */
+
+  const [copiedUpi, setCopiedUpi] = useState(false);
+
+  const [store, setStore] = useState({
+    upi_id: "ambajogaiupi@ybl",
+    upi_name: "Ambajogai Grocery Store",
+    whatsapp: "+918237214975",
+    upi_qr: "/assets/upi-qr.jpeg",
+  });
+
+  const copyUpiId = async () => {
+    try {
+      await navigator.clipboard.writeText(store.upi_id);
+      alert("UPI ID copied!");
+    } catch (error) {
+      console.error("failed to copy UPI ID:", error);
+    }
+  };
+
+  const [pricingSettings, setPricingSettingsState] =
+    useState(getPricingSettings());
+
+  useEffect(() => {
+    api
+      .get("/pricing/settings")
+      .then(({ data }) => {
+        setPricingSettings(data);
+        setPricingSettingsState(data);
+      })
+      .catch(() => {});
+  }, []);
+
+  const freeDeliveryThreshold = Number(
+    pricingSettings?.free_delivery_threshold ?? FREE_DELIVERY_THRESHOLD,
+  );
+  const deliveryNearKm = Number(
+    pricingSettings?.delivery_near_km ?? DELIVERY_NEAR_KM,
+  );
+  const deliveryNearFee = Number(
+    pricingSettings?.delivery_near_fee ?? DELIVERY_NEAR_FEE,
+  );
+  const deliveryPerKm = Number(
+    pricingSettings?.delivery_per_km ?? DELIVERY_PER_KM,
+  );
+
+  /*
+  |--------------------------------------------------------------------------
+  | Payment
+  |--------------------------------------------------------------------------
+  */
+
+  const [payment, setPayment] = useState("UPI");
+
+  const [submitting, setSubmitting] = useState(false);
+
+  const [placed, setPlaced] = useState(false);
+
+  /*
+  |--------------------------------------------------------------------------
+  | Coupon
+  |--------------------------------------------------------------------------
+  */
+
+  const [couponInput, setCouponInput] = useState("");
+
+  const [coupon, setCoupon] = useState(null);
+
+  const [couponBusy, setCouponBusy] = useState(false);
+
+  /*
+  |--------------------------------------------------------------------------
+  | Delivery form
+  |--------------------------------------------------------------------------
+  */
+
+  const [form, setForm] = useState({
+    full_name: user?.name || "",
+    phone: user?.phone || "",
+    line1: "",
+    landmark: "",
+    area: "",
+    pincode: "",
+    notes: "",
+  });
+
+  /*
+  |--------------------------------------------------------------------------
+  | Delivery address coordinates (from geocoding, not user GPS)
+  |--------------------------------------------------------------------------
+  */
+
+  const [location, setLocation] = useState({
+    latitude: null,
+    longitude: null,
+    accuracy: null,
+  });
+
+  const [locating, setLocating] = useState(false);
+
+  const [geocoding, setGeocoding] = useState(false);
+
+  const geocodeRequestId = useRef(0);
+
+  const [serviceabilityLoading, setServiceabilityLoading] = useState(false);
+
+  const [serviceable, setServiceable] = useState(null);
+  const [serviceabilityDistance, setServiceabilityDistance] = useState(null);
+
+  const [serviceabilityMessage, setServiceabilityMessage] = useState("");
+
+  /*
+  |--------------------------------------------------------------------------
+  | Saved Address
+  |--------------------------------------------------------------------------
+  */
+
+  const [savedAddress, setSavedAddress] = useState(null);
+  const [savedAddressLoading, setSavedAddressLoading] = useState(false);
+  const [savedAddressBusy, setSavedAddressBusy] = useState(false);
+
+  /*
+  |--------------------------------------------------------------------------
+  | Saved Address API
+  |--------------------------------------------------------------------------
+  */
+
+  const loadSavedAddress = async () => {
+    if (!user) return;
+
+    setSavedAddressLoading(true);
+
+    try {
+      const { data } = await api.get("/users/me/addresses");
+
+      const addresses = Array.isArray(data) ? data : [];
+      const address = addresses[addresses.length - 1] ?? null;
+
+      if (address) {
+        setSavedAddress(address);
+
+        setForm((current) => ({
+          ...current,
+          full_name: address.full_name ?? current.full_name,
+          phone: address.phone ?? current.phone,
+          line1: address.line1 ?? current.line1,
+          landmark: address.landmark ?? current.landmark,
+          area: address.area ?? current.area,
+          pincode: address.pincode ?? current.pincode,
+        }));
+
+        if (
+          address.latitude != null &&
+          address.longitude != null &&
+          Number.isFinite(Number(address.latitude)) &&
+          Number.isFinite(Number(address.longitude))
+        ) {
+          setLocation({
+            latitude: Number(address.latitude),
+            longitude: Number(address.longitude),
+            accuracy: null,
+          });
+        }
+      } else {
+        setSavedAddress(null);
+      }
+    } catch (err) {
+      console.error("Failed to load saved address:", err);
+      setSavedAddress(null);
+    } finally {
+      setSavedAddressLoading(false);
+    }
+  };
+
+  const saveCurrentAddress = async () => {
+    if (!user) {
+      toast.error("Please login to save your address.");
+      return;
+    }
+
+    if (
+      !form.full_name.trim() ||
+      !form.phone.trim() ||
+      !form.line1.trim() ||
+      !form.area.trim() ||
+      !form.pincode.trim()
+    ) {
+      toast.error("Please complete your delivery address first.");
+      return;
+    }
+
+    setSavedAddressBusy(true);
+
+    try {
+      const address = {
+        label: "Home",
+        full_name: form.full_name.trim(),
+        phone: form.phone.trim(),
+        line1: form.line1.trim(),
+        landmark: form.landmark.trim(),
+        area: form.area.trim(),
+        city: "Ambajogai",
+        pincode: form.pincode.trim(),
+        ...(location.latitude !== null && location.longitude !== null
+          ? {
+              latitude: Number(location.latitude),
+              longitude: Number(location.longitude),
+            }
+          : {}),
+      };
+
+      const { data } = await api.post("/users/me/addresses", address);
+
+      setSavedAddress(data ?? address);
+
+      toast.success("Address saved successfully.");
+    } catch (err) {
+      console.error("Failed to save address:", err);
+      toast.error(
+        formatApiError(err, "Unable to save address. Please try again."),
+      );
+    } finally {
+      setSavedAddressBusy(false);
+    }
+  };
+
+  const deleteSavedAddress = async () => {
+    if (!user) return;
+
+    if (!savedAddress?.id) {
+      setSavedAddress(null);
+      return;
+    }
+
+    setSavedAddressBusy(true);
+
+    try {
+      await api.delete(`/users/me/addresses/${savedAddress.id}`);
+      setSavedAddress(null);
+      toast.success("Saved address deleted.");
+    } catch (err) {
+      console.error("Failed to delete saved address:", err);
+      toast.error(formatApiError(err, "Unable to delete saved address."));
+    } finally {
+      setSavedAddressBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (user) {
+      loadSavedAddress();
+    } else {
+      setSavedAddress(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
+  /*
+  |--------------------------------------------------------------------------
+  | Load store information
+  |--------------------------------------------------------------------------
+  */
+
+  useEffect(() => {
+    api
+      .get("/store/info")
+      .then(({ data }) => {
+        setStore((current) => ({
+          ...current,
+          ...data,
+        }));
+      })
+      .catch(() => {});
+  }, []);
+
+  /*
+  |--------------------------------------------------------------------------
+  | Redirect when cart is empty
+  |--------------------------------------------------------------------------
+  */
+
+  useEffect(() => {
+    if (items.length === 0 && !submitting && !placed) {
+      navigate("/cart");
+    }
+  }, [items.length, submitting, placed, navigate]);
+
+  /*
+  |--------------------------------------------------------------------------
+  | Update form
+  |--------------------------------------------------------------------------
+  */
+
+  const update = (key) => (event) => {
+    setForm((current) => ({
+      ...current,
+      [key]: event.target.value,
+    }));
+  };
+
+  /*
+  |--------------------------------------------------------------------------
+  | Geocode delivery address when form fields change
+  |--------------------------------------------------------------------------
+  */
+
+  useEffect(() => {
+    const line1 = form.line1.trim();
+    const area = form.area.trim();
+    const pincode = form.pincode.trim();
+
+    if (!line1 || !area || !/^\d{6}$/.test(pincode)) {
+      setLocation({
+        latitude: null,
+        longitude: null,
+        accuracy: null,
+      });
+      setServiceable(null);
+      setServiceabilityMessage("");
+      return;
+    }
+
+    const requestId = ++geocodeRequestId.current;
+
+    const timer = setTimeout(async () => {
+      setGeocoding(true);
+      setServiceable(null);
+      setServiceabilityMessage("");
+
+      try {
+        const { data } = await api.get("/delivery/geocode", {
+          params: {
+            line1,
+            area,
+            pincode,
+            city: "Ambajogai",
+          },
+        });
+
+        if (requestId !== geocodeRequestId.current) {
+          return;
+        }
+
+        setLocation({
+          latitude: Number(data.latitude),
+          longitude: Number(data.longitude),
+          accuracy: null,
+        });
+      } catch (error) {
+        if (requestId !== geocodeRequestId.current) {
+          return;
+        }
+
+        setLocation({
+          latitude: null,
+          longitude: null,
+          accuracy: null,
+        });
+        setServiceable(false);
+        setServiceabilityMessage(
+          formatApiError(
+            error,
+            "Could not locate this address. Please check the details.",
+          ),
+        );
+      } finally {
+        if (requestId === geocodeRequestId.current) {
+          setGeocoding(false);
+        }
+      }
+    }, 800);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [form.line1, form.area, form.pincode]);
+
+  /*
+  |--------------------------------------------------------------------------
+  | GET CURRENT LOCATION (optional — fills address fields)
+  |--------------------------------------------------------------------------
+  */
+
+  const getCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      toast.error("Location is not supported by your browser.");
+      return;
+    }
+
+    setLocating(true);
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const latitude = Number(position.coords.latitude);
+
+        const longitude = Number(position.coords.longitude);
+
+        const accuracy = Number(position.coords.accuracy || 0);
+
+        console.log("CUSTOMER GPS:", {
+          latitude,
+          longitude,
+          accuracy,
+        });
+
+        if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+          setLocating(false);
+
+          toast.error("Invalid location received. Please try again.");
+
+          return;
+        }
+
+        if (
+          latitude < -90 ||
+          latitude > 90 ||
+          longitude < -180 ||
+          longitude > 180
+        ) {
+          setLocating(false);
+
+          toast.error("Invalid GPS coordinates received.");
+
+          return;
+        }
+
+        setLocation({
+          latitude,
+          longitude,
+          accuracy,
+        });
+
+        api
+          .get("/delivery/reverse-geocode", {
+            params: {
+              latitude,
+              longitude,
+            },
+          })
+          .then(({ data }) => {
+            setForm((current) => ({
+              ...current,
+              line1: data.line1 || current.line1,
+              area: data.area || current.area,
+              pincode: data.pincode || current.pincode,
+            }));
+          })
+          .catch(() => {
+            /*
+             * Coordinates still set; user can edit address manually.
+             */
+          });
+
+        toast.success("Location captured! Address fields updated.");
+
+        setLocating(false);
+      },
+
+      (error) => {
+        setLocating(false);
+
+        console.error("GPS ERROR:", error);
+
+        if (error.code === error.PERMISSION_DENIED) {
+          toast.error("Please allow location access.");
+        } else if (error.code === error.POSITION_UNAVAILABLE) {
+          toast.error("Unable to detect your location.");
+        } else if (error.code === error.TIMEOUT) {
+          toast.error("Location request timed out. Please try again.");
+        } else {
+          toast.error("Unable to get your location.");
+        }
+      },
+
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0,
+      },
+    );
+  };
+
+  /*
+  |--------------------------------------------------------------------------
+  | Estimated distance
+  |--------------------------------------------------------------------------
+  */
+
+  const estimatedDistance = serviceabilityDistance;
+
+  /*
+  |--------------------------------------------------------------------------
+  | Backend serviceability check
+  |--------------------------------------------------------------------------
+  |
+  | The frontend uses this for instant feedback, but the backend remains
+  | authoritative and validates the coordinates again when the order is
+  | submitted.
+  |
+  */
+
+  const checkServiceability = async (
+    latitude = location.latitude,
+    longitude = location.longitude,
+  ) => {
+    if (
+      latitude === null ||
+      longitude === null ||
+      !Number.isFinite(Number(latitude)) ||
+      !Number.isFinite(Number(longitude))
+    ) {
+      setServiceable(null);
+      setServiceabilityDistance(null);
+      setServiceabilityMessage("");
+      return null;
+    }
+
+    setServiceabilityLoading(true);
+    setServiceable(null);
+    setServiceabilityDistance(null);
+    setServiceabilityMessage("");
+
+    try {
+      const { data } = await api.get("/delivery/serviceability", {
+        params: {
+          latitude: Number(latitude),
+          longitude: Number(longitude),
+          vendor_id: items?.[0]?.vendor_id || undefined,
+          accuracy:
+            location.accuracy !== null ? Number(location.accuracy) : undefined,
+        },
+      });
+
+      setServiceabilityDistance(
+        data?.distance_km != null && Number.isFinite(Number(data.distance_km))
+          ? Number(data.distance_km)
+          : null,
+      );
+
+      const allowed = data?.serviceable === true;
+      setServiceable(allowed);
+      setServiceabilityMessage(
+        allowed
+          ? `Delivery available in ${data?.zone_name || DELIVERY_ZONE_NAME}.`
+          : data?.message || SERVICEABILITY_MESSAGE,
+      );
+
+      return data;
+    } catch (error) {
+      console.error("SERVICEABILITY CHECK ERROR:", error);
+
+      setServiceable(false);
+      setServiceabilityDistance(null);
+      setServiceabilityMessage(
+        "We could not verify your delivery location. Please try again.",
+      );
+
+      return null;
+    } finally {
+      setServiceabilityLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (location.latitude === null || location.longitude === null) {
+      setServiceable(null);
+      setServiceabilityMessage("");
+      return;
+    }
+
+    checkServiceability(location.latitude, location.longitude);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.latitude, location.longitude, items?.[0]?.vendor_id]);
+
+  /*
+  |--------------------------------------------------------------------------
+  | Coupon discount
+  |--------------------------------------------------------------------------
+  */
+
+  const discount = Number(coupon?.discount || 0);
+
+  /*
+  |--------------------------------------------------------------------------
+  | Discounted subtotal
+  |--------------------------------------------------------------------------
+  */
+
+  const discountedSubtotal = Math.max(0, Number(subtotal || 0) - discount);
+
+  /*
+  |--------------------------------------------------------------------------
+  | Estimated delivery fee
+  |--------------------------------------------------------------------------
+  */
+
+  const estimatedDeliveryFee = useMemo(() => {
+    if (estimatedDistance === null) {
+      return 0;
+    }
+
+    return computeDeliveryFee(
+      estimatedDistance,
+      Number(subtotal || 0) - Number(coupon?.discount || 0),
+    );
+  }, [estimatedDistance, subtotal, coupon]);
+
+  /*
+  |--------------------------------------------------------------------------
+  | Platform fee
+  |--------------------------------------------------------------------------
+  */
+
+  const platformFee =
+    discountedSubtotal > 0
+      ? Number(pricingSettings?.platform_fee ?? PLATFORM_FEE)
+      : 0;
+
+  /*
+  |--------------------------------------------------------------------------
+  | Taxable amount
+  |--------------------------------------------------------------------------
+  */
+
+  const taxableAmount =
+    discountedSubtotal + platformFee + Number(estimatedDeliveryFee || 0);
+
+  /*
+  |--------------------------------------------------------------------------
+  | CGST
+  |--------------------------------------------------------------------------
+  */
+
+  const cgstRate = Number(pricingSettings?.gst_rate ?? GST_RATE) / 2;
+  const sgstRate = Number(pricingSettings?.gst_rate ?? GST_RATE) / 2;
+
+  const cgst = Math.round(taxableAmount * cgstRate * 100) / 100;
+
+  /*
+  |--------------------------------------------------------------------------
+  | SGST
+  |--------------------------------------------------------------------------
+  */
+
+  const sgst = Math.round(taxableAmount * sgstRate * 100) / 100;
+
+  /*
+  |--------------------------------------------------------------------------
+  | Total GST
+  |--------------------------------------------------------------------------
+  */
+
+  const gst = Math.round((Number(cgst || 0) + Number(sgst || 0)) * 100) / 100;
+
+  /*
+  |--------------------------------------------------------------------------
+  | Final estimated total
+  |--------------------------------------------------------------------------
+  */
+
+  const estimatedTotal =
+    Math.round(
+      (discountedSubtotal +
+        platformFee +
+        Number(estimatedDeliveryFee || 0) +
+        cgst +
+        sgst +
+        gst) * 100,
+    ) / 100;
+
+  /*
+  |--------------------------------------------------------------------------
+  | Validate form
+  |--------------------------------------------------------------------------
+  */
+
+  const validate = () => {
+    const requiredFields = ["full_name", "phone", "line1", "area", "pincode"];
+
+    for (const key of requiredFields) {
+      if (!String(form[key] || "").trim()) {
+        return `Please fill your ${key.replace("_", " ")}`;
+      }
+    }
+
+    const cleanPhone = form.phone.replace(/\s/g, "");
+
+    if (!/^\+?\d{10,15}$/.test(cleanPhone)) {
+      return "Enter a valid phone number";
+    }
+
+    /*
+     * -------------------------------------------------------
+     * MINIMUM ORDER VALUE
+     * -------------------------------------------------------
+     *
+     * Customer must have at least ₹100
+     * worth of products in cart.
+     */
+
+    if (Number(subtotal || 0) < MINIMUM_ORDER_VALUE) {
+      return `Minimum order value is ₹${MINIMUM_ORDER_VALUE}. Please add more items to your cart.`;
+    }
+
+    if (!/^\d{6}$/.test(form.pincode)) {
+      return "Enter a valid 6-digit pincode";
+    }
+
+    if (location.latitude === null || location.longitude === null) {
+      if (geocoding) {
+        return "Please wait while we verify your delivery address.";
+      }
+
+      return "Please enter a complete delivery address (address line, area, and pincode).";
+    }
+
+    if (serviceable === false) {
+      return serviceabilityMessage || SERVICEABILITY_MESSAGE;
+    }
+
+    if (serviceable !== true) {
+      return "Please wait while we verify that your delivery address is within Ambajogai.";
+    }
+
+    if (items.length === 0) {
+      return "Your cart is empty.";
+    }
+
+    return null;
+  };
+
+  /*
+  |--------------------------------------------------------------------------
+  | Place order
+  |--------------------------------------------------------------------------
+  */
+
+  const submit = async () => {
+    const error = validate();
+
+    if (error) {
+      toast.error(error);
+      return;
+    }
+
+    // Fresh backend check immediately before creating the order.
+    const serviceability = await checkServiceability(
+      location.latitude,
+      location.longitude,
+    );
+
+    if (!serviceability?.serviceable) {
+      toast.error(serviceability?.message || SERVICEABILITY_MESSAGE);
+      return;
+    }
+
+    setSubmitting(true);
+
+    try {
+      const orderPayload = {
+        items: items.map((item) => ({
+          product_id: item.product_id,
+
+          name: item.name,
+
+          price: Number(item.price || 0),
+
+          quantity: Number(item.quantity || 1),
+
+          image: item.image,
+
+          unit: item.unit || null,
+
+          variant_label: item.variant_label || null,
+
+          note: item.note || null,
+
+          vendor_id: item.vendor_id || null,
+
+          vendor_name: item.vendor_name || null,
+        })),
+
+        address: {
+          full_name: form.full_name,
+
+          phone: form.phone,
+
+          line1: form.line1,
+
+          landmark: form.landmark,
+
+          area: form.area,
+
+          city: "Ambajogai",
+
+          pincode: form.pincode,
+
+          latitude: Number(location.latitude),
+
+          longitude: Number(location.longitude),
+        },
+
+        latitude: Number(location.latitude),
+
+        longitude: Number(location.longitude),
+
+        payment_method: payment,
+
+        notes: form.notes,
+
+        coupon_code: coupon?.code || null,
+        apply_product_discount: applyProductDiscount,
+      };
+
+      /*
+       * Send order.
+       */
+
+      const { data } = await api.post("/orders", orderPayload);
+
+      setPlaced(true);
+
+      /*
+       * Backend is authoritative.
+       */
+
+      const finalSubtotal = Number(data.subtotal ?? subtotal);
+
+      const finalDeliveryFee = Number(
+        data.delivery_fee ?? estimatedDeliveryFee,
+      );
+
+      const finalPlatformFee = Number(data.platform_fee ?? platformFee);
+
+      const finalCgst = Number(data.cgst ?? cgst);
+
+      const finalSgst = Number(data.sgst ?? sgst);
+
+      const finalGst = Number(data.gst ?? finalCgst + finalSgst);
+
+      const finalDiscount = Number(data.discount ?? discount);
+
+      const finalTotal = Number(data.total ?? estimatedTotal);
+
+      /*
+       * Clear cart after successful order.
+       */
+
+      if (selectedKeys?.length) {
+        removeItems(selectedKeys);
+      } else {
+        clearCart();
+      }
+
+      toast.success("Order placed successfully!");
+
+      /*
+       * WhatsApp store notification.
+       */
+
+      const storeNumber = String(store.whatsapp || "").replace(/[^\d]/g, "");
+
+      const itemsBlock = (data.items || items)
+        .map((item) => {
+          const variant = item.variant_label
+            ? ` (${item.variant_label})`
+            : item.unit
+              ? ` (${item.unit})`
+              : "";
+
+          const itemTotal =
+            Number(item.price || 0) * Number(item.quantity || 0);
+
+          return `- ${item.name}${variant} x ${item.quantity} @ ₹${Number(
+            item.price || 0,
+          ).toFixed(2)} = ₹${itemTotal.toFixed(2)}`;
+        })
+        .join("\n");
+
+      const orderId = data.id ? String(data.id).slice(-6).toUpperCase() : "NEW";
+
+      const storeMessage = encodeURIComponent(
+        `NEW ORDER #${orderId}
+
+${itemsBlock}
+
+Subtotal: ₹${finalSubtotal.toFixed(2)}
+Discount: -₹${finalDiscount.toFixed(2)}
+Platform Fee: ₹${finalPlatformFee.toFixed(2)}
+Delivery: ₹${finalDeliveryFee.toFixed(2)}
+CGST (2.5%): ₹${finalCgst.toFixed(2)}
+SGST (2.5%): ₹${finalSgst.toFixed(2)}
+GST (5% Total): ₹${finalGst.toFixed(2)}
+Total: ₹${finalTotal.toFixed(2)}
+
+Payment: ${data.payment_method ?? payment}
+
+Customer: ${data.address?.full_name ?? form.full_name}
+
+Phone: ${data.address?.phone ?? form.phone}
+
+Address: ${data.address?.line1 ?? form.line1}${
+          (data.address?.landmark ?? form.landmark)
+            ? `, ${data.address?.landmark ?? form.landmark}`
+            : ""
+        }, ${data.address?.area ?? form.area}, ${
+          data.address?.pincode ?? form.pincode
+        }
+
+Customer Location:
+https://www.google.com/maps?q=${location.latitude},${location.longitude}
+
+Distance from Vendor:
+${data.distance_km ?? estimatedDistance ?? 0} km`,
+      );
+
+      if (storeNumber) {
+        window.open(
+          `https://wa.me/${storeNumber}?text=${storeMessage}`,
+          "_blank",
+        );
+      }
+
+      /*
+       * Customer WhatsApp notification.
+       */
+
+      try {
+        const { data: notification } = await api.post(
+          "/notify/order-whatsapp",
+          {
+            order_id: data.id,
+            event: "placed",
+          },
+        );
+
+        if (notification?.url) {
+          setTimeout(() => {
+            window.open(notification.url, "_blank");
+          }, 350);
+        }
+      } catch {
+        /*
+         * Non-blocking.
+         */
+      }
+
+      navigate(`/orders/${data.id}`);
+    } catch (error) {
+      toast.error(formatApiError(error));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  /*
+  |--------------------------------------------------------------------------
+  | Apply coupon
+  |--------------------------------------------------------------------------
+  */
+
+  const applyCoupon = async () => {
+    const code = couponInput.trim().toUpperCase();
+
+    if (!code) {
+      toast.error("Enter a coupon code.");
+      return;
+    }
+
+    setCouponBusy(true);
+
+    try {
+      const { data } = await api.get(
+        `/coupons/${encodeURIComponent(code)}/validate?subtotal=${subtotal}`,
+      );
+
+      setCoupon(data);
+
+      toast.success(
+        `Coupon ${data.code} applied — saved ${formatINR(data.discount)}`,
+      );
+    } catch (error) {
+      setCoupon(null);
+
+      toast.error(formatApiError(error));
+    } finally {
+      setCouponBusy(false);
+    }
+  };
+
+  /*
+  |--------------------------------------------------------------------------
+  | Remove coupon
+  |--------------------------------------------------------------------------
+  */
+
+  const removeCoupon = () => {
+    setCoupon(null);
+    setCouponInput("");
+  };
+
+  /*
+  |--------------------------------------------------------------------------
+  | UPI
+  |--------------------------------------------------------------------------
+  */
+
+  const upiUrl = `upi://pay?pa=${encodeURIComponent(
+    store.upi_id || "",
+  )}&pn=${encodeURIComponent(store.upi_name || "")}&am=${estimatedTotal.toFixed(
+    2,
+  )}&cu=INR&tn=${encodeURIComponent("Ambajogai Grocery Order")}`;
+
+  const qrSrc =
+    store.upi_qr ||
+    `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(
+      upiUrl,
+    )}`;
+
+  /*
+  |--------------------------------------------------------------------------
+  | UI
+  |--------------------------------------------------------------------------
+  */
+
+  return (
+    <div className="container-app py-8" data-testid="checkout-page">
+      <CartFlowHeader
+        active="checkout"
+        backTo="/cart"
+        backLabel="Back to cart"
+      />
+
+      <div className="mb-6">
+        <h1 className="font-heading text-2xl font-bold text-[#1B4332] sm:text-3xl">
+          Complete your order
+        </h1>
+        <p className="mt-1.5 text-sm text-[#4A4A4A]">
+          Enter delivery details, apply a coupon if you have one, and choose
+          payment.
+        </p>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-[1fr_400px] lg:gap-8">
+        {/* LEFT */}
+
+        <div className="space-y-6">
+          {/* DELIVERY ADDRESS */}
+
+          <FlowSection step={1} title="Delivery address" icon={MapPin}>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field
+                label="Full name"
+                value={form.full_name}
+                onChange={update("full_name")}
+                testid="addr-name"
+              />
+
+              <Field
+                label="Phone"
+                value={form.phone}
+                onChange={update("phone")}
+                testid="addr-phone"
+                placeholder="+91..."
+              />
+
+              <div className="sm:col-span-2">
+                <Field
+                  label="Address line"
+                  value={form.line1}
+                  onChange={update("line1")}
+                  testid="addr-line"
+                  placeholder="House / flat no, street"
+                />
+              </div>
+
+              <Field
+                label="Landmark (optional)"
+                value={form.landmark}
+                onChange={update("landmark")}
+                testid="addr-landmark"
+              />
+
+              <Field
+                label="Area / Locality"
+                value={form.area}
+                onChange={update("area")}
+                testid="addr-area"
+              />
+
+              <Field
+                label="Pincode"
+                value={form.pincode}
+                onChange={update("pincode")}
+                testid="addr-pincode"
+                placeholder="6-digit pincode"
+              />
+
+              <div className="sm:col-span-2">
+                <Field
+                  label="Order notes (optional)"
+                  value={form.notes}
+                  onChange={update("notes")}
+                  testid="order-notes"
+                  placeholder="Any special instructions?"
+                />
+              </div>
+            </div>
+
+            {/* SAVED ADDRESS */}
+
+            <div className="mt-5 rounded-xl border border-[#1B4332]/20 bg-[#1B4332]/5 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="font-semibold text-[#1B4332]">
+                    Saved address
+                  </div>
+
+                  <p className="mt-1 text-xs text-[#4A4A4A]">
+                    Save this address to use it automatically on your next
+                    checkout.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={saveCurrentAddress}
+                    disabled={savedAddressBusy || savedAddressLoading}
+                    className="rounded-full bg-[#1B4332] px-4 py-2 text-xs font-semibold text-white hover:bg-[#2D6A4F] disabled:opacity-50"
+                  >
+                    {savedAddressBusy ? "Saving..." : "Save address"}
+                  </button>
+
+                  {savedAddress && (
+                    <button
+                      type="button"
+                      onClick={deleteSavedAddress}
+                      disabled={savedAddressBusy}
+                      className="rounded-full border border-red-200 px-4 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
+                    >
+                      Delete saved
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {savedAddressLoading && (
+                <div className="mt-3 text-xs text-[#4A4A4A]">
+                  Loading saved address...
+                </div>
+              )}
+
+              {savedAddress && !savedAddressLoading && (
+                <div className="mt-3 rounded-lg bg-white/70 p-3 text-xs text-[#4A4A4A]">
+                  <div className="font-semibold text-[#1B4332]">
+                    Saved address loaded
+                  </div>
+
+                  <div className="mt-1">
+                    {savedAddress.line1}
+                    {savedAddress.area ? `, ${savedAddress.area}` : ""}
+                    {savedAddress.pincode ? ` - ${savedAddress.pincode}` : ""}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* LOCATION */}
+
+            <div className="mt-5 rounded-xl border border-[#8BA888]/30 bg-[#8BA888]/10 p-4">
+              <div className="flex items-start gap-3">
+                <Navigation className="mt-0.5 h-5 w-5 text-[#1B4332]" />
+
+                <div className="flex-1">
+                  <div className="font-semibold text-[#1B4332]">
+                    Quick fill (optional)
+                  </div>
+
+                  <p className="mt-1 text-xs text-[#4A4A4A]">
+                    Use your current location to auto-fill the address above, or
+                    type any delivery address in Ambajogai (home, work, or a
+                    friend&apos;s place).
+                  </p>
+
+                  {geocoding && (
+                    <div className="mt-2 text-xs font-medium text-[#1B4332]">
+                      Looking up delivery address...
+                    </div>
+                  )}
+
+                  {!geocoding &&
+                    location.latitude !== null &&
+                    location.longitude !== null && (
+                      <div className="mt-2 text-xs font-medium text-[#1B4332]">
+                        Delivery address located ✓
+                      </div>
+                    )}
+
+                  {estimatedDistance !== null && (
+                    <>
+                      <div className="mt-2 text-xs text-[#4A4A4A]">
+                        Estimated distance:{" "}
+                        <strong>{estimatedDistance.toFixed(2)} km</strong>
+                      </div>
+
+                      {location.accuracy !== null && (
+                        <div className="mt-1 text-xs text-[#4A4A4A]">
+                          GPS accuracy: {Math.round(location.accuracy)} m
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={getCurrentLocation}
+                  disabled={locating}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-[#1B4332] px-4 py-2 text-xs font-semibold text-white hover:bg-[#2D6A4F] disabled:opacity-50"
+                  data-testid="get-location-btn"
+                >
+                  {locating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Navigation className="h-3.5 w-3.5" />
+                  )}
+
+                  {locating ? "Locating..." : "Use my location"}
+                </button>
+              </div>
+            </div>
+          </FlowSection>
+
+          {/* COUPON */}
+
+          <FlowSection step={2} title="Coupon code" icon={Tag}>
+            <label className="mb-4 flex cursor-pointer items-start gap-3 rounded-xl border border-[#8BA888]/40 bg-[#8BA888]/10 p-4">
+              <input
+                type="checkbox"
+                checked={applyProductDiscount}
+                onChange={(e) => setApplyProductDiscount(e.target.checked)}
+                className="mt-1 h-4 w-4 accent-[#1B4332]"
+                data-testid="apply-product-discount"
+              />
+              <span className="flex-1">
+                <span className="block text-sm font-semibold text-[#1B4332]">
+                  Apply Product Discounts
+                </span>
+                <span className="mt-1 block text-xs text-gray-600">
+                  {applyProductDiscount
+                    ? `Product discount applied ? saving ${formatINR(productDiscountSavings)}`
+                    : "Optional. Tick this to apply available product discounts."}
+                </span>
+              </span>
+            </label>
+            {!coupon ? (
+              <div className="flex gap-2">
+                <input
+                  value={couponInput}
+                  onChange={(e) => setCouponInput(e.target.value.toUpperCase())}
+                  placeholder="Enter coupon code"
+                  className="input-base flex-1"
+                  data-testid="coupon-input"
+                />
+
+                <button
+                  type="button"
+                  onClick={applyCoupon}
+                  disabled={couponBusy}
+                  className="rounded-xl bg-[#1B4332] px-5 py-2 text-sm font-semibold text-white hover:bg-[#2D6A4F] disabled:opacity-50"
+                  data-testid="apply-coupon"
+                >
+                  {couponBusy ? "Checking..." : "Apply"}
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between rounded-xl bg-[#8BA888]/10 p-4">
+                <div>
+                  <div className="font-semibold text-[#1B4332]">
+                    {coupon.code}
+                  </div>
+
+                  <div className="text-xs text-[#4A4A4A]">
+                    You save {formatINR(discount)}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={removeCoupon}
+                  className="grid h-8 w-8 place-items-center rounded-full hover:bg-white"
+                  aria-label="Remove coupon"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+          </FlowSection>
+
+          {/* PAYMENT */}
+
+          <FlowSection step={3} title="Payment" icon={CreditCard}>
+            <div
+              className="mb-5 overflow-hidden rounded-xl border border-[#E5E5E5] bg-gradient-to-br from-[#FAFAFA] to-white"
+              data-testid="checkout-cart-short"
+            >
+              <div className="flex items-center justify-between gap-2 border-b border-[#E5E5E5]/80 px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <ShoppingBag className="h-4 w-4 text-[#1B4332]" />
+                  <h3 className="text-sm font-semibold text-[#1B4332]">
+                    Your cart
+                  </h3>
+                  <span className="rounded-full bg-[#1B4332]/10 px-2 py-0.5 text-[10px] font-bold text-[#1B4332]">
+                    {items.reduce((n, it) => n + it.quantity, 0)} items
+                  </span>
+                </div>
+                <Link
+                  to="/cart"
+                  className="text-xs font-semibold text-[#E07A5F] hover:underline"
+                >
+                  Edit cart
+                </Link>
+              </div>
+
+              <ul className="max-h-44 space-y-2 overflow-auto p-3 sm:p-4">
+                {items.map((item) => (
+                  <li
+                    key={`pay-${item.product_id}-${item.variant_label || ""}-${item.note || ""}`}
+                    className="flex items-center gap-3 rounded-lg bg-white p-2 ring-1 ring-black/5"
+                  >
+                    <img
+                      src={item.image}
+                      alt=""
+                      className="h-11 w-11 shrink-0 rounded-lg object-cover"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-[#1B4332]">
+                        {item.name}
+                      </p>
+                      <p className="text-xs text-[#4A4A4A]">
+                        {item.variant_label ? `${item.variant_label} · ` : ""}
+                        Qty {item.quantity} ×{" "}
+                        {formatINR(Number(item.price || 0))}
+                      </p>
+                    </div>
+                    <span className="shrink-0 text-sm font-bold text-[#1B4332]">
+                      {formatINR(
+                        Number(item.price || 0) * Number(item.quantity || 0),
+                      )}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+
+              <div className="flex items-center justify-between border-t border-dashed border-[#E5E5E5] bg-[#1B4332]/5 px-4 py-3 text-sm">
+                <span className="font-medium text-[#4A4A4A]">
+                  Cart subtotal
+                </span>
+                <span className="font-heading text-lg font-bold text-[#1B4332]">
+                  {formatINR(subtotal)}
+                </span>
+              </div>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <PayOption
+                selected={payment === "UPI"}
+                onClick={() => setPayment("UPI")}
+                title="UPI"
+                sub="Google Pay, PhonePe, Paytm & other UPI apps"
+                testid="payment-upi"
+              />
+
+              <PayOption
+                selected={payment === "COD"}
+                onClick={() => setPayment("COD")}
+                title="Cash on Delivery"
+                sub="Pay when your order arrives"
+                testid="payment-cod"
+              />
+            </div>
+
+            {payment === "UPI" && (
+              <div className="mt-6 rounded-xl bg-[#8BA888]/10 p-5 text-center">
+                <img
+                  src={qrSrc}
+                  alt="UPI QR"
+                  className="mx-auto h-52 w-52 rounded-xl bg-white p-2"
+                />
+
+                <div className="mt-1 flex items-center justify-center gap-2 text-xs text-[#4A4A4A]">
+                  <span>{store.upi_id}</span>
+
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(store.upi_id || "");
+                        setCopiedUpi(true);
+                        setTimeout(() => setCopiedUpi(false), 2000);
+                      } catch (error) {
+                        console.error("Failed to copy UPI ID:", error);
+                      }
+                    }}
+                    className="rounded-md border border-[#1B4332] px-2 py-1 text-[11px] font-semibold text-[#1B4332] transition hover:bg-[#1B4332] hover:text-white"
+                  >
+                    {copiedUpi ? "Copied ✓" : "Copy"}
+                  </button>
+                </div>
+                <div className="mt-1 text-xs text-[#4A4A4A]">
+                  {store.upi_id}
+                </div>
+
+                <div className="mt-3 text-xs text-[#4A4A4A]">
+                  Pay{" "}
+                  <span className="font-mono font-bold text-[#1B4332]">
+                    {formatINR(estimatedTotal)}
+                  </span>{" "}
+                  using any UPI app.
+                </div>
+
+                <div className="mt-2 text-xs text-[#4A4A4A]">
+                  After payment, place the order. We&apos;ll confirm it via
+                  WhatsApp.
+                </div>
+              </div>
+            )}
+
+            {payment === "COD" && (
+              <div className="mt-6 flex items-start gap-2 rounded-xl bg-[#8BA888]/10 p-4 text-sm text-[#1B4332]">
+                <Truck className="mt-0.5 h-4 w-4" />
+
+                <span>
+                  Please keep exact change ready. Cash on Delivery is available
+                  across Ambajogai.
+                </span>
+              </div>
+            )}
+          </FlowSection>
+        </div>
+
+        {/* RIGHT */}
+
+        <SummaryCard
+          title="Order summary"
+          icon={ShoppingBag}
+          testId="checkout-summary"
+        >
+          <div className="max-h-56 space-y-2.5 overflow-auto pr-1 -mt-2">
+            {items.map((item) => {
+              const itemPrice = Number(item.price || 0);
+              const itemMrp = Math.max(Number(item.mrp || itemPrice), itemPrice);
+              const itemDiscount = applyProductDiscount
+                ? Math.max(0, itemMrp - itemPrice)
+                : 0;
+              const displayedPrice = applyProductDiscount ? itemPrice : itemMrp;
+
+              return (
+                <div
+                  key={`${item.product_id}-${item.variant_label || ""}`}
+                  className="flex items-center gap-3 rounded-xl bg-[#FAFAFA] p-2.5 ring-1 ring-black/5"
+                >
+                  <img
+                    src={item.image}
+                    alt={item.name}
+                    className="h-12 w-12 rounded-lg object-cover"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-[#222]">
+                      {item.name}
+                    </p>
+                    {item.variant_label && (
+                      <p className="text-xs text-gray-500">{item.variant_label}</p>
+                    )}
+                    <p className="text-xs text-gray-500">
+                      Qty: {item.quantity}
+                    </p>
+                    {itemDiscount > 0 && (
+                      <p className="mt-1 text-xs font-medium text-green-700">
+                        MRP {formatINR(itemMrp)} ? Save {formatINR(itemDiscount)} per item
+                      </p>
+                    )}
+                    {itemDiscount > 0 && (
+                      <p className="text-xs text-gray-500">
+                        {formatINR(itemPrice)} ? {item.quantity}
+                      </p>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    {itemDiscount > 0 && (
+                      <p className="text-xs text-gray-400 line-through">
+                        {formatINR(itemMrp * Number(item.quantity || 0))}
+                      </p>
+                    )}
+                    <p className="text-sm font-bold text-[#1B4332]">
+                      {formatINR(displayedPrice * Number(item.quantity || 0))}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 space-y-2 border-t border-dashed pt-4 text-sm">
+            <Row label="Subtotal" value={formatINR(subtotal)} />
+
+            {discount > 0 && (
+              <Row
+                label={`Coupon (${coupon.code})`}
+                value={`- ${formatINR(discount)}`}
+              />
+            )}
+
+            <Row label="Platform fee" value={formatINR(platformFee)} />
+
+            <Row
+              label="Delivery"
+              value={
+                location.latitude === null || location.longitude === null
+                  ? "Location required"
+                  : formatINR(estimatedDeliveryFee)
+              }
+            />
+
+            {estimatedDistance !== null && (
+              <div className="rounded-lg bg-[#8BA888]/10 px-3 py-2 text-xs text-[#1B4332]">
+                {Number(discountedSubtotal) >= freeDeliveryThreshold
+                  ? "FREE delivery"
+                  : estimatedDistance <= deliveryNearKm
+                    ? `₹${deliveryNearFee} up to ${deliveryNearKm} km`
+                    : `₹${deliveryNearFee} + ₹${deliveryPerKm}/km beyond ${deliveryNearKm} km`}
+                {" · "}
+                {estimatedDistance.toFixed(2)} km
+              </div>
+            )}
+
+            <Row label="CGST (2.5%)" value={formatINR(cgst)} />
+
+            <Row label="SGST (2.5%)" value={formatINR(sgst)} />
+
+            <Row label="GST (5% total)" value={formatINR(gst)} />
+          </div>
+
+          <div className="mt-3 flex items-center justify-between border-t border-dashed pt-3">
+            <span className="text-sm font-semibold">Total</span>
+
+            <span
+              className="font-heading text-2xl font-bold text-[#1B4332]"
+              data-testid="checkout-total"
+            >
+              {formatINR(estimatedTotal)}
+            </span>
+          </div>
+
+          {/* DELIVERY SERVICEABILITY MESSAGE */}
+
+          {serviceabilityLoading && (
+            <div className="mt-4 flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 p-3 text-center text-sm text-blue-700">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Verifying delivery availability...
+            </div>
+          )}
+
+          {!serviceabilityLoading && serviceable === false && (
+            <div
+              className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-center text-sm text-red-700"
+              data-testid="outside-zone-message"
+            >
+              <strong>{serviceabilityMessage || SERVICEABILITY_MESSAGE}</strong>
+              <div className="mt-1 text-xs text-red-600">
+                Please enter a delivery address within Ambajogai (you can order
+                for home, work, or someone else).
+              </div>
+            </div>
+          )}
+
+          {!serviceabilityLoading && serviceable === true && (
+            <div
+              className="mt-4 rounded-xl border border-green-200 bg-green-50 p-3 text-center text-sm text-green-700"
+              data-testid="serviceable-zone-message"
+            >
+              {serviceabilityMessage ||
+                `Delivery available in ${DELIVERY_ZONE_NAME}.`}
+            </div>
+          )}
+
+          {/* MINIMUM ORDER MESSAGE */}
+
+          {Number(subtotal || 0) < MINIMUM_ORDER_VALUE && (
+            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-center text-sm text-red-700">
+              Minimum order value is <strong>₹{MINIMUM_ORDER_VALUE}</strong>.
+              Please add{" "}
+              <strong>
+                ₹{(MINIMUM_ORDER_VALUE - Number(subtotal || 0)).toFixed(2)}
+              </strong>{" "}
+              more to place your order.
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={submit}
+            disabled={
+              submitting ||
+              geocoding ||
+              serviceabilityLoading ||
+              serviceable !== true ||
+              location.latitude === null ||
+              location.longitude === null ||
+              Number(subtotal || 0) < MINIMUM_ORDER_VALUE
+            }
+            className="btn-primary mt-6 w-full disabled:cursor-not-allowed disabled:opacity-50"
+            data-testid="place-order-btn"
+          >
+            {submitting ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <MessageCircle className="h-4 w-4" />
+            )}
+
+            {submitting
+              ? "Placing order..."
+              : geocoding
+                ? "Locating address..."
+                : serviceabilityLoading
+                  ? "Verifying delivery area..."
+                  : serviceable === false
+                    ? "Outside delivery area"
+                    : serviceable !== true
+                      ? "Enter delivery address"
+                      : Number(subtotal || 0) < MINIMUM_ORDER_VALUE
+                        ? `Minimum ₹${MINIMUM_ORDER_VALUE} required`
+                        : "Place order"}
+          </button>
+
+          <p className="mt-3 text-center text-xs text-[#4A4A4A]">
+            We&apos;ll send order confirmation via WhatsApp.
+          </p>
+        </SummaryCard>
+      </div>
+    </div>
+  );
+}
+
+/*
+|--------------------------------------------------------------------------
+| FIELD
+|--------------------------------------------------------------------------
+*/
+
+function Field({ label, value, onChange, testid, placeholder }) {
+  return (
+    <div>
+      <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">
+        {label}
+      </label>
+
+      <input
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        className="input-base"
+        data-testid={testid}
+      />
+    </div>
+  );
+}
+
+/*
+|--------------------------------------------------------------------------
+| ROW
+|--------------------------------------------------------------------------
+*/
+
+function Row({ label, value }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-[#4A4A4A]">{label}</span>
+
+      <span className="font-semibold">{value}</span>
+    </div>
+  );
+}
+
+/*
+|--------------------------------------------------------------------------
+| PAYMENT OPTION
+|--------------------------------------------------------------------------
+*/
+
+function PayOption({ selected, onClick, title, sub, testid }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-xl border p-4 text-left transition-all ${
+        selected
+          ? "border-[#1B4332] bg-[#1B4332]/5 ring-1 ring-[#1B4332]"
+          : "border-[#E5E5E5] hover:border-[#8BA888]"
+      }`}
+      data-testid={testid}
+    >
+      <div className="font-semibold text-[#1A1A1A]">{title}</div>
+
+      <div className="mt-1 text-xs text-[#4A4A4A]">{sub}</div>
+    </button>
+  );
+}

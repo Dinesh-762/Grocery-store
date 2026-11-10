@@ -1,0 +1,248 @@
+import { useEffect, useState, useRef } from "react";
+import { useParams, Link } from "react-router-dom";
+import { api, formatINR } from "@/lib/api";
+import { Loader2, CheckCircle2, Circle, MapPin, Phone, MessageCircle, Package, Truck } from "lucide-react";
+
+const STATUSES = ["Pending", "Accepted", "Preparing", "Packed", "Ready", "Out For Delivery", "Delivered"];
+const TERMINAL_STATUSES = new Set(["Delivered", "Cancelled"]);
+const POLL_MS = 20000;
+
+export default function OrderDetail() {
+  const { id } = useParams();
+  const [order, setOrder] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [store, setStore] = useState({ whatsapp: "+918237214975" });
+  const statusRef = useRef(null);
+
+  useEffect(() => {
+    api.get("/store/info").then(({ data }) => setStore(data)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let pollTimer = null;
+
+    const fetchOrder = async (showLoader = false) => {
+      if (showLoader) setLoading(true);
+
+      try {
+        const { data } = await api.get(`/orders/${id}`);
+        if (cancelled) return;
+        setOrder(data);
+        statusRef.current = data.status;
+      } catch {
+        if (!cancelled && showLoader) {
+          setOrder(null);
+        }
+      } finally {
+        if (!cancelled && showLoader) {
+          setLoading(false);
+        }
+      }
+    };
+
+    const schedulePoll = () => {
+      pollTimer = setTimeout(async () => {
+        if (cancelled) return;
+
+        if (TERMINAL_STATUSES.has(statusRef.current)) {
+          return;
+        }
+
+        await fetchOrder(false);
+
+        if (!cancelled && !TERMINAL_STATUSES.has(statusRef.current)) {
+          schedulePoll();
+        }
+      }, POLL_MS);
+    };
+
+    fetchOrder(true).then(() => {
+      if (!cancelled && !TERMINAL_STATUSES.has(statusRef.current)) {
+        schedulePoll();
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      if (pollTimer) clearTimeout(pollTimer);
+    };
+  }, [id]);
+
+  if (loading) {
+    return (
+      <div className="container-app flex min-h-[50vh] items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-[#1B4332]" />
+      </div>
+    );
+  }
+
+  if (!order) {
+    return (
+      <div className="container-app py-16 text-center">
+        <p className="font-semibold">Order not found.</p>
+        <Link to="/orders" className="mt-4 inline-block text-[#1B4332] underline">Back to orders</Link>
+      </div>
+    );
+  }
+
+  const isCancelled = order.status === "Cancelled";
+  const currentIdx = STATUSES.indexOf(order.status);
+  const num = store.whatsapp.replace(/[^\d]/g, "");
+  const helpMsg = encodeURIComponent(`Hi, I need help with my order #${order.id.slice(-6).toUpperCase()}.`);
+
+  return (
+    <div className="container-app py-8" data-testid="order-detail-page">
+      <Link to="/orders" className="text-sm text-[#4A4A4A] hover:text-[#1B4332]">
+        ← All orders
+      </Link>
+
+      <div className="mt-4 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="font-heading text-2xl font-bold sm:text-3xl">Order #{order.id.slice(-6).toUpperCase()}</h1>
+          <p className="mt-1 text-sm text-[#4A4A4A]">
+            Placed on {new Date(order.created_at).toLocaleString("en-IN", { dateStyle: "long", timeStyle: "short" })}
+          </p>
+        </div>
+        <a
+          href={`https://wa.me/${num}?text=${helpMsg}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="btn-secondary"
+          data-testid="whatsapp-help"
+        >
+          <MessageCircle className="h-4 w-4" /> Chat on WhatsApp
+        </a>
+      </div>
+
+      {/* Tracker */}
+      <section className="card-base mt-8 p-6" data-testid="order-tracker">
+        <div className="flex items-center justify-between">
+          <h2 className="font-heading text-lg font-semibold">Order status</h2>
+          {!isCancelled && order.status !== "Delivered" && (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-semibold text-green-700" data-testid="live-indicator">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-green-500" />
+              </span>
+              Live · refreshes every 20s
+            </span>
+          )}
+        </div>
+        {isCancelled ? (
+          <div className="mt-6 rounded-xl bg-red-50 p-6 text-center">
+            <div className="font-heading text-lg font-semibold text-red-700">This order was cancelled</div>
+          </div>
+        ) : (
+          <ol className="mt-6 flex flex-col gap-6 md:flex-row md:items-start md:justify-between">
+            {STATUSES.map((s, i) => {
+              const done = i <= currentIdx;
+              const active = i === currentIdx;
+              return (
+                <li key={s} className="relative flex flex-1 items-start gap-3 md:flex-col md:items-center md:gap-2 md:text-center">
+  <div className={`grid h-9 w-9 flex-shrink-0 place-items-center rounded-full ${done ? "bg-[#1B4332] text-white" : "bg-gray-100 text-gray-400"}`}>
+    {done ? <CheckCircle2 className="h-5 w-5" /> : <Circle className="h-5 w-5" />}
+  </div>
+  <div>
+    <div className={`text-sm font-semibold ${active ? "text-[#E07A5F]" : done ? "text-[#1B4332]" : "text-gray-400"}`}>{s}</div>
+    {Array.isArray(order?.status_history) && order.status_history.find((h) => h.status === s) && (
+      <div className="text-xs text-[#4A4A4A]">
+        {new Date(order.status_history.find((h) => h.status === s)?.at).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "short" })}
+      </div>
+    )}
+  </div>
+  {i < STATUSES.length - 1 && (
+    <div className={`hidden h-0.5 flex-1 md:absolute md:top-4 md:left-[calc(50%+18px)] md:right-[calc(-50%+18px)] md:block ${i < currentIdx ? "bg-[#1B4332]" : "bg-gray-200"}`} />
+  )}
+</li>
+              );
+            })}
+          </ol>
+        )}
+      </section>
+
+      <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_360px]">
+        {/* Items */}
+        <section className="card-base p-6">
+          <h2 className="mb-4 flex items-center gap-2 font-heading text-lg font-semibold">
+            <Package className="h-5 w-5 text-[#1B4332]" /> Items
+          </h2>
+          <div className="space-y-4">
+            {order.items.map((it, idx) => (
+              <div key={idx} className="flex items-center gap-4">
+                <img src={it.image} alt="" className="h-16 w-16 rounded-xl object-cover" />
+                <div className="flex-1">
+                  <div className="font-semibold">
+                    {it.name}
+                    {it.variant_label && <span className="ml-1 rounded-full bg-[#8BA888]/20 px-2 py-0.5 text-[10px] font-semibold text-[#1B4332]">{it.variant_label}</span>}
+                  </div>
+                  <div className="text-xs text-[#4A4A4A]">{it.unit} · Qty {it.quantity}</div>
+                  {it.note && <div className="text-xs italic text-[#4A4A4A]">Note: {it.note}</div>}
+                </div>
+                <div className="font-semibold text-[#1B4332]">{formatINR(it.price * it.quantity)}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <aside className="space-y-6">
+          {order.delivery_partner_name && (
+            <section className="card-base p-6">
+              <h3 className="font-heading text-sm font-semibold uppercase tracking-wider text-[#8BA888]">Delivery partner</h3>
+              <div className="mt-3 flex items-center gap-2 text-sm font-semibold text-[#1B4332]">
+                <Truck className="h-4 w-4" />
+                {order.delivery_partner_name}
+              </div>
+            </section>
+          )}
+
+          <section className="card-base p-6">
+            <h3 className="font-heading text-sm font-semibold uppercase tracking-wider text-[#8BA888]">Delivery to</h3>
+            <div className="mt-3 space-y-1 text-sm">
+              <div className="font-semibold">{order.address.full_name}</div>
+              <div className="text-[#4A4A4A] flex items-start gap-1"><MapPin className="mt-0.5 h-3.5 w-3.5" /> {order.address.line1}{order.address.landmark ? `, ${order.address.landmark}` : ""}, {order.address.area}, {order.address.city} - {order.address.pincode}</div>
+              <div className="text-[#4A4A4A] flex items-center gap-1"><Phone className="h-3.5 w-3.5" /> {order.address.phone}</div>
+              {order.notes && <div className="mt-2 text-xs italic text-[#4A4A4A]">Note: {order.notes}</div>}
+            </div>
+          </section>
+
+          <section className="card-base p-6">
+            <h3 className="font-heading text-sm font-semibold uppercase tracking-wider text-[#8BA888]">Payment</h3>
+            <div className="mt-2 text-sm">
+              <div className="font-semibold">{order.payment_method === "UPI" ? "UPI QR" : "Cash on Delivery"}</div>
+            </div>
+            <div className="mt-4 space-y-2 border-t border-dashed pt-4 text-sm">
+              <Row label="Subtotal" value={formatINR(order.subtotal)} />
+              <Row label="Delivery" value={order.delivery_fee === 0 ? "FREE" : formatINR(order.delivery_fee)} />
+              {(order.platform_fee ?? 0) > 0 && (
+                <Row label="Platform fee" value={formatINR(order.platform_fee)} />
+              )}
+              {(order.gst ?? 0) > 0 && (
+                <Row label="GST (5%)" value={formatINR(order.gst)} />
+              )}
+              {order.discount > 0 && (
+                <Row
+                  label={`Coupon${order.coupon?.code ? ` (${order.coupon.code})` : ""}`}
+                  value={`- ${formatINR(order.discount)}`}
+                />
+              )}
+              <div className="mt-2 flex items-center justify-between border-t border-dashed pt-2">
+                <span className="font-semibold">Total</span>
+                <span className="font-heading text-xl font-bold text-[#1B4332]">{formatINR(order.total)}</span>
+              </div>
+            </div>
+          </section>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, value }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-[#4A4A4A]">{label}</span>
+      <span className="font-semibold">{value}</span>
+    </div>
+  );
+}
