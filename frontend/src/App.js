@@ -33,6 +33,7 @@ import ProfileNotifications from "@/pages/ProfileNotifications";
 import ProfileRate from "@/pages/ProfileRate";
 
 import VendorStorefront from "@/pages/VendorStorefront";
+import VendorCategory from "@/pages/VendorCategory";
 import DeliveryPanel from "@/pages/DeliveryPanel";
 
 import "@/App.css";
@@ -156,6 +157,7 @@ function AppShell() {
             />
             <Route path="/become-vendor" element={<BecomeVendor />} />
             <Route path="/vendors/:id" element={<VendorStorefront />} />
+            <Route path="/vendors/:id/category/:slug" element={<VendorCategory />} />
             <Route
               path="/vendor/*"
               element={
@@ -201,3 +203,4 @@ export default function App() {
     </AuthProvider>
   );
 }
+

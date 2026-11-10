@@ -19,6 +19,7 @@ export default function BecomeVendor() {
     business_address: "",
     business_pincode: "",
     business_category: "",
+    shop_type: "",
     gst_number: "",
     pan_number: "",
     referral_code: searchParams.get("ref") || "",
@@ -42,6 +43,7 @@ export default function BecomeVendor() {
     e.preventDefault();
     if (f.password.length < 6) return toast.error("Password must be at least 6 characters");
     if (!/^\d{6}$/.test(f.business_pincode)) return toast.error("Enter a valid 6-digit pincode");
+    if (!f.shop_type) return toast.error("Select your shop type");
     setSubmitting(true);
     try {
       await api.post("/vendors/register", {
@@ -54,6 +56,7 @@ export default function BecomeVendor() {
         business_address: f.business_address.trim(),
         business_pincode: f.business_pincode.trim(),
         business_category: f.business_category.trim(),
+        shop_type: f.shop_type,
         gst_number: f.gst_number.trim(),
         pan_number: f.pan_number.trim(),
         referral_code: f.referral_code.trim() || undefined,
@@ -122,6 +125,34 @@ export default function BecomeVendor() {
 
           <FormSection title="Business details">
             <Grid>
+              <div className="sm:col-span-2" data-testid="v-shop-type">
+                <label className="mb-2 block text-xs font-semibold text-[#4A4A4A]">Shop type *</label>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {[
+                    { value: "fruits_vegetables", title: "Fresh Vegetables", hint: "Fruits & vegetables seller" },
+                    { value: "kirana_store", title: "Kirana Store", hint: "Dairy, staples, spices, snacks & daily essentials" },
+                  ].map((o) => (
+                    <label
+                      key={o.value}
+                      className={`cursor-pointer rounded-xl border p-4 transition ${
+                        f.shop_type === o.value ? "border-[#1B4332] bg-[#1B4332]/5" : "border-[#E5E5E5] hover:border-[#8BA888]"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="shop_type"
+                        value={o.value}
+                        checked={f.shop_type === o.value}
+                        onChange={up("shop_type")}
+                        className="sr-only"
+                        data-testid={`v-shop-type-${o.value}`}
+                      />
+                      <div className="font-heading text-sm font-semibold text-[#1B4332]">{o.title}</div>
+                      <div className="mt-0.5 text-xs text-[#4A4A4A]">{o.hint}</div>
+                    </label>
+                  ))}
+                </div>
+              </div>
               <F label="Business name" value={f.business_name} onChange={up("business_name")} required testid="v-biz-name" />
               <F label="Business category" value={f.business_category} onChange={up("business_category")} placeholder="Vegetables, Dairy, Spices..." testid="v-biz-cat" />
               <F label="Pincode" value={f.business_pincode} onChange={up("business_pincode")} required placeholder="431517" testid="v-biz-pincode" />

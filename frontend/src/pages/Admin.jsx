@@ -331,10 +331,20 @@ function Dashboard() {
   );
 }
 
+/* ================= SHOP TYPES ================= */
+const SHOP_TYPE_OPTIONS = [
+  { value: "fruits_vegetables", label: "Fresh Vegetables" },
+  { value: "kirana_store", label: "Kirana Store" },
+];
+const shopTypeLabel = (value) =>
+  SHOP_TYPE_OPTIONS.find((o) => o.value === value)?.label || "Not set";
+const EMPTY_CATEGORY = { name: "", slug: "", image: "", description: "", shop_type: "kirana_store" };
+
 /* ================= PRODUCTS ADMIN ================= */
 function ProductsAdmin() {
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [vendors, setVendors] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null);
   const [showForm, setShowForm] = useState(false);
@@ -342,12 +352,14 @@ function ProductsAdmin() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [p, c] = await Promise.all([
+      const [p, c, v] = await Promise.all([
         api.get("/admin/products"),
         api.get("/categories"),
+        api.get("/admin/vendors?status_filter=Approved"),
       ]);
       setProducts(p.data);
       setCategories(c.data);
+      setVendors(v.data);
     } catch (e) {
       toast.error(formatApiError(e));
     } finally {
@@ -533,6 +545,7 @@ function ProductsAdmin() {
         <ProductForm
           initial={editing}
           categories={categories}
+          vendors={vendors}
           onClose={() => setShowForm(false)}
           onSaved={() => {
             setShowForm(false);
@@ -544,7 +557,7 @@ function ProductsAdmin() {
   );
 }
 
-function ProductForm({ initial, categories, onClose, onSaved }) {
+function ProductForm({ initial, categories, vendors = [], onClose, onSaved }) {
   const [form, setForm] = useState(
     initial ? {
       ...initial,
@@ -556,7 +569,8 @@ function ProductForm({ initial, categories, onClose, onSaved }) {
       price: 0,
       mrp: 0,
       unit: "1 kg",
-      category_slug: categories[0]?.slug || "",
+      vendor_id: "",
+      category_slug: "",
       image: "",
       stock: 0,
       featured: false,
@@ -581,6 +595,25 @@ function ProductForm({ initial, categories, onClose, onSaved }) {
 
   const update = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
+  // Ownership is explicit: pick the vendor, then only that vendor's shop-type categories are offered.
+  const selectedVendor = vendors.find((v) => v.id === form.vendor_id);
+  const vendorShopType = selectedVendor?.shop_type || null;
+  const baseCategoryOptions = vendorShopType
+    ? categories.filter((c) => c.shop_type === vendorShopType)
+    : initial ? categories : [];
+  // Keep a legacy product's current category selectable so editing other fields never changes it silently.
+  const currentCategory = initial ? categories.find((c) => c.slug === initial.category_slug) : null;
+  const categoryOptions =
+    currentCategory && !baseCategoryOptions.some((c) => c.slug === currentCategory.slug)
+      ? [currentCategory, ...baseCategoryOptions]
+      : baseCategoryOptions;
+
+  const onVendorChange = (vendorId) => {
+    const vendor = vendors.find((v) => v.id === vendorId);
+    const options = vendor?.shop_type ? categories.filter((c) => c.shop_type === vendor.shop_type) : [];
+    setForm((f) => ({ ...f, vendor_id: vendorId, category_slug: options[0]?.slug || "" }));
+  };
+
   const updateVariant = (index, key, value) => {
     setVariants((current) =>
       current.map((variant, i) =>
@@ -602,6 +635,15 @@ function ProductForm({ initial, categories, onClose, onSaved }) {
 
   const save = async (e) => {
     e.preventDefault();
+
+    if (!initial && !form.vendor_id) {
+      toast.error("Select the vendor this product belongs to.");
+      return;
+    }
+    if (!form.category_slug) {
+      toast.error("Select a category.");
+      return;
+    }
 
     const commissionType = String(form.commission_type || "MRP").toUpperCase();
     const commissionValue = Number(form.commission_value || 0);
@@ -688,9 +730,28 @@ function ProductForm({ initial, categories, onClose, onSaved }) {
           <FField label="Unit" value={form.unit} onChange={(v) => update("unit", v)} placeholder="1 kg" data-testid="product-unit" />
 
           <div>
+            <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Vendor</label>
+            {initial ? (
+              <div className="input-base bg-gray-50 text-[#4A4A4A]" data-testid="product-vendor-readonly">
+                {initial.vendor_name || "Unassigned"}
+              </div>
+            ) : (
+              <select value={form.vendor_id} onChange={(e) => onVendorChange(e.target.value)} className="input-base" required data-testid="product-vendor">
+                <option value="">Select vendor…</option>
+                {vendors.map((v) => (
+                  <option key={v.id} value={v.id} disabled={!v.shop_type}>
+                    {v.business_name} — {v.shop_type ? shopTypeLabel(v.shop_type) : "shop type not set"}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          <div>
             <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Category</label>
-            <select value={form.category_slug} onChange={(e) => update("category_slug", e.target.value)} className="input-base" data-testid="product-category">
-              {categories.map((c) => (
+            <select value={form.category_slug} onChange={(e) => update("category_slug", e.target.value)} className="input-base" required disabled={!initial && !form.vendor_id} data-testid="product-category">
+              {!initial && !form.vendor_id && <option value="">Select a vendor first</option>}
+              {categoryOptions.map((c) => (
                 <option key={c.slug} value={c.slug}>{c.name}</option>
               ))}
             </select>
@@ -1179,7 +1240,7 @@ function Customers() {
 function Categories() {
   const [cats, setCats] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [form, setForm] = useState({ name: "", slug: "", image: "", description: "" });
+  const [form, setForm] = useState({ ...EMPTY_CATEGORY });
   const [editing, setEditing] = useState(null);
   const [showForm, setShowForm] = useState(false);
 
@@ -1203,7 +1264,7 @@ function Categories() {
         await api.post("/categories", payload);
         toast.success("Category created");
       }
-      setForm({ name: "", slug: "", image: "", description: "" });
+      setForm({ ...EMPTY_CATEGORY });
       setEditing(null);
       setShowForm(false);
       load();
@@ -1214,14 +1275,14 @@ function Categories() {
 
   const startEdit = (c) => {
     setEditing(c);
-    setForm({ name: c.name, slug: c.slug, image: c.image || "", description: c.description || "" });
+    setForm({ name: c.name, slug: c.slug, image: c.image || "", description: c.description || "", shop_type: c.shop_type || "kirana_store" });
     setShowForm(true);
   };
 
   const cancelForm = () => {
     setShowForm(false);
     setEditing(null);
-    setForm({ name: "", slug: "", image: "", description: "" });
+    setForm({ ...EMPTY_CATEGORY });
   };
 
   const del = async (id) => {
@@ -1243,6 +1304,7 @@ function Categories() {
             columns={[
               { key: "name", label: "Name" },
               { key: "slug", label: "Slug" },
+              { key: "shop_type", label: "Shop type" },
               { key: "description", label: "Description" },
               { key: "image", label: "Image URL" },
             ]}
@@ -1250,7 +1312,7 @@ function Categories() {
           <button
             onClick={() => {
               setEditing(null);
-              setForm({ name: "", slug: "", image: "", description: "" });
+              setForm({ ...EMPTY_CATEGORY });
               setShowForm((v) => !v);
             }}
             className="btn-primary"
@@ -1269,6 +1331,23 @@ function Categories() {
           <FField label="Name" value={form.name} onChange={(v) => setForm({ ...form, name: v })} required data-testid="category-name" />
           <FField label="Slug" value={form.slug} onChange={(v) => setForm({ ...form, slug: v })} placeholder="auto from name" data-testid="category-slug" />
           <div className="sm:col-span-2">
+            <label className="mb-1 block text-xs font-semibold text-[#4A4A4A]">Shop type</label>
+            <select
+              value={form.shop_type}
+              onChange={(e) => setForm({ ...form, shop_type: e.target.value })}
+              className="input-base"
+              data-testid="category-shop-type"
+            >
+              {SHOP_TYPE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-[#4A4A4A]">
+              The category is automatically available to every vendor of this shop type. Moving a category hides
+              existing products from vendors of the other type.
+            </p>
+          </div>
+          <div className="sm:col-span-2">
             <ImageSourcePicker
               label="Category image"
               value={form.image}
@@ -1283,23 +1362,39 @@ function Categories() {
         </form>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        {cats.map((c) => (
-          <div key={c.id} className="card-base flex items-center gap-4 p-4">
-            {c.image && <img src={c.image} alt="" className="h-12 w-12 rounded-lg object-cover" />}
-            <div className="flex-1">
-              <div className="font-semibold">{c.name}</div>
-              <div className="text-xs text-[#4A4A4A]">{c.slug}</div>
-            </div>
-            <button onClick={() => startEdit(c)} className="text-[#1B4332] hover:text-[#E07A5F]" aria-label="Edit category">
-              <Pencil className="h-4 w-4" />
-            </button>
-            <button onClick={() => del(c.id)} className="text-red-600 hover:text-red-800">
-              <Trash2 className="h-4 w-4" />
-            </button>
+      {SHOP_TYPE_OPTIONS.map((group) => {
+        const items = cats.filter((c) => (c.shop_type || "kirana_store") === group.value);
+        return (
+          <div key={group.value} className="mb-8" data-testid={`category-group-${group.value}`}>
+            <h3 className="mb-3 font-heading text-lg font-semibold text-[#1B4332]">
+              {group.label} categories ({items.length})
+            </h3>
+            {items.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-[#E5E5E5] p-6 text-center text-sm text-[#4A4A4A]">
+                No categories in this group yet.
+              </div>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {items.map((c) => (
+                  <div key={c.id} className="card-base flex items-center gap-4 p-4">
+                    {c.image && <img src={c.image} alt="" className="h-12 w-12 rounded-lg object-cover" />}
+                    <div className="flex-1">
+                      <div className="font-semibold">{c.name}</div>
+                      <div className="text-xs text-[#4A4A4A]">{c.slug}</div>
+                    </div>
+                    <button onClick={() => startEdit(c)} className="text-[#1B4332] hover:text-[#E07A5F]" aria-label="Edit category">
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button onClick={() => del(c.id)} className="text-red-600 hover:text-red-800">
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
-        ))}
-      </div>
+        );
+      })}
     </div>
   );
 }
@@ -1320,6 +1415,26 @@ function VendorsAdmin() {
   }, [filter]);
 
   useEffect(() => { load(); }, [load]);
+
+  const setShopType = async (id, shopType) => {
+    if (!shopType) return;
+    try {
+      const { data } = await api.patch(`/admin/vendors/${id}/shop-type`, { shop_type: shopType });
+      toast.success(`Shop type set to ${shopTypeLabel(shopType)}`);
+      if (data.mismatched_product_count > 0) {
+        toast.warning(`${data.mismatched_product_count} existing product(s) are in categories outside this shop type and will not show on the storefront.`);
+      }
+      load();
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  const approve = (v) => {
+    if (!v.shop_type || v.shop_type_needs_review) {
+      toast.error("Set the vendor's shop type before approving.");
+      return;
+    }
+    setStatus(v.id, "Approved");
+  };
 
   const setStatus = async (id, status, reason = "") => {
     try {
@@ -1345,6 +1460,7 @@ function VendorsAdmin() {
               email: v.owner_email,
               phone: v.phone,
               status: v.status,
+              shop_type: shopTypeLabel(v.shop_type),
               pincode: v.business_pincode,
               address: v.business_address,
             }))}
@@ -1354,6 +1470,7 @@ function VendorsAdmin() {
               { key: "email", label: "Email" },
               { key: "phone", label: "Phone" },
               { key: "status", label: "Status" },
+              { key: "shop_type", label: "Shop type" },
               { key: "pincode", label: "Pincode" },
               { key: "address", label: "Address" },
             ]}
@@ -1384,6 +1501,30 @@ function VendorsAdmin() {
                   </div>
                   <div className="mt-1 text-sm text-[#4A4A4A]">{v.owner_name} · {v.owner_email} · {v.phone}</div>
                   <div className="text-xs text-[#4A4A4A]">{v.business_address} - {v.business_pincode}</div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                    <span className="font-semibold text-[#4A4A4A]">Shop type:</span>
+                    <select
+                      value={v.shop_type || ""}
+                      onChange={(e) => setShopType(v.id, e.target.value)}
+                      className="rounded-lg border border-[#E5E5E5] bg-white px-2 py-1 text-xs"
+                      data-testid={`vendor-shop-type-${v.id}`}
+                    >
+                      {!v.shop_type && <option value="">Not set</option>}
+                      {SHOP_TYPE_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                    {v.shop_type_needs_review && (
+                      <>
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-800" data-testid={`vendor-needs-review-${v.id}`}>
+                          Needs review — defaulted to Kirana
+                        </span>
+                        <button type="button" onClick={() => setShopType(v.id, v.shop_type)} className="rounded-lg border border-[#1B4332] px-2 py-1 font-semibold text-[#1B4332] hover:bg-[#1B4332]/5">
+                          Confirm selected type
+                        </button>
+                      </>
+                    )}
+                  </div>
                   {v.business_description && <div className="mt-1 text-xs italic text-[#4A4A4A]">&ldquo;{v.business_description}&rdquo;</div>}
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -1395,7 +1536,7 @@ function VendorsAdmin() {
                     View docs
                   </button>
                   {v.status !== "Approved" && (
-                    <button onClick={() => setStatus(v.id, "Approved")} className="inline-flex items-center gap-1 rounded-full bg-green-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-700" data-testid={`approve-${v.id}`}>
+                    <button onClick={() => approve(v)} className="inline-flex items-center gap-1 rounded-full bg-green-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-700" data-testid={`approve-${v.id}`}>
                       <Check className="h-3.5 w-3.5" /> Approve
                     </button>
                   )}

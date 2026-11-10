@@ -242,13 +242,166 @@ function slugify(s) {
     .replace(/\s+/g, "-");
 }
 
+
+function VendorCategoryManager({ categories, onChanged }) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [image, setImage] = useState("");
+  const [editing, setEditing] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  const customCategories = categories.filter((c) => c.is_vendor_category);
+
+  const reset = () => {
+    setName("");
+    setDescription("");
+    setImage("");
+    setEditing(null);
+  };
+
+  const save = async (e) => {
+    e.preventDefault();
+    if (!name.trim()) {
+      toast.error("Enter a category name");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const payload = {
+        name: name.trim(),
+        description: description.trim(),
+        image: image.trim(),
+      };
+
+      if (editing) {
+        await api.put(`/vendor/categories/${editing.id}`, payload);
+        toast.success("Category updated");
+      } else {
+        await api.post("/vendor/categories", payload);
+        toast.success("Category created");
+      }
+
+      reset();
+      await onChanged();
+    } catch (error) {
+      toast.error(formatApiError(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async (category) => {
+    if (!window.confirm(`Delete "${category.name}"? Products assigned to it must be moved first.`)) return;
+
+    try {
+      await api.delete(`/vendor/categories/${category.id}`);
+      toast.success("Category deleted");
+      if (editing?.id === category.id) reset();
+      await onChanged();
+    } catch (error) {
+      toast.error(formatApiError(error));
+    }
+  };
+
+  return (
+    <section className="mb-8 rounded-2xl border border-[#E5E5E5] bg-white p-5 sm:p-6" data-testid="vendor-category-manager">
+      <div className="mb-4">
+        <h3 className="font-heading text-lg font-bold text-[#1B4332]">Manage Categories</h3>
+        <p className="mt-1 text-sm text-[#68756B]">
+          Create your own product categories. Each category belongs only to your store.
+        </p>
+      </div>
+
+      <form onSubmit={save} className="grid gap-3 sm:grid-cols-2">
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Category name"
+          maxLength={60}
+          className="rounded-xl border border-[#E5E5E5] px-4 py-3 text-sm"
+          required
+        />
+        <input
+          value={image}
+          onChange={(e) => setImage(e.target.value)}
+          placeholder="Category image URL (optional)"
+          className="rounded-xl border border-[#E5E5E5] px-4 py-3 text-sm"
+        />
+        <input
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="Description (optional)"
+          className="rounded-xl border border-[#E5E5E5] px-4 py-3 text-sm sm:col-span-2"
+        />
+        <div className="flex flex-wrap gap-2 sm:col-span-2">
+          <button type="submit" disabled={saving} className="btn-primary">
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            {editing ? "Update category" : "Create category"}
+          </button>
+          {editing && (
+            <button type="button" onClick={reset} className="rounded-xl border px-4 py-2 text-sm">
+              Cancel
+            </button>
+          )}
+        </div>
+      </form>
+
+      <div className="mt-5 space-y-2">
+        {customCategories.length === 0 ? (
+          <p className="rounded-xl bg-gray-50 p-4 text-sm text-[#68756B]">
+            You haven't created any custom categories yet.
+          </p>
+        ) : customCategories.map((category) => (
+          <div key={category.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#E5E5E5] p-3">
+            <div className="min-w-0">
+              <p className="font-semibold text-[#20392A]">{category.name}</p>
+              <p className="text-xs text-[#68756B]">{category.product_count || 0} products · {category.slug}</p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setEditing(category);
+                  setName(category.name);
+                  setDescription(category.description || "");
+                  setImage(category.image || "");
+                }}
+                className="rounded-lg p-2 text-[#1B4332] hover:bg-gray-100"
+                aria-label="Edit category"
+              >
+                <Pencil className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => remove(category)}
+                className="rounded-lg p-2 text-red-600 hover:bg-red-50"
+                aria-label="Delete category"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function VProducts() {
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [shopTypeLabel, setShopTypeLabel] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [editing, setEditing] = useState(null);
   const [showForm, setShowForm] = useState(false);
+
+  // EXCEL_VENDOR_IMPORT_UI_V1
+  const importFileRef = useRef(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importPreview, setImportPreview] = useState(null);
+
 
   const load = useCallback(async ({ silent = false } = {}) => {
     if (silent) {
@@ -257,12 +410,14 @@ export function VProducts() {
       setLoading(true);
     }
     try {
+      // Categories come from the backend already filtered to this vendor's shop type.
       const [p, c] = await Promise.all([
         api.get("/vendor/products"),
-        api.get("/categories"),
+        api.get("/vendor/categories"),
       ]);
       setProducts(p.data);
-      setCategories(c.data);
+      setCategories(c.data?.categories || []);
+      setShopTypeLabel(c.data?.shop_type_label || null);
     } catch {
       // Keep existing list visible during background refresh failures
     } finally {
@@ -290,6 +445,86 @@ export function VProducts() {
       load();
     } catch (e) {
       toast.error(formatApiError(e));
+    }
+  };
+
+
+  const downloadImportTemplate = async () => {
+    try {
+      setImportBusy(true);
+      const response = await api.get(
+        "/vendor/products/import/template",
+        { responseType: "blob" }
+      );
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "Ambajogai-Vendor-Product-Template.xlsx";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success("Excel template downloaded.");
+    } catch (error) {
+      toast.error(formatApiError(error));
+    } finally {
+      setImportBusy(false);
+    }
+  };
+
+  const uploadImportExcel = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    if (!file.name.toLowerCase().endsWith(".xlsx")) {
+      toast.error("Please select an .xlsx Excel file.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      setImportBusy(true);
+      setImportPreview(null);
+      const response = await api.post(
+        "/vendor/products/import/preview",
+        formData
+      );
+      setImportPreview(response.data);
+      if (response.data.valid) {
+        toast.success("Excel validated. Review the preview before importing.");
+      } else {
+        toast.error("Excel has validation errors. Correct them and upload again.");
+      }
+    } catch (error) {
+      toast.error(formatApiError(error));
+    } finally {
+      setImportBusy(false);
+    }
+  };
+
+  const confirmExcelImport = async () => {
+    if (!importPreview?.valid || !importPreview?.token) return;
+
+    if (!window.confirm(
+      `Import ${importPreview.product_count} new products? Existing products will not be changed.`
+    )) return;
+
+    try {
+      setImportBusy(true);
+      const response = await api.post(
+        "/vendor/products/import/confirm",
+        { token: importPreview.token }
+      );
+      toast.success(response.data.message || "Products imported.");
+      setImportPreview(null);
+      await load();
+    } catch (error) {
+      toast.error(formatApiError(error));
+    } finally {
+      setImportBusy(false);
     }
   };
 
@@ -384,11 +619,144 @@ export function VProducts() {
             setShowForm(true);
           }}
           className="btn-primary"
+          disabled={!loading && categories.length === 0}
           data-testid="vendor-add-product"
         >
           <Plus className="h-4 w-4" /> Add product
         </button>
       </div>
+
+
+      {/* EXCEL_VENDOR_IMPORT_UI_V1 */}
+      <section className="mb-6 rounded-2xl border border-[#DCE8DF] bg-[#F7FAF7] p-4 sm:p-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 className="font-semibold text-[#1B4332]">Bulk Product Import (Excel)</h3>
+            <p className="mt-1 text-xs text-[#68756B]">
+              Download the template, fill it in Excel, then upload and review before importing.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={downloadImportTemplate}
+              disabled={importBusy}
+              className="rounded-xl border border-[#1B4332] px-4 py-2 text-sm font-semibold text-[#1B4332] disabled:opacity-50"
+            >
+              Download Template
+            </button>
+            <button
+              type="button"
+              onClick={() => importFileRef.current?.click()}
+              disabled={importBusy}
+              className="btn-primary disabled:opacity-50"
+            >
+              {importBusy ? "Please wait..." : "Upload Excel"}
+            </button>
+            <input
+              ref={importFileRef}
+              type="file"
+              accept=".xlsx"
+              className="hidden"
+              onChange={uploadImportExcel}
+            />
+          </div>
+        </div>
+      </section>
+
+      {importPreview && (
+        <section className="mb-6 rounded-2xl border border-[#E5E5E5] bg-white p-4 sm:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="font-heading text-lg font-bold text-[#1B4332]">
+              Excel Import Preview
+            </h3>
+            <button
+              type="button"
+              onClick={() => setImportPreview(null)}
+              className="rounded-lg border px-3 py-1.5 text-sm"
+              disabled={importBusy}
+            >
+              Close
+            </button>
+          </div>
+
+          <p className="mt-2 text-sm text-[#4A4A4A]">
+            Rows: {importPreview.row_count || 0} ? Products: {importPreview.product_count || 0}
+          </p>
+
+          {importPreview.errors?.length > 0 && (
+            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3">
+              <p className="font-semibold text-red-700">Please correct these errors:</p>
+              <ul className="mt-2 max-h-52 list-disc space-y-1 overflow-auto pl-5 text-sm text-red-700">
+                {importPreview.errors.map((error, index) => (
+                  <li key={index}>{error}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {importPreview.products?.length > 0 && (
+            <div className="mt-4 overflow-x-auto rounded-xl border">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-gray-50 text-xs uppercase">
+                  <tr>
+                    <th className="px-3 py-2">Product</th>
+                    <th className="px-3 py-2">Category</th>
+                    <th className="px-3 py-2">Pack Sizes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {importPreview.products.map((product, index) => (
+                    <tr key={`${product.name}-${index}`} className="border-t">
+                      <td className="px-3 py-2 font-medium">{product.name}</td>
+                      <td className="px-3 py-2">{product.category}</td>
+                      <td className="px-3 py-2">
+                        {product.variant_count}
+                        {product.variants?.length
+                          ? ` (${product.variants.map((v) => v.label).join(", ")})`
+                          : ""}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {importPreview.valid && (
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-xs text-green-700">
+                Validation successful. No products have been saved yet.
+              </p>
+              <button
+                type="button"
+                onClick={confirmExcelImport}
+                disabled={importBusy}
+                className="btn-primary disabled:opacity-50"
+              >
+                {importBusy ? "Importing..." : "Confirm Import"}
+              </button>
+            </div>
+          )}
+        </section>
+      )}
+
+      {!loading && !shopTypeLabel && (
+        <div className="mb-6 rounded-xl bg-amber-50 p-4 text-sm text-amber-900" data-testid="vendor-shop-type-missing">
+          Your shop type has not been set yet, so no categories are available. Please contact the store admin to
+          set it before adding products.
+        </div>
+      )}
+      {!loading && shopTypeLabel && (
+        <p className="mb-4 text-xs text-[#4A4A4A]" data-testid="vendor-shop-type-note">
+          Shop type: <span className="font-semibold text-[#1B4332]">{shopTypeLabel}</span> — only matching
+          categories are available for your products.
+        </p>
+      )}
+
+      {!loading && shopTypeLabel && (
+        <VendorCategoryManager categories={categories} onChanged={() => load()} />
+      )}
 
       {products.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-[#E5E5E5] p-10 text-center text-[#4A4A4A]">
@@ -515,6 +883,12 @@ function VProductForm({ initial, categories, onClose, onSaved }) {
       popular: false,
     },
   );
+  // A legacy product may sit in a category outside the vendor's shop type; keep it visible
+  // (and unchanged) instead of silently switching it to the first available category.
+  const categoryChoices =
+    initial?.category_slug && !categories.some((c) => c.slug === initial.category_slug)
+      ? [{ slug: initial.category_slug, name: `${initial.category_slug} (current)` }, ...categories]
+      : categories;
   const [saving, setSaving] = useState(false);
   const [variants, setVariants] = useState(
     (initial?.variants || []).map((v) => ({
@@ -665,7 +1039,7 @@ function VProductForm({ initial, categories, onClose, onSaved }) {
               onChange={(e) => update("category_slug", e.target.value)}
               className="input-base"
             >
-              {categories.map((c) => (
+              {categoryChoices.map((c) => (
                 <option key={c.slug} value={c.slug}>
                   {c.name}
                 </option>
@@ -892,16 +1266,11 @@ function VOrders() {
                 <div className="text-xs text-[#4A4A4A]">
                   Order #{o.id.slice(-6).toUpperCase()}
                 </div>
-                <div className="mt-1 font-semibold">
-                  {o.customer_name} · {o.customer_phone}
-                </div>
-                <div className="text-xs text-[#4A4A4A]">
-                  {o.address.line1}, {o.address.area}, {o.address.city} -{" "}
-                  {o.address.pincode}
+                <div className="mt-1 font-semibold" data-testid={`vendor-order-customer-${o.id}`}>
+                  Customer: {o.customer_name || "Customer"}
                 </div>
                 <div className="mt-2 text-xs text-[#4A4A4A]">
-                  {o.items.length} item(s) · {o.payment_method} ·{" "}
-                  {new Date(o.created_at).toLocaleString("en-IN", {
+                  {o.items.length} ordered item(s) · {new Date(o.created_at).toLocaleString("en-IN", {
                     dateStyle: "short",
                     timeStyle: "short",
                   })}

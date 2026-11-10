@@ -1,5 +1,6 @@
 from dotenv import load_dotenv
 from pathlib import Path
+from io import BytesIO
 
 import math
 import os
@@ -36,6 +37,7 @@ from urllib.parse import urlparse
 from bson import ObjectId
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -329,6 +331,8 @@ class CategoryIn(BaseModel):
     slug: str
     image: Optional[str] = None
     description: Optional[str] = None
+    # Grouping metadata: fruits_vegetables | kirana_store (derived when omitted)
+    shop_type: Optional[str] = None
 
 
 class CategoryOut(CategoryIn):
@@ -368,7 +372,7 @@ class ProductOut(ProductIn):
     created_at: str
     vendor_id: Optional[str] = None
     vendor_name: Optional[str] = None
-    approval_status: str = "approved"  # approved | pending | rejected
+    approval_status: str = "approved"
 
 class ProductOut(ProductIn):
     id: str
@@ -561,14 +565,199 @@ def product_to_out(p: dict) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Shop types: vendors and categories are grouped by shop type
+# ---------------------------------------------------------------------------
+
+SHOP_TYPE_FRUITS_VEGETABLES = "fruits_vegetables"
+SHOP_TYPE_KIRANA_STORE = "kirana_store"
+SHOP_TYPES = (SHOP_TYPE_FRUITS_VEGETABLES, SHOP_TYPE_KIRANA_STORE)
+FRUITS_VEGETABLES_CATEGORY_SLUGS = {"fruits-vegetables"}
+KIRANA_CATEGORY_SLUGS = {
+    "cleaning-household", "dairy-bakery", "personal-care",
+    "snacks-beverages", "spices-masala", "staples-grains",
+}
+ALLOWED_CATEGORY_SLUGS = FRUITS_VEGETABLES_CATEGORY_SLUGS | KIRANA_CATEGORY_SLUGS
+SHOP_TYPE_LABELS = {
+    SHOP_TYPE_FRUITS_VEGETABLES: "Fresh Vegetables",
+    SHOP_TYPE_KIRANA_STORE: "Kirana Store",
+}
+
+# Words that mark a category as fresh produce (matched as whole words on slug + name).
+_FRESH_PRODUCE_WORDS = {"fruit", "fruits", "vegetable", "vegetables", "veggie", "veggies"}
+# Words that turn a fruit/vegetable-looking name into a packaged (kirana) item, e.g. "Dry Fruits".
+_NOT_FRESH_WORDS = {"dry", "dried", "dehydrated", "canned", "frozen"}
+
+# Before shop types existed, admin product creation routed products to vendors with these
+# exact business names. They are the only name-based evidence used when migrating old vendors.
+LEGACY_VENDOR_NAME_SHOP_TYPES = {
+    "fresh vegetables": SHOP_TYPE_FRUITS_VEGETABLES,
+    "kirana store": SHOP_TYPE_KIRANA_STORE,
+}
+
+
+def normalize_shop_type(value) -> Optional[str]:
+    """Return a canonical shop type, or None when the value is missing/invalid."""
+    if not isinstance(value, str):
+        return None
+    v = value.strip().lower().replace("-", "_").replace(" ", "_")
+    return v if v in SHOP_TYPES else None
+
+
+def derive_category_shop_type(slug: Optional[str], name: Optional[str]) -> str:
+    """Fresh produce categories -> fruits_vegetables; every other category -> kirana_store."""
+    words = {w for w in re.split(r"[^a-z0-9]+", f"{slug or ''} {name or ''}".lower()) if w}
+    if words & _FRESH_PRODUCE_WORDS and not words & _NOT_FRESH_WORDS:
+        return SHOP_TYPE_FRUITS_VEGETABLES
+    return SHOP_TYPE_KIRANA_STORE
+
+
+def category_shop_type(c: dict) -> str:
+    """Stored shop type if valid, otherwise derived (so old records are never left unclassified)."""
+    return normalize_shop_type(c.get("shop_type")) or derive_category_shop_type(c.get("slug"), c.get("name"))
+
+
+def infer_vendor_shop_type(vendor: dict, product_category_slugs, category_type_by_slug: dict) -> Optional[str]:
+    """Classify a legacy vendor only when all reliable evidence agrees; otherwise return None.
+
+    Evidence: (1) the shop type of every category the vendor already sells in, and
+    (2) the legacy routing business names. Unknown categories or conflicting evidence
+    mean the record is ambiguous and is left for an admin to classify.
+    """
+    explicit = normalize_shop_type(vendor.get("shop_type"))
+    if explicit:
+        return explicit
+    product_evidence = set()
+    for slug in product_category_slugs:
+        t = category_type_by_slug.get(slug)
+        if t is None:
+            return None
+        product_evidence.add(t)
+    # Actual assigned product categories are stronger evidence than a generic
+    # business name such as "Grocery Store".
+    if len(product_evidence) == 1:
+        return next(iter(product_evidence))
+    if len(product_evidence) > 1:
+        return None
+
+    name_key = " ".join(str(vendor.get("business_name") or "").lower().split())
+    if name_key in LEGACY_VENDOR_NAME_SHOP_TYPES:
+        return LEGACY_VENDOR_NAME_SHOP_TYPES[name_key]
+
+    business_text = " ".join([
+        str(vendor.get("business_category") or ""),
+        str(vendor.get("business_name") or ""),
+    ]).lower()
+    business_words = {w for w in re.split(r"[^a-z0-9]+", business_text) if w}
+    if business_words & _FRESH_PRODUCE_WORDS and not business_words & _NOT_FRESH_WORDS:
+        return SHOP_TYPE_FRUITS_VEGETABLES
+    if business_words & {"kirana", "grocery", "general", "store", "supermarket"}:
+        return SHOP_TYPE_KIRANA_STORE
+    return None
+
+
+class AdminProductIn(ProductIn):
+    # Admin must choose the owning vendor explicitly; it is validated by the endpoint.
+    vendor_id: Optional[str] = None
+
+
 def category_to_out(c: dict) -> dict:
+    st = category_shop_type(c)
     return {
         "id": str(c["_id"]),
         "name": c["name"],
         "slug": c["slug"],
         "image": c.get("image"),
         "description": c.get("description"),
+        "shop_type": st,
+        "shop_type_label": SHOP_TYPE_LABELS[st],
     }
+
+
+async def get_categories_for_shop_type(shop_type: str) -> List[dict]:
+    # Vendor storefronts expose exactly the seven approved category groups.
+    allowed = FRUITS_VEGETABLES_CATEGORY_SLUGS if shop_type == SHOP_TYPE_FRUITS_VEGETABLES else KIRANA_CATEGORY_SLUGS
+    docs = await db.categories.find({"slug": {"$in": sorted(allowed)}}).sort("name", 1).to_list(100)
+    return [d for d in docs if category_shop_type(d) == shop_type]
+
+
+def vendor_category_to_out(c: dict, product_count: int = 0) -> dict:
+    return {
+        "id": str(c["_id"]),
+        "name": c.get("name", ""),
+        "slug": c.get("slug", ""),
+        "image": c.get("image", ""),
+        "description": c.get("description", ""),
+        "shop_type": c.get("shop_type"),
+        "shop_type_label": SHOP_TYPE_LABELS.get(c.get("shop_type")),
+        "product_count": product_count,
+        "is_vendor_category": True,
+    }
+
+
+def make_vendor_category_slug(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    if not slug:
+        raise HTTPException(status_code=400, detail="Enter a valid category name")
+    return slug
+
+
+async def validate_category_for_vendor(vendor: dict, category_slug: str) -> dict:
+    """Backend guard: a vendor may only use categories that belong to its own shop type."""
+    shop_type = normalize_shop_type(vendor.get("shop_type"))
+    if not shop_type:
+        raise HTTPException(
+            status_code=400,
+            detail="This vendor's shop type has not been set yet. An admin must set it before products can be added.",
+        )
+    own_cat = await db.vendor_categories.find_one({
+        "vendor_id": str(vendor["_id"]),
+        "slug": category_slug,
+    })
+    if own_cat:
+        return own_cat
+
+    cat = await db.categories.find_one({"slug": category_slug})
+    if not cat:
+        raise HTTPException(status_code=400, detail="Category not found")
+    if category_shop_type(cat) != shop_type:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Category '{cat['name']}' is not available for {SHOP_TYPE_LABELS[shop_type]} vendors",
+        )
+    return cat
+
+
+async def migrate_shop_types() -> dict:
+    """Idempotent startup migration. Never deletes or duplicates records and never overwrites
+    an existing valid shop_type. Ambiguous vendors are left unclassified for admin review."""
+    stats = {"categories_set": 0, "vendors_set": 0, "vendors_defaulted_kirana": 0, "vendors_need_review": 0}
+    for c in await db.categories.find().to_list(1000):
+        if normalize_shop_type(c.get("shop_type")) is None:
+            await db.categories.update_one({"_id": c["_id"]}, {"$set": {"shop_type": category_shop_type(c)}})
+            stats["categories_set"] += 1
+    type_by_slug = {c["slug"]: category_shop_type(c) for c in await db.categories.find().to_list(1000)}
+    for v in await db.vendors.find().to_list(5000):
+        if normalize_shop_type(v.get("shop_type")):
+            continue
+        slugs = await db.products.distinct("category_slug", {"vendor_id": str(v["_id"])})
+        inferred = infer_vendor_shop_type(v, slugs, type_by_slug)
+        if inferred:
+            await db.vendors.update_one(
+                {"_id": v["_id"]},
+                {"$set": {"shop_type": inferred, "shop_type_source": "migration", "shop_type_needs_review": False}},
+            )
+            stats["vendors_set"] += 1
+        else:
+            # Never leave a legacy shop without its category set. Kirana is the safe
+            # default for ambiguous records, and the admin dashboard flags it for review.
+            await db.vendors.update_one(
+                {"_id": v["_id"]},
+                {"$set": {"shop_type": SHOP_TYPE_KIRANA_STORE, "shop_type_source": "migration_default_kirana", "shop_type_needs_review": True}},
+            )
+            stats["vendors_defaulted_kirana"] += 1
+            stats["vendors_need_review"] += 1
+    return stats
 
 
 def order_to_out(o: dict) -> dict:
@@ -994,6 +1183,12 @@ async def create_category(payload: CategoryIn, _: dict = Depends(require_admin))
     if exists:
         raise HTTPException(status_code=400, detail="Slug already used")
     doc = payload.model_dump()
+    if doc.get("shop_type"):
+        doc["shop_type"] = normalize_shop_type(doc["shop_type"])
+        if not doc["shop_type"]:
+            raise HTTPException(status_code=400, detail="Invalid shop_type. Use fruits_vegetables or kirana_store")
+    else:
+        doc["shop_type"] = derive_category_shop_type(payload.slug, payload.name)
     res = await db.categories.insert_one(doc)
     doc["_id"] = res.inserted_id
     return category_to_out(doc)
@@ -1008,7 +1203,15 @@ async def update_category(cat_id: str, payload: CategoryIn, _: dict = Depends(re
     slug_clash = await db.categories.find_one({"slug": payload.slug, "_id": {"$ne": oid}})
     if slug_clash:
         raise HTTPException(status_code=400, detail="Slug already used")
-    await db.categories.update_one({"_id": oid}, {"$set": payload.model_dump()})
+    update = payload.model_dump()
+    if update.get("shop_type"):
+        update["shop_type"] = normalize_shop_type(update["shop_type"])
+        if not update["shop_type"]:
+            raise HTTPException(status_code=400, detail="Invalid shop_type. Use fruits_vegetables or kirana_store")
+    else:
+        # Omitted: keep the current grouping instead of overwriting it with null.
+        update["shop_type"] = category_shop_type(existing)
+    await db.categories.update_one({"_id": oid}, {"$set": update})
     doc = await db.categories.find_one({"_id": oid})
     return category_to_out(doc)
 
@@ -1071,27 +1274,25 @@ async def get_product(slug: str):
 
 
 @api.post("/products", response_model=ProductOut)
-async def create_product(payload: ProductIn, _: dict = Depends(require_admin)):
+async def create_product(payload: AdminProductIn, _: dict = Depends(require_admin)):
     exists = await db.products.find_one({"slug": payload.slug})
     if exists:
         raise HTTPException(status_code=400, detail="Slug already used")
 
-    doc = payload.model_dump()
+    # Ownership is always explicit: the admin selects the vendor, the backend validates it.
+    if not (payload.vendor_id or "").strip():
+        raise HTTPException(status_code=400, detail="vendor_id is required. Select the vendor this product belongs to.")
+    vendor = await db.vendors.find_one({"_id": safe_object_id(payload.vendor_id.strip())})
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    if vendor.get("status") != "Approved":
+        raise HTTPException(status_code=400, detail="Products can only be assigned to approved vendors")
+    await validate_category_for_vendor(vendor, payload.category_slug)
+
+    doc = payload.model_dump(exclude={"vendor_id"})
     doc["base_price"] = doc["price"]
     doc["created_at"] = iso_now()
     doc["approval_status"] = "approved"
-
-    # Assign new admin-created products to the correct shop.
-    if doc.get("category_slug") == "fruits-vegetables":
-        vendor = await db.vendors.find_one({"business_name": "Fresh Vegetables"})
-    else:
-        vendor = await db.vendors.find_one({"business_name": "kirana store"})
-
-    if not vendor:
-        raise HTTPException(
-            status_code=500,
-            detail="Vendor configuration missing. Product was not created."
-        )
 
     doc["vendor_id"] = str(vendor["_id"])
     doc["vendor_name"] = vendor["business_name"]
@@ -1108,6 +1309,11 @@ async def update_product(prod_id: str, payload: ProductIn, _: dict = Depends(req
     existing = await db.products.find_one({"_id": oid})
     if not existing:
         raise HTTPException(status_code=404, detail="Product not found")
+
+    if existing.get("vendor_id") and payload.category_slug != existing.get("category_slug"):
+        owner = await db.vendors.find_one({"_id": safe_object_id(existing["vendor_id"])})
+        if owner:
+            await validate_category_for_vendor(owner, payload.category_slug)
 
     update = payload.model_dump()
     update["base_price"] = float(update["price"])
@@ -1441,6 +1647,7 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         if delivered_order:
             apply_product_discount = False
 
+
     for it in payload.items:
         try:
             prod = await db.products.find_one({"_id": ObjectId(it.product_id)})
@@ -1487,6 +1694,8 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
         discount_percent = max(0.0, min(100.0, float(discount_percent)))
         configured_discount_price = round(original_price * (1 - discount_percent / 100), 2)
         eff_price = min(selling_price, configured_discount_price) if apply_product_discount else original_price
+
+        item_discount = round(max(0.0, original_price - eff_price), 2)
         # Vacation-mode / open-now check per vendor
         vid = prod.get("vendor_id")
         if vid:
@@ -1505,7 +1714,7 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
             "name": prod["name"],
             "price": eff_price,
             "mrp": original_price,
-            "product_discount": round(max(0.0, original_price - eff_price), 2) if apply_product_discount else 0.0,
+            "product_discount": item_discount,
             "base_price": pricing["base_price"],
             "quantity": it.quantity,
             "image": prod["image"],
@@ -1522,8 +1731,8 @@ async def create_order(payload: OrderIn, user: dict = Depends(get_current_user))
                 "markup_amount": pricing["markup_amount"],
                 "selling_price": pricing["selling_price"],
                 "mrp": original_price,
-                "product_discount_applied": apply_product_discount,
-                "gst_rate": pricing.get("gst_rate", settings.get("gst_rate")),
+                "product_discount_applied": bool(apply_product_discount),
+                        "gst_rate": pricing.get("gst_rate", settings.get("gst_rate")),
                 "rule_source": pricing.get("rule_source"),
             },
         })
@@ -2021,6 +2230,8 @@ class VendorRegisterIn(BaseModel):
     business_address: str
     business_pincode: str
     business_category: Optional[str] = ""
+    # fruits_vegetables | kirana_store. Optional for API compatibility; the signup form requires it.
+    shop_type: Optional[str] = None
     gst_number: Optional[str] = ""
     pan_number: Optional[str] = ""
     referral_code: Optional[str] = None
@@ -2031,6 +2242,10 @@ class VendorRegisterIn(BaseModel):
 class VendorStatusUpdate(BaseModel):
     status: str
     reason: Optional[str] = ""
+
+
+class VendorShopTypeUpdate(BaseModel):
+    shop_type: str
 
 
 class BusinessHoursIn(BaseModel):
@@ -2097,6 +2312,9 @@ def vendor_to_out(v: dict) -> dict:
         "verified": v.get("status") == "Approved",
         "commission_pct": v.get("commission_pct", DEFAULT_COMMISSION_PCT),
         "business_category": v.get("business_category", ""),
+        "shop_type": normalize_shop_type(v.get("shop_type")),
+        "shop_type_label": SHOP_TYPE_LABELS.get(normalize_shop_type(v.get("shop_type"))),
+        "shop_type_needs_review": bool(v.get("shop_type_needs_review", normalize_shop_type(v.get("shop_type")) is None)),
         "gst_number": v.get("gst_number", ""),
         "pan_number": v.get("pan_number", ""),
         "bank_details": v.get("bank_details", {}),
@@ -2124,6 +2342,15 @@ async def get_vendor_for_user(user: dict) -> dict:
 
 @api.post("/vendors/register")
 async def vendor_register(payload: VendorRegisterIn):
+    shop_type = normalize_shop_type(payload.shop_type)
+    if payload.shop_type and not shop_type:
+        raise HTTPException(status_code=400, detail="Invalid shop_type. Use fruits_vegetables or kirana_store")
+    if not shop_type:
+        inferred = infer_vendor_shop_type(
+            {"business_name": payload.business_name, "business_category": payload.business_category},
+            [], {},
+        )
+        shop_type = inferred or SHOP_TYPE_KIRANA_STORE
     email = payload.email.lower().strip()
     existing = await db.users.find_one({"email": email})
     if existing:
@@ -2149,6 +2376,8 @@ async def vendor_register(payload: VendorRegisterIn):
         "business_address": payload.business_address.strip(),
         "business_pincode": payload.business_pincode.strip(),
         "business_category": (payload.business_category or "").strip(),
+        "shop_type": shop_type,
+        "shop_type_source": "registration" if payload.shop_type else "registration_inferred",
         "gst_number": (payload.gst_number or "").strip(),
         "pan_number": (payload.pan_number or "").strip(),
         "docs": payload.docs.model_dump(),
@@ -2186,20 +2415,28 @@ async def vendor_me(user: dict = Depends(get_current_user)):
 
 # Public listing (approved vendors only)
 @api.get("/vendors")
-async def list_public_vendors():
-    docs = await db.vendors.find({"status": "Approved"}).to_list(500)
+async def list_public_vendors(shop_type: Optional[str] = None):
+    query = {"status": "Approved", "shop_type_needs_review": {"$ne": True}}
+    if shop_type:
+        st = normalize_shop_type(shop_type)
+        if not st:
+            raise HTTPException(status_code=400, detail="Invalid shop_type. Use fruits_vegetables or kirana_store")
+        query["shop_type"] = st
+    docs = await db.vendors.find(query).to_list(500)
     return [
         {
             "id": str(v["_id"]),
             "business_name": v["business_name"],
-            "description": v.get("business_description", ""),
-            "shop_logo": v.get("shop_logo", ""),
-            "banner_image": v.get("banner_image", ""),
-            "business_address": v.get("business_address", ""),
-            "business_pincode": v.get("business_pincode", ""),
-            "open_now": v.get("open_now", True),
-            "vacation_mode": v.get("vacation_mode", False),
-            "verified": v.get("status") == "Approved",
+              "description": v.get("business_description", ""),
+              "shop_logo": v.get("shop_logo", ""),
+              "banner_image": v.get("banner_image", ""),
+              "business_address": v.get("business_address", ""),
+              "business_pincode": v.get("business_pincode", ""),
+              "open_now": v.get("open_now", True),
+              "vacation_mode": v.get("vacation_mode", False),
+              "verified": v.get("status") == "Approved",
+            "shop_type": normalize_shop_type(v.get("shop_type")),
+            "shop_type_label": SHOP_TYPE_LABELS.get(normalize_shop_type(v.get("shop_type"))),
         }
         for v in docs
     ]
@@ -2208,7 +2445,11 @@ async def list_public_vendors():
 @api.get("/vendors/{vendor_id}")
 async def get_public_vendor(vendor_id: str):
     oid = safe_object_id(vendor_id)
-    v = await db.vendors.find_one({"_id": oid, "status": "Approved"})
+    v = await db.vendors.find_one({
+        "_id": oid,
+        "status": "Approved",
+        "shop_type_needs_review": {"$ne": True},
+    })
     if not v:
         raise HTTPException(status_code=404, detail="Vendor not found")
     products = await db.products.find({
@@ -2231,25 +2472,134 @@ async def get_public_vendor(vendor_id: str):
     return {
         "id": str(v["_id"]),
         "business_name": v["business_name"],
-        "business_description": v.get("business_description", ""),
-        "business_address": v.get("business_address", ""),
-        "business_pincode": v.get("business_pincode", ""),
-
-
-        "shop_logo": v.get("shop_logo", ""),
-        "banner_image": v.get("banner_image", ""),
-        "business_hours": v.get("business_hours", {}),
-        "open_now": v.get("open_now", True),
-        "vacation_mode": v.get("vacation_mode", False),
-        "vacation_message": v.get("vacation_message", ""),
-        "delivery_radius_km": v.get("delivery_radius_km"),
-        "min_order_amount": v.get("min_order_amount", 0),
-        "estimated_delivery_min": v.get("estimated_delivery_min"),
-        "verified": True,
+              "business_description": v.get("business_description", ""),
+              "business_address": v.get("business_address", ""),
+              "business_pincode": v.get("business_pincode", ""),
+              "shop_logo": v.get("shop_logo", ""),
+              "banner_image": v.get("banner_image", ""),
+              "business_hours": v.get("business_hours", {}),
+              "open_now": v.get("open_now", True),
+              "vacation_mode": v.get("vacation_mode", False),
+              "vacation_message": v.get("vacation_message", ""),
+              "delivery_radius_km": v.get("delivery_radius_km"),
+              "min_order_amount": v.get("min_order_amount", 0),
+              "estimated_delivery_min": v.get("estimated_delivery_min"),
+              "verified": True,
         "created_at": v.get("created_at"),
         "avg_rating": avg_rating,
-        "review_count": len(reviews),
+              "review_count": len(reviews),
+        "shop_type": normalize_shop_type(v.get("shop_type")),
+        "shop_type_label": SHOP_TYPE_LABELS.get(normalize_shop_type(v.get("shop_type"))),
         "products": enriched_products,
+    }
+
+
+# Customer navigation: vendor -> automatic categories -> vendor's own products
+_PUBLIC_PRODUCT_FILTER = [{"approval_status": "approved"}, {"approval_status": {"$exists": False}}]
+
+
+async def _get_approved_vendor(vendor_id: str) -> dict:
+    v = await db.vendors.find_one({
+        "_id": safe_object_id(vendor_id),
+        "status": "Approved",
+        "shop_type_needs_review": {"$ne": True},
+    })
+    if not v:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    return v
+
+
+@api.get("/vendors/{vendor_id}/categories")
+async def get_vendor_categories(vendor_id: str):
+    """Return this vendor's own categories plus legacy global categories."""
+    v = await _get_approved_vendor(vendor_id)
+    vendor_id_str = str(v["_id"])
+    shop_type = normalize_shop_type(v.get("shop_type"))
+
+    legacy = await get_categories_for_shop_type(shop_type) if shop_type else []
+    custom = await db.vendor_categories.find(
+        {"vendor_id": vendor_id_str}
+    ).sort("created_at", 1).to_list(1000)
+
+    rows = await db.products.find(
+        {"vendor_id": vendor_id_str, "$or": _PUBLIC_PRODUCT_FILTER},
+        {"category_slug": 1},
+    ).to_list(10000)
+
+    counts = {}
+    for row in rows:
+        slug = row.get("category_slug")
+        counts[slug] = counts.get(slug, 0) + 1
+
+    seen = set()
+    categories = []
+
+    for cat in custom:
+        seen.add(cat["slug"])
+        categories.append(vendor_category_to_out(cat, counts.get(cat["slug"], 0)))
+
+    for cat in legacy:
+        if cat["slug"] not in seen:
+            categories.append({
+                **category_to_out(cat),
+                "product_count": counts.get(cat["slug"], 0),
+                "is_vendor_category": False,
+            })
+
+    return {
+        "vendor_id": vendor_id_str,
+        "shop_type": shop_type,
+        "shop_type_label": SHOP_TYPE_LABELS.get(shop_type),
+        "categories": categories,
+    }
+
+
+@api.get("/vendors/{vendor_id}/products")
+async def get_vendor_category_products(vendor_id: str, category: Optional[str] = None, limit: int = 200):
+    """Only approved products belonging to this vendor."""
+    v = await _get_approved_vendor(vendor_id)
+    vendor_id_str = str(v["_id"])
+    query = {"vendor_id": vendor_id_str, "$or": _PUBLIC_PRODUCT_FILTER}
+    cat_out = None
+
+    if category:
+        cat = await db.vendor_categories.find_one({
+            "vendor_id": vendor_id_str,
+            "slug": category,
+        })
+
+        if cat:
+            cat_out = vendor_category_to_out(cat)
+        else:
+            shop_type = normalize_shop_type(v.get("shop_type"))
+            cat = await db.categories.find_one({"slug": category})
+            if not cat or not shop_type or category_shop_type(cat) != shop_type:
+                raise HTTPException(status_code=404, detail="Category not found for this vendor")
+            cat_out = category_to_out(cat)
+
+        query["category_slug"] = category
+
+    limit = max(1, min(limit, 500))
+    docs = await db.products.find(query).sort("created_at", -1).to_list(limit)
+    settings = await get_platform_settings(db)
+    rules = await get_active_pricing_rules(db)
+    products = []
+
+    for doc in docs:
+        enriched = await enrich_product_for_customer(db, doc, settings=settings, rules=rules)
+        products.append(product_to_out(enriched))
+
+    st = normalize_shop_type(v.get("shop_type"))
+    return {
+        "vendor_id": vendor_id_str,
+        "vendor": {
+            "id": vendor_id_str,
+            "business_name": v["business_name"],
+            "shop_type": st,
+            "shop_type_label": SHOP_TYPE_LABELS.get(st),
+        },
+        "category": cat_out,
+        "products": products,
     }
 
 
@@ -2296,12 +2646,671 @@ async def admin_update_vendor_status(vendor_id: str, payload: VendorStatusUpdate
     return vendor_to_out(vendor)
 
 
+@api.patch("/admin/vendors/{vendor_id}/shop-type")
+async def admin_update_vendor_shop_type(vendor_id: str, payload: VendorShopTypeUpdate, admin: dict = Depends(require_admin)):
+    shop_type = normalize_shop_type(payload.shop_type)
+    if not shop_type:
+        raise HTTPException(status_code=400, detail="Invalid shop_type. Use fruits_vegetables or kirana_store")
+    oid = safe_object_id(vendor_id)
+    old_vendor = await db.vendors.find_one({"_id": oid})
+    if not old_vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    await db.vendors.update_one({"_id": oid}, {"$set": {"shop_type": shop_type, "shop_type_source": "admin", "shop_type_needs_review": False}})
+    vendor = await db.vendors.find_one({"_id": oid})
+    allowed_slugs = [c["slug"] for c in await get_categories_for_shop_type(shop_type)]
+    mismatched = await db.products.count_documents(
+        {"vendor_id": str(oid), "category_slug": {"$nin": allowed_slugs}}
+    )
+    await log_audit(db, actor_id=admin["id"], actor_role="admin", action="vendor_shop_type_change",
+                    entity_type="vendor", entity_id=vendor_id,
+                    previous_value=normalize_shop_type(old_vendor.get("shop_type")), new_value=shop_type)
+    return {**vendor_to_out(vendor), "mismatched_product_count": mismatched}
+
+
 # Vendor: my products
+
+
+# ==================== EXCEL_VENDOR_IMPORT_V1 ====================
+
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.worksheet.datavalidation import DataValidation
+
+
+def _excel_slug(value: str) -> str:
+    value = re.sub(r"[^\w\s-]", "", str(value).strip().lower())
+    return re.sub(r"[\s_-]+", "-", value).strip("-")
+
+
+def _excel_number(value, label, row, errors, allow_zero=False):
+    try:
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError()
+        if number < 0 or (not allow_zero and number <= 0):
+            raise ValueError()
+        return number
+    except (TypeError, ValueError):
+        errors.append(f"Row {row}: Invalid {label}.")
+        return None
+
+
+async def _vendor_excel_categories(vendor):
+    shop_type = normalize_shop_type(vendor.get("shop_type"))
+    legacy = await get_categories_for_shop_type(shop_type) if shop_type else []
+    custom = await db.vendor_categories.find(
+        {"vendor_id": str(vendor["_id"])}
+    ).to_list(1000)
+
+    result = []
+    seen = set()
+
+    for cat in custom + legacy:
+        slug = cat.get("slug")
+        if slug and slug not in seen:
+            seen.add(slug)
+            result.append({
+                "name": cat.get("name", slug),
+                "slug": slug,
+            })
+
+    return result
+
+
+@api.get("/vendor/products/import/template")
+async def vendor_product_import_template(
+    user: dict = Depends(get_current_user)
+):
+    vendor = await get_vendor_for_user(user)
+    categories = await _vendor_excel_categories(vendor)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Products"
+
+    headers = [
+        "Product Name", "Category", "Pack Size", "MRP",
+        "Selling Price", "Discount (%)", "Stock Quantity",
+        "Stock Status", "Description", "Image URL"
+    ]
+
+    ws.append(headers)
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = "A1:J1"
+
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="1B4332")
+        cell.alignment = Alignment(horizontal="center")
+
+    widths = [28, 24, 16, 14, 16, 15, 17, 18, 35, 45]
+    for index, width in enumerate(widths, 1):
+        ws.column_dimensions[chr(64 + index)].width = width
+
+    ws.append([
+        "Example Product",
+        categories[0]["name"] if categories else "",
+        "100 g",
+        20,
+        18,
+        10,
+        25,
+        "In Stock",
+        "Example description",
+        "https://example.com/product-image.jpg"
+    ])
+
+    status_validation = DataValidation(
+        type="list",
+        formula1='"In Stock,Out of Stock"',
+        allow_blank=False
+    )
+    ws.add_data_validation(status_validation)
+    status_validation.add("H2:H500")
+
+    cat_ws = wb.create_sheet("Allowed Categories")
+    cat_ws.append(["Category Name", "Category Slug"])
+    for cell in cat_ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="1B4332")
+
+    for cat in categories:
+        cat_ws.append([cat["name"], cat["slug"]])
+
+    cat_ws.column_dimensions["A"].width = 30
+    cat_ws.column_dimensions["B"].width = 35
+
+    instructions = wb.create_sheet("Instructions")
+    instruction_rows = [
+        ["VENDOR PRODUCT IMPORT INSTRUCTIONS"],
+        ["1. Fill the Products sheet outside the website."],
+        ["2. Use only categories listed in Allowed Categories."],
+        ["3. Use one row per pack size / variant."],
+        ["4. Repeat the product name for each of its pack sizes."],
+        ["5. MRP and Selling Price must be positive; selling price cannot exceed MRP."],
+        ["6. Discount (%) is optional. If supplied, it must match the MRP calculation."],
+        ["7. Stock Quantity must be a whole number greater than or equal to zero."],
+        ["8. Stock Status must be In Stock when quantity > 0, otherwise Out of Stock."],
+        ["9. Image URL is required and must be an HTTP/HTTPS image URL."],
+        ["10. Existing products are never overwritten."],
+        ["11. Upload the completed .xlsx file and review the preview before confirming."],
+        ["12. Remove the Example Product row before uploading."],
+    ]
+    for row in instruction_rows:
+        instructions.append(row)
+    instructions.column_dimensions["A"].width = 115
+    instructions["A1"].font = Font(bold=True, size=14, color="1B4332")
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition":
+            'attachment; filename="Ambajogai-Vendor-Product-Template.xlsx"'
+        }
+    )
+
+
+@api.post("/vendor/products/import/preview")
+async def vendor_product_import_preview(
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user)
+):
+    vendor = await get_vendor_for_user(user)
+
+    if not file.filename or not file.filename.lower().endswith(".xlsx"):
+        raise HTTPException(400, "Please upload an .xlsx Excel file.")
+
+    raw = await file.read()
+    if len(raw) > 5 * 1024 * 1024:
+        raise HTTPException(413, "Excel file must be smaller than 5 MB.")
+
+    try:
+        wb = load_workbook(BytesIO(raw), read_only=True, data_only=True)
+        if "Products" not in wb.sheetnames:
+            raise ValueError("Products worksheet is missing.")
+        ws = wb["Products"]
+    except Exception as exc:
+        raise HTTPException(400, f"Unable to read Excel file: {exc}")
+
+    rows = ws.iter_rows(values_only=True)
+    header_row = next(rows, None)
+
+    if not header_row:
+        raise HTTPException(400, "Excel file is empty.")
+
+    headers = {
+        str(value).strip().casefold(): index
+        for index, value in enumerate(header_row)
+        if value is not None
+    }
+
+    required = [
+        "product name", "category", "pack size", "mrp",
+        "selling price", "stock quantity", "stock status", "image url"
+    ]
+
+    missing = [h for h in required if h not in headers]
+    if missing:
+        raise HTTPException(
+            400, "Missing required columns: " + ", ".join(missing)
+        )
+
+    categories = await _vendor_excel_categories(vendor)
+    category_map = {}
+
+    for cat in categories:
+        category_map[cat["name"].strip().casefold()] = cat["slug"]
+        category_map[cat["slug"].strip().casefold()] = cat["slug"]
+
+    errors = []
+    grouped = {}
+    row_count = 0
+
+    for row_number, values in enumerate(rows, start=2):
+        if not values or not any(v is not None and str(v).strip() for v in values):
+            continue
+
+        row_count += 1
+        if row_count > 500:
+            errors.append("Maximum 500 data rows are allowed per import.")
+            break
+
+        def get(column):
+            index = headers.get(column)
+            return values[index] if index is not None and index < len(values) else None
+
+        name = str(get("product name") or "").strip()
+        category_text = str(get("category") or "").strip()
+        pack = str(get("pack size") or "").strip()
+        image_url = str(get("image url") or "").strip()
+        description = str(get("description") or "").strip()
+
+        if not name:
+            errors.append(f"Row {row_number}: Product Name is required.")
+            continue
+
+        if not pack:
+            errors.append(f"Row {row_number}: Pack Size is required.")
+            continue
+
+        category_slug = category_map.get(category_text.casefold())
+        if not category_slug:
+            errors.append(
+                f"Row {row_number}: Category '{category_text}' is not allowed for this vendor."
+            )
+            continue
+
+        try:
+            await validate_category_for_vendor(vendor, category_slug)
+        except HTTPException as exc:
+            errors.append(f"Row {row_number}: {exc.detail}")
+            continue
+
+        mrp = _excel_number(get("mrp"), "MRP", row_number, errors)
+        price = _excel_number(get("selling price"), "Selling Price", row_number, errors)
+        stock_value = _excel_number(
+            get("stock quantity"), "Stock Quantity", row_number, errors,
+            allow_zero=True
+        )
+
+        if mrp is None or price is None or stock_value is None:
+            continue
+
+        if price > mrp:
+            errors.append(f"Row {row_number}: Selling Price cannot exceed MRP.")
+            continue
+
+        if not float(stock_value).is_integer():
+            errors.append(f"Row {row_number}: Stock Quantity must be a whole number.")
+            continue
+
+        stock = int(stock_value)
+        status = str(get("stock status") or "").strip().casefold()
+        expected_status = "in stock" if stock > 0 else "out of stock"
+
+        if status not in ("in stock", "out of stock"):
+            errors.append(f"Row {row_number}: Stock Status must be In Stock or Out of Stock.")
+            continue
+
+        if status != expected_status:
+            errors.append(
+                f"Row {row_number}: Stock Status must be '{'In Stock' if stock > 0 else 'Out of Stock'}' for quantity {stock}."
+            )
+            continue
+
+        parsed_url = urlparse(image_url)
+        if parsed_url.scheme not in ("http", "https") or not parsed_url.netloc:
+            errors.append(f"Row {row_number}: A valid HTTP/HTTPS Image URL is required.")
+            continue
+
+        discount = round(((mrp - price) / mrp) * 100, 2)
+        supplied_discount = get("discount (%)")
+
+        if supplied_discount is not None and str(supplied_discount).strip():
+            try:
+                if abs(float(supplied_discount) - discount) > 0.5:
+                    errors.append(
+                        f"Row {row_number}: Discount (%) does not match MRP and Selling Price."
+                    )
+                    continue
+            except (TypeError, ValueError):
+                errors.append(f"Row {row_number}: Invalid Discount (%).")
+                continue
+
+        key = (name.casefold(), category_slug)
+        product = grouped.setdefault(key, {
+            "name": name,
+            "category_slug": category_slug,
+            "description": description,
+            "image": image_url,
+            "variants": [],
+            "rows": [],
+        })
+
+        if product["image"] != image_url:
+            errors.append(f"Row {row_number}: Image URL must match other rows of the same product.")
+
+        if product["description"] != description and description:
+            errors.append(f"Row {row_number}: Description must match other rows of the same product.")
+
+        if any(v["label"].casefold() == pack.casefold() for v in product["variants"]):
+            errors.append(f"Row {row_number}: Duplicate Pack Size '{pack}' for {name}.")
+            continue
+
+        product["variants"].append({
+            "label": pack,
+            "unit": pack,
+            "price": price,
+            "mrp": mrp,
+            "stock": stock,
+        })
+        product["rows"].append(row_number)
+
+    if row_count == 0:
+        errors.append("No product rows found. Remove the example row only after entering products.")
+
+    products = []
+    seen_slugs = set()
+
+    for item in grouped.values():
+        slug = _excel_slug(item["name"])
+
+        if not slug:
+            errors.append(f"Invalid product name: {item['name']}")
+            continue
+
+        if slug in seen_slugs:
+            errors.append(f"Duplicate product slug in Excel: {slug}")
+            continue
+
+        seen_slugs.add(slug)
+
+        existing = await db.products.find_one({"slug": slug})
+        if existing:
+            errors.append(
+                f"Product '{item['name']}' already exists. Existing products will not be overwritten."
+            )
+            continue
+
+        first = item["variants"][0]
+        total_stock = sum(v["stock"] for v in item["variants"])
+        discount = round(((first["mrp"] - first["price"]) / first["mrp"]) * 100, 2)
+
+        products.append({
+            "name": item["name"],
+            "slug": slug,
+            "description": item["description"],
+            "category_slug": item["category_slug"],
+            "image": item["image"],
+            "price": first["price"],
+            "mrp": first["mrp"],
+            "unit": first["label"],
+            "stock": total_stock,
+            "variants": item["variants"],
+            "discount_percent": discount,
+            "featured": False,
+            "popular": False,
+            "rows": item["rows"],
+        })
+
+    if errors:
+        return {
+            "valid": False,
+            "token": None,
+            "product_count": len(products),
+            "row_count": row_count,
+            "errors": errors,
+            "products": [
+                {
+                    "name": p["name"],
+                    "category": p["category_slug"],
+                    "variant_count": len(p["variants"]),
+                }
+                for p in products
+            ],
+        }
+
+    token = str(uuid.uuid4())
+    await db.vendor_import_previews.insert_one({
+        "_id": token,
+        "vendor_id": str(vendor["_id"]),
+        "products": products,
+        "created_at": now_utc(),
+        "expires_at": now_utc() + timedelta(minutes=30),
+        "consumed": False,
+    })
+
+    return {
+        "valid": True,
+        "token": token,
+        "product_count": len(products),
+        "row_count": row_count,
+        "errors": [],
+        "products": [
+            {
+                "name": p["name"],
+                "category": p["category_slug"],
+                "variant_count": len(p["variants"]),
+                "variants": p["variants"],
+            }
+            for p in products
+        ],
+    }
+
+
+@api.post("/vendor/products/import/confirm")
+async def vendor_product_import_confirm(
+    payload: dict,
+    user: dict = Depends(get_current_user)
+):
+    vendor = await get_vendor_for_user(user)
+    token = str(payload.get("token") or "").strip()
+
+    if not token:
+        raise HTTPException(400, "Import preview token is required.")
+
+    preview = await db.vendor_import_previews.find_one({
+        "_id": token,
+        "vendor_id": str(vendor["_id"]),
+        "consumed": False,
+        "expires_at": {"$gt": now_utc()},
+    })
+
+    if not preview:
+        raise HTTPException(
+            400, "Preview expired, already used, or does not belong to this vendor. Upload again."
+        )
+
+    products = preview.get("products", [])
+    if not products:
+        raise HTTPException(400, "No valid products in this import.")
+
+    await db.vendor_import_previews.update_one(
+        {"_id": token, "consumed": False},
+        {"$set": {"consumed": True}}
+    )
+
+    inserted_ids = []
+
+    try:
+        for item in products:
+            if await db.products.find_one({"slug": item["slug"]}):
+                raise HTTPException(
+                    409, f"Product '{item['name']}' already exists. Import cancelled."
+                )
+
+            await validate_category_for_vendor(vendor, item["category_slug"])
+
+            product_payload = ProductIn(**{
+                key: value for key, value in item.items()
+                if key in ProductIn.model_fields
+            })
+
+            doc = _product_payload_to_doc(product_payload, as_vendor=True)
+            doc["created_at"] = iso_now()
+            doc["vendor_id"] = str(vendor["_id"])
+            doc["vendor_name"] = vendor["business_name"]
+            doc["approval_status"] = "pending"
+            doc["product_status"] = "active"
+
+            result = await db.products.insert_one(doc)
+            inserted_ids.append(result.inserted_id)
+
+        await db.vendor_import_previews.delete_one({"_id": token})
+
+        return {
+            "success": True,
+            "imported_count": len(inserted_ids),
+            "message": f"{len(inserted_ids)} products submitted for admin approval."
+        }
+
+    except Exception as exc:
+        if inserted_ids:
+            await db.products.delete_many({
+                "_id": {"$in": inserted_ids},
+                "vendor_id": str(vendor["_id"]),
+            })
+
+        await db.vendor_import_previews.update_one(
+            {"_id": token},
+            {"$set": {"consumed": False}}
+        )
+
+        if isinstance(exc, HTTPException):
+            raise exc
+
+        logger.exception("Vendor Excel import failed")
+        raise HTTPException(500, "Import failed. No products from this batch were retained.")
+
+
+# ==================== END EXCEL_VENDOR_IMPORT_V1 ====================
+
+
 @api.get("/vendor/products")
 async def vendor_my_products(user: dict = Depends(get_current_user)):
     vendor = await get_vendor_for_user(user)
     docs = await db.products.find({"vendor_id": str(vendor["_id"])}).sort("created_at", -1).to_list(1000)
     return [product_to_vendor_out(p) for p in docs]
+
+
+@api.get("/vendor/categories")
+async def vendor_my_categories(user: dict = Depends(get_current_user)):
+    vendor = await get_vendor_for_user(user)
+    shop_type = normalize_shop_type(vendor.get("shop_type"))
+
+    legacy = await get_categories_for_shop_type(shop_type) if shop_type else []
+    custom = await db.vendor_categories.find(
+        {"vendor_id": str(vendor["_id"])}
+    ).sort("created_at", 1).to_list(1000)
+
+    seen = set()
+    categories = []
+
+    for cat in custom:
+        seen.add(cat["slug"])
+        count = await db.products.count_documents({
+            "vendor_id": str(vendor["_id"]),
+            "category_slug": cat["slug"],
+        })
+        categories.append(vendor_category_to_out(cat, count))
+
+    for cat in legacy:
+        if cat["slug"] not in seen:
+            categories.append({
+                **category_to_out(cat),
+                "is_vendor_category": False,
+            })
+
+    return {
+        "shop_type": shop_type,
+        "shop_type_label": SHOP_TYPE_LABELS.get(shop_type),
+        "categories": categories,
+    }
+
+
+@api.post("/vendor/categories")
+async def vendor_create_category(payload: dict, user: dict = Depends(get_current_user)):
+    vendor = await get_vendor_for_user(user)
+    name = str(payload.get("name") or "").strip()
+
+    if not name:
+        raise HTTPException(status_code=400, detail="Category name is required")
+    if len(name) > 60:
+        raise HTTPException(status_code=400, detail="Category name must be 60 characters or less")
+
+    shop_type = normalize_shop_type(vendor.get("shop_type"))
+    if not shop_type:
+        raise HTTPException(status_code=400, detail="Ask admin to set your shop type first")
+
+    slug = make_vendor_category_slug(name)
+
+    if await db.vendor_categories.find_one({"vendor_id": str(vendor["_id"]), "slug": slug}):
+        raise HTTPException(status_code=409, detail="You already have a category with this name")
+
+    if await db.categories.find_one({"slug": slug}):
+        raise HTTPException(status_code=409, detail="This category slug is reserved by an existing store category. Choose another name.")
+
+    doc = {
+        "vendor_id": str(vendor["_id"]),
+        "name": name,
+        "slug": slug,
+        "description": str(payload.get("description") or "").strip(),
+        "image": str(payload.get("image") or "").strip(),
+        "shop_type": shop_type,
+        "created_at": iso_now(),
+        "updated_at": iso_now(),
+    }
+
+    result = await db.vendor_categories.insert_one(doc)
+    doc["_id"] = result.inserted_id
+    return {"category": vendor_category_to_out(doc)}
+
+
+@api.put("/vendor/categories/{category_id}")
+async def vendor_update_category(category_id: str, payload: dict, user: dict = Depends(get_current_user)):
+    vendor = await get_vendor_for_user(user)
+    oid = safe_object_id(category_id)
+
+    if not oid:
+        raise HTTPException(status_code=404, detail="Category not found")
+
+    query = {"_id": oid, "vendor_id": str(vendor["_id"])}
+    existing = await db.vendor_categories.find_one(query)
+
+    if not existing:
+        raise HTTPException(status_code=404, detail="Your category was not found")
+
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Category name is required")
+    if len(name) > 60:
+        raise HTTPException(status_code=400, detail="Category name must be 60 characters or less")
+
+    # Slug remains stable so existing product assignments and storefront links keep working.
+    update = {
+        "name": name,
+        "description": str(payload.get("description") or "").strip(),
+        "image": str(payload.get("image") or "").strip(),
+        "updated_at": iso_now(),
+    }
+
+    await db.vendor_categories.update_one(query, {"$set": update})
+    updated = await db.vendor_categories.find_one(query)
+    return {"category": vendor_category_to_out(updated)}
+
+
+@api.delete("/vendor/categories/{category_id}")
+async def vendor_delete_category(category_id: str, user: dict = Depends(get_current_user)):
+    vendor = await get_vendor_for_user(user)
+    oid = safe_object_id(category_id)
+
+    if not oid:
+        raise HTTPException(status_code=404, detail="Category not found")
+
+    query = {"_id": oid, "vendor_id": str(vendor["_id"])}
+    category = await db.vendor_categories.find_one(query)
+
+    if not category:
+        raise HTTPException(status_code=404, detail="Your category was not found")
+
+    count = await db.products.count_documents({
+        "vendor_id": str(vendor["_id"]),
+        "category_slug": category["slug"],
+    })
+
+    if count:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This category has {count} product(s). Move those products to another category before deleting it.",
+        )
+
+    await db.vendor_categories.delete_one(query)
+    return {"message": "Category deleted successfully"}
 
 
 def _product_payload_to_doc(payload: ProductIn, as_vendor: bool = False) -> dict:
@@ -2329,6 +3338,7 @@ async def vendor_create_product(payload: ProductIn, user: dict = Depends(get_cur
     exists = await db.products.find_one({"slug": payload.slug})
     if exists:
         raise HTTPException(status_code=400, detail="Slug already used")
+    await validate_category_for_vendor(vendor, payload.category_slug)
     doc = _product_payload_to_doc(payload, as_vendor=True)
     doc["created_at"] = iso_now()
     doc["vendor_id"] = str(vendor["_id"])
@@ -2349,6 +3359,8 @@ async def vendor_update_product(prod_id: str, payload: ProductIn, user: dict = D
         raise HTTPException(status_code=404, detail="Product not found")
     if existing.get("vendor_id") != str(vendor["_id"]):
         raise HTTPException(status_code=403, detail="Not your product")
+    if payload.category_slug != existing.get("category_slug"):
+        await validate_category_for_vendor(vendor, payload.category_slug)
     update = _product_payload_to_doc(payload, as_vendor=True)
     settings = await get_platform_settings(db)
     if settings.get("product_approval_required", True):
@@ -2514,9 +3526,6 @@ async def vendor_my_orders(user: dict = Depends(get_current_user)):
             "id": str(o["_id"]),
             "created_at": o.get("created_at"),
             "customer_name": o.get("user_name"),
-            "customer_phone": o["address"]["phone"],
-            "address": o["address"],
-            "payment_method": o["payment_method"],
             "items": vendor_items,
             "my_subtotal": my_subtotal,
             "overall_status": o["status"],
@@ -3454,11 +4463,12 @@ async def root():
 
 SEED_CATEGORIES = [
     {"name": "Fruits & Vegetables", "slug": "fruits-vegetables", "image": "https://images.unsplash.com/photo-1566385101042-1a0aa0c1268c?w=600&q=80"},
+    {"name": "Cleaning & Household", "slug": "cleaning-household", "image": "https://res.cloudinary.com/qti4inuv/image/upload/v1789742176/grocery_products/lkewyx6txd3jydvd8c6e.jpg"},
     {"name": "Dairy & Bakery", "slug": "dairy-bakery", "image": "https://images.unsplash.com/photo-1550583724-b2692b85b150?w=600&q=80"},
-    {"name": "Staples & Grains", "slug": "staples-grains", "image": "https://images.unsplash.com/photo-1546702005-7f8e5aeab4a6?w=600&q=80"},
-    {"name": "Spices & Masala", "slug": "spices-masala", "image": "https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=600&q=80"},
-    {"name": "Snacks & Beverages", "slug": "snacks-beverages", "image": "https://images.unsplash.com/photo-1621939514649-280e2ee25f60?w=600&q=80"},
     {"name": "Personal Care", "slug": "personal-care", "image": "https://images.unsplash.com/photo-1556228720-195a672e8a03?w=600&q=80"},
+    {"name": "Snacks & Beverages", "slug": "snacks-beverages", "image": "https://images.unsplash.com/photo-1621939514649-280e2ee25f60?w=600&q=80"},
+    {"name": "Spices & Masala", "slug": "spices-masala", "image": "https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=600&q=80"},
+    {"name": "Staples & Grains", "slug": "staples-grains", "image": "https://images.unsplash.com/photo-1546702005-7f8e5aeab4a6?w=600&q=80"},
 ]
 
 SEED_PRODUCTS = [
@@ -3502,6 +4512,11 @@ async def seed_data():
     await db.users.create_index("email", unique=True)
     await db.products.create_index("slug", unique=True)
     await db.categories.create_index("slug", unique=True)
+    await db.vendor_categories.create_index(
+        [("vendor_id", 1), ("slug", 1)],
+        unique=True,
+    )
+    await db.vendor_categories.create_index([("vendor_id", 1), ("created_at", 1)])
     await db.vendors.create_index("owner_id")
     await db.coupons.create_index("code", unique=True)
 
@@ -3559,7 +4574,22 @@ async def seed_data():
 
     # Categories
     for c in SEED_CATEGORIES:
-        await db.categories.update_one({"slug": c["slug"]}, {"$setOnInsert": c}, upsert=True)
+        seeded_shop_type = derive_category_shop_type(c["slug"], c["name"])
+        await db.categories.update_one(
+            {"slug": c["slug"]},
+            {
+                "$set": c,
+                "$setOnInsert": {"shop_type": seeded_shop_type},
+            },
+            upsert=True,
+        )
+
+    # Migration: group existing categories and vendors by shop type (idempotent, non-destructive)
+    try:
+        stats = await migrate_shop_types()
+        logger.info(f"Shop type migration: {stats}")
+    except Exception:
+        logger.exception("Shop type migration failed; records were left unchanged")
 
     # Products
     for p in SEED_PRODUCTS:
