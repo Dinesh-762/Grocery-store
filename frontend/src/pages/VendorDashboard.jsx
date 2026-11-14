@@ -633,7 +633,7 @@ export function VProducts() {
           <div>
             <h3 className="font-semibold text-[#1B4332]">Bulk Product Import (Excel)</h3>
             <p className="mt-1 text-xs text-[#68756B]">
-              Download the template, fill it in Excel, then upload and review before importing.
+              Add each product once. Enter Quantity, MRP, Selling Price and Stock as slash-separated values in the same order.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -681,7 +681,7 @@ export function VProducts() {
           </div>
 
           <p className="mt-2 text-sm text-[#4A4A4A]">
-            Rows: {importPreview.row_count || 0} ? Products: {importPreview.product_count || 0}
+            Variants: {importPreview.row_count || 0} · Products: {importPreview.product_count || 0}
           </p>
 
           {importPreview.errors?.length > 0 && (

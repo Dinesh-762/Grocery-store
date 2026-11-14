@@ -2674,7 +2674,6 @@ async def admin_update_vendor_shop_type(vendor_id: str, payload: VendorShopTypeU
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
-from openpyxl.worksheet.datavalidation import DataValidation
 
 
 def _excel_slug(value: str) -> str:
@@ -2729,44 +2728,30 @@ async def vendor_product_import_template(
     ws.title = "Products"
 
     headers = [
-        "Product Name", "Category", "Pack Size", "MRP",
-        "Selling Price", "Discount (%)", "Stock Quantity",
-        "Stock Status", "Description", "Image URL"
+        "Product Name",
+        "Category",
+        "Description",
+        "Image URL",
+        "Quantity",
+        "MRP (?)",
+        "Selling Price (?)",
+        "Stock",
     ]
 
     ws.append(headers)
     ws.freeze_panes = "A2"
-    ws.auto_filter.ref = "A1:J1"
+    ws.auto_filter.ref = f"A1:{ws.cell(row=1, column=len(headers)).column_letter}1"
 
     for cell in ws[1]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="1B4332")
-        cell.alignment = Alignment(horizontal="center")
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
 
-    widths = [28, 24, 16, 14, 16, 15, 17, 18, 35, 45]
+    widths = [28, 24, 35, 45, 38, 25, 30, 22]
     for index, width in enumerate(widths, 1):
-        ws.column_dimensions[chr(64 + index)].width = width
+        ws.column_dimensions[ws.cell(row=1, column=index).column_letter].width = width
 
-    ws.append([
-        "Example Product",
-        categories[0]["name"] if categories else "",
-        "100 g",
-        20,
-        18,
-        10,
-        25,
-        "In Stock",
-        "Example description",
-        "https://example.com/product-image.jpg"
-    ])
-
-    status_validation = DataValidation(
-        type="list",
-        formula1='"In Stock,Out of Stock"',
-        allow_blank=False
-    )
-    ws.add_data_validation(status_validation)
-    status_validation.add("H2:H500")
+    ws.row_dimensions[1].height = 34
 
     cat_ws = wb.create_sheet("Allowed Categories")
     cat_ws.append(["Category Name", "Category Slug"])
@@ -2783,23 +2768,49 @@ async def vendor_product_import_template(
     instructions = wb.create_sheet("Instructions")
     instruction_rows = [
         ["VENDOR PRODUCT IMPORT INSTRUCTIONS"],
-        ["1. Fill the Products sheet outside the website."],
-        ["2. Use only categories listed in Allowed Categories."],
-        ["3. Use one row per pack size / variant."],
-        ["4. Repeat the product name for each of its pack sizes."],
-        ["5. MRP and Selling Price must be positive; selling price cannot exceed MRP."],
-        ["6. Discount (%) is optional. If supplied, it must match the MRP calculation."],
-        ["7. Stock Quantity must be a whole number greater than or equal to zero."],
-        ["8. Stock Status must be In Stock when quantity > 0, otherwise Out of Stock."],
-        ["9. Image URL is required and must be an HTTP/HTTPS image URL."],
-        ["10. Existing products are never overwritten."],
-        ["11. Upload the completed .xlsx file and review the preview before confirming."],
-        ["12. Remove the Example Product row before uploading."],
+        ["1. Enter each product only once in one row."],
+        ["2. Separate multiple quantities using / (slash)."],
+        ["3. Enter MRP values in exactly the same order as quantities."],
+        ["4. Enter Selling Price values in exactly the same order."],
+        ["5. Enter Stock values in exactly the same order."],
+        ["6. Example Quantity: 250g / 500g / 1kg / 2kg"],
+        ["7. Example MRP: 35 / 65 / 130 / 250"],
+        ["8. Example Selling Price: 30 / 60 / 120 / 240"],
+        ["9. Example Stock: 20 / 15 / 10 / 5"],
+        ["10. All four lists must contain the same number of values."],
+        ["11. Enter numeric prices without the ? symbol."],
+        ["12. Selling Price must be positive and cannot exceed MRP."],
+        ["13. Stock must be a whole number greater than or equal to zero."],
+        ["14. Image URL is required and must be HTTP/HTTPS."],
+        ["15. Existing products are never overwritten."],
+        ["16. Review the preview before confirming import."],
     ]
     for row in instruction_rows:
         instructions.append(row)
     instructions.column_dimensions["A"].width = 115
     instructions["A1"].font = Font(bold=True, size=14, color="1B4332")
+
+    example_ws = wb.create_sheet("Example")
+    example_ws.append([
+        "Product Name", "Category", "Description", "Image URL",
+        "Quantity", "MRP (?)", "Selling Price (?)", "Stock"
+    ])
+    example_ws.append([
+        "Basmati Rice", "Rice", "Sample product",
+        "https://example.com/rice.jpg",
+        "250g / 500g / 1kg / 2kg",
+        "35 / 65 / 130 / 250",
+        "30 / 60 / 120 / 240",
+        "20 / 15 / 10 / 5",
+    ])
+    example_ws.append([""])
+    example_ws.append(["REFERENCE ONLY - Do not import this example row."])
+    example_ws.column_dimensions["A"].width = 25
+    example_ws.column_dimensions["B"].width = 20
+    example_ws.column_dimensions["C"].width = 25
+    example_ws.column_dimensions["D"].width = 40
+    for col in ("E", "F", "G", "H"):
+        example_ws.column_dimensions[col].width = 35
 
     output = BytesIO()
     wb.save(output)
@@ -2843,11 +2854,243 @@ async def vendor_product_import_preview(
     if not header_row:
         raise HTTPException(400, "Excel file is empty.")
 
-    headers = {
+    raw_headers = {
         str(value).strip().casefold(): index
         for index, value in enumerate(header_row)
         if value is not None
     }
+
+    # New slash-separated one-row-per-product template.
+    quantity_col = raw_headers.get("quantity")
+    mrp_col = raw_headers.get("mrp (?)", raw_headers.get("mrp"))
+    selling_col = raw_headers.get(
+        "selling price (?)", raw_headers.get("selling price")
+    )
+    stock_col = raw_headers.get("stock", raw_headers.get("stock quantity"))
+
+    is_slash_template = all(
+        index is not None
+        for index in (quantity_col, mrp_col, selling_col, stock_col)
+    )
+
+    errors = []
+
+    def split_slash_values(value):
+        if value is None or str(value).strip() == "":
+            return []
+        if isinstance(value, str):
+            return [part.strip() for part in value.split("/") if part.strip()]
+        return [value]
+
+    def clean_excel_number(value):
+        if isinstance(value, str):
+            return value.replace("?", "").replace(",", "").strip()
+        return value
+
+    # Backward compatibility with the previous wide-column template.
+    variant_sizes = ["250g", "500g", "1kg", "2kg"]
+    wide_variant_columns = {
+        size: {
+            field: raw_headers.get(f"{size} {field}".casefold())
+            for field in ("mrp", "selling price", "stock quantity")
+        }
+        for size in variant_sizes
+    }
+    is_wide_template = any(
+        all(index is not None for index in columns.values())
+        for columns in wide_variant_columns.values()
+    )
+
+    if is_slash_template:
+        identity_columns = ("product name", "category", "image url")
+        missing_identity = [
+            column for column in identity_columns if column not in raw_headers
+        ]
+        if missing_identity:
+            raise HTTPException(
+                400, "Missing required columns: " + ", ".join(missing_identity)
+            )
+
+        headers = {
+            "product name": 0,
+            "category": 1,
+            "pack size": 2,
+            "mrp": 3,
+            "selling price": 4,
+            "discount (%)": 5,
+            "stock quantity": 6,
+            "stock status": 7,
+            "description": 8,
+            "image url": 9,
+        }
+
+        expanded_rows = []
+
+        for source_row_number, source_row in enumerate(rows, start=2):
+            if not source_row or not any(
+                value is not None and str(value).strip()
+                for value in source_row
+            ):
+                continue
+
+            def source_value(index):
+                return (
+                    source_row[index]
+                    if index is not None and index < len(source_row)
+                    else None
+                )
+
+            quantities = split_slash_values(source_value(quantity_col))
+            mrps = split_slash_values(source_value(mrp_col))
+            prices = split_slash_values(source_value(selling_col))
+            stocks = split_slash_values(source_value(stock_col))
+
+            lengths = [len(quantities), len(mrps), len(prices), len(stocks)]
+
+            if not quantities or any(length == 0 for length in lengths):
+                errors.append(
+                    f"Excel row {source_row_number}: Quantity, MRP, "
+                    "Selling Price and Stock are all required."
+                )
+                continue
+
+            if len(set(lengths)) != 1:
+                errors.append(
+                    f"Excel row {source_row_number}: Quantity, MRP, "
+                    "Selling Price and Stock must contain the same number "
+                    "of slash-separated values."
+                )
+                continue
+
+            name_value = source_value(raw_headers.get("product name"))
+            category_value = source_value(raw_headers.get("category"))
+            description_value = source_value(raw_headers.get("description"))
+            image_value = source_value(raw_headers.get("image url"))
+
+            for quantity, mrp_value, price_value, stock_value in zip(
+                quantities, mrps, prices, stocks
+            ):
+                clean_stock = clean_excel_number(stock_value)
+
+                try:
+                    stock_number = float(clean_stock)
+                    stock_status = (
+                        "In Stock" if stock_number > 0 else "Out of Stock"
+                    )
+                except (TypeError, ValueError):
+                    stock_status = "Out of Stock"
+
+                expanded_rows.append((
+                    name_value,
+                    category_value,
+                    quantity,
+                    clean_excel_number(mrp_value),
+                    clean_excel_number(price_value),
+                    None,
+                    clean_stock,
+                    stock_status,
+                    description_value,
+                    image_value,
+                ))
+
+        rows = iter(expanded_rows)
+
+    elif is_wide_template:
+        identity_columns = ("product name", "category", "image url")
+        missing_identity = [
+            column for column in identity_columns if column not in raw_headers
+        ]
+        if missing_identity:
+            raise HTTPException(
+                400, "Missing required columns: " + ", ".join(missing_identity)
+            )
+
+        headers = {
+            "product name": 0,
+            "category": 1,
+            "description": 8,
+            "image url": 9,
+            "pack size": 2,
+            "mrp": 3,
+            "selling price": 4,
+            "discount (%)": 5,
+            "stock quantity": 6,
+            "stock status": 7,
+        }
+
+        expanded_rows = []
+        for source_row in rows:
+            if not source_row or not any(
+                value is not None and str(value).strip()
+                for value in source_row
+            ):
+                continue
+
+            for size in variant_sizes:
+                columns = wide_variant_columns[size]
+                if not all(index is not None for index in columns.values()):
+                    continue
+
+                mrp_value = (
+                    source_row[columns["mrp"]]
+                    if columns["mrp"] < len(source_row) else None
+                )
+                price_value = (
+                    source_row[columns["selling price"]]
+                    if columns["selling price"] < len(source_row) else None
+                )
+                stock_value = (
+                    source_row[columns["stock quantity"]]
+                    if columns["stock quantity"] < len(source_row) else None
+                )
+
+                if all(
+                    value is None or str(value).strip() == ""
+                    for value in (mrp_value, price_value, stock_value)
+                ):
+                    continue
+
+                name_value = (
+                    source_row[raw_headers["product name"]]
+                    if raw_headers["product name"] < len(source_row) else ""
+                )
+                category_value = (
+                    source_row[raw_headers["category"]]
+                    if raw_headers["category"] < len(source_row) else ""
+                )
+                description_index = raw_headers.get("description")
+                image_index = raw_headers.get("image url")
+                description_value = (
+                    source_row[description_index]
+                    if description_index is not None
+                    and description_index < len(source_row) else ""
+                )
+                image_value = (
+                    source_row[image_index]
+                    if image_index is not None
+                    and image_index < len(source_row) else ""
+                )
+
+                try:
+                    stock_number = float(stock_value)
+                    stock_status = (
+                        "In Stock" if stock_number > 0 else "Out of Stock"
+                    )
+                except (TypeError, ValueError):
+                    stock_status = "Out of Stock"
+
+                expanded_rows.append((
+                    name_value, category_value, size,
+                    mrp_value, price_value, None,
+                    stock_value, stock_status,
+                    description_value, image_value,
+                ))
+
+        rows = iter(expanded_rows)
+
+    else:
+        # Continue accepting existing vendor spreadsheets.
+        headers = raw_headers
 
     required = [
         "product name", "category", "pack size", "mrp",
@@ -2867,7 +3110,6 @@ async def vendor_product_import_preview(
         category_map[cat["name"].strip().casefold()] = cat["slug"]
         category_map[cat["slug"].strip().casefold()] = cat["slug"]
 
-    errors = []
     grouped = {}
     row_count = 0
 
@@ -2992,7 +3234,7 @@ async def vendor_product_import_preview(
         product["rows"].append(row_number)
 
     if row_count == 0:
-        errors.append("No product rows found. Remove the example row only after entering products.")
+        errors.append("No product rows found. Enter a product and at least one pack-size variant.")
 
     products = []
     seen_slugs = set()
